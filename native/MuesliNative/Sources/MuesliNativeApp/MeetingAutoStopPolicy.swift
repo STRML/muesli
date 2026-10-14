@@ -275,6 +275,30 @@ enum MeetingAutoStopPolicy {
         return !candidate.evidence.isDisjoint(with: [.audioInputProcess, .dedicatedApp])
     }
 
+    /// While a recording follows a source, a browser tab in some other room is not evidence for
+    /// it. It must not shadow lower-precedence evidence either: the resolver prefers a browser tab
+    /// over the native app, so a stale tab (a Teams launcher page left behind by the hand-off to
+    /// the desktop app) would hide the very call the source is waiting for.
+    static func scopedBrowserMeetings(
+        _ meetings: [BrowserMeetingContext],
+        source: MeetingAutoStopSource
+    ) -> [BrowserMeetingContext] {
+        guard let room = source.normalizedURL else { return meetings }
+        return meetings.filter { $0.url == room }
+    }
+
+    /// Whether a Control Center mic or camera attribution to `bundleID` is enough, on its own,
+    /// to call that app's candidate live. The full-duplex check ran during discovery for a source
+    /// that was seen; a source armed from a link was never seen, so an attribution to a native
+    /// client of the link's own platform stands in for it.
+    static func attributionIsLiveness(bundleID: String, source: MeetingAutoStopSource) -> Bool {
+        guard let app = MeetingCandidateResolver.dedicatedApps[bundleID] else { return false }
+        if let sourceBundle = source.sourceBundleID {
+            return bundleIDsReferToSameApp(bundleID, sourceBundle)
+        }
+        return source.platform == app.platform
+    }
+
     static func isNativeMeetingApp(_ bundleID: String) -> Bool {
         MeetingCandidateResolver.dedicatedApps[bundleID] != nil
     }

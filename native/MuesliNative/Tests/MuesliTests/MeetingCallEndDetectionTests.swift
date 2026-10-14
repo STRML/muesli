@@ -228,4 +228,115 @@ struct MeetingCallEndDetectionTests {
         #expect(!MeetingAutoStopPolicy.matches(candidate: try #require(resolve(processes: [audio(teams)])), source: source))
         #expect(!MeetingAutoStopPolicy.matches(candidate: try #require(resolve(processes: [audio(zoom)])), source: source))
     }
+
+    // MARK: Binding window
+
+    @Test("a URL-armed source can bind during the first 15 minutes of the recording, not after")
+    func bindingWindow() throws {
+        let teams = Self.nativeCalls[0]
+        let candidate = try #require(resolve(processes: [audio(teams)]))
+        let url = try urlSource(teams.url)
+
+        var early = MeetingAutoStopTracker()
+        early.arm(source: url)
+        early.markRecordingStarted(now: now)
+        let atEdge = now.addingTimeInterval(MeetingAutoStopTracker.platformBindingWindow)
+        #expect(early.matches(candidate, now: atEdge))
+        _ = early.observe(candidate: candidate, now: atEdge, gracePeriod: 20)
+        #expect(early.lastSeenAt == atEdge)
+
+        var late = MeetingAutoStopTracker()
+        late.arm(source: url)
+        late.markRecordingStarted(now: now)
+        let pastEdge = atEdge.addingTimeInterval(1)
+        #expect(!late.matches(candidate, now: pastEdge))
+        let lateSeen = late.observe(candidate: candidate, now: pastEdge, gracePeriod: 20)
+        #expect(!lateSeen)
+        #expect(late.lastSeenAt == nil)
+        #expect(late.source?.sourceBundleID == nil)
+
+        // While the recording is still preparing the window has not started to run out.
+        var preparing = MeetingAutoStopTracker()
+        preparing.arm(source: url)
+        preparing.observeBeforeRecordingStarted(candidate: candidate)
+        #expect(preparing.source?.sourceBundleID == teams.bundleID)
+
+        // Re-arming starts over: no leftover deadline from the previous recording.
+        late.arm(source: url)
+        #expect(late.matches(candidate, now: pastEdge))
+    }
+
+    // MARK: Monitor scoping
+
+    @Test("a stale browser tab with another room cannot hide the native call from a URL-armed source")
+    func staleBrowserTabDoesNotShadowNativeCall() throws {
+        let teams = Self.nativeCalls[0]
+        let source = try urlSource(teams.url)
+        let launcher = try #require(MeetingURLNormalizer.normalize(
+            "https://teams.microsoft.com/dl/launcher/launcher.html?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting_ZDI5YjQ3MTktNzI2%40thread.v2%2F0&type=meetup-join"
+        ))
+        let staleTab = BrowserMeetingContext(
+            bundleID: "com.google.Chrome", appName: "Chrome", url: launcher.url,
+            normalizedID: launcher.id, platform: launcher.platform, isFocused: false
+        )
+        let calendar = CalendarEventContext(id: "evt-1", title: "Weekly sync")
+        func snapshot(_ tabs: [BrowserMeetingContext]) -> MeetingSignalSnapshot {
+            MeetingSignalSnapshot(
+                micActive: true, cameraActive: false, calendarEvent: calendar, runningApps: [],
+                browserMeetings: tabs, audioInputProcesses: [audio(teams)], foregroundBundleID: nil, now: now
+            )
+        }
+
+        // Unscoped, the resolver prefers the browser tab, and the tab's room conflicts with the link.
+        let shadowed = try #require(resolver().resolve(snapshot([staleTab])))
+        #expect(shadowed.sourceBundleID == "com.google.Chrome")
+        #expect(!MeetingAutoStopPolicy.matches(candidate: shadowed, source: source))
+
+        let scoped = MeetingAutoStopPolicy.scopedBrowserMeetings([staleTab], source: source)
+        #expect(scoped.isEmpty)
+        let native = try #require(resolver().resolve(snapshot(scoped)))
+        #expect(native.sourceBundleID == teams.bundleID)
+        #expect(MeetingAutoStopPolicy.matches(candidate: native, source: source))
+    }
+
+    @Test("scoping keeps the tab in the source's own room, and everything for a room-less source")
+    func scopedBrowserMeetings() throws {
+        let roomA = try #require(MeetingURLNormalizer.normalize("https://meet.google.com/abc-defg-hij"))
+        let roomB = try #require(MeetingURLNormalizer.normalize("https://meet.google.com/zzz-yyyy-xxx"))
+        func tab(_ room: NormalizedMeetingURL) -> BrowserMeetingContext {
+            BrowserMeetingContext(
+                bundleID: "com.google.Chrome", appName: "Chrome", url: room.url,
+                normalizedID: room.id, platform: room.platform, isFocused: false
+            )
+        }
+        let tabs = [tab(roomA), tab(roomB)]
+        let urlSource = try urlSource("https://meet.google.com/abc-defg-hij")
+        #expect(MeetingAutoStopPolicy.scopedBrowserMeetings(tabs, source: urlSource) == [tab(roomA)])
+
+        let nativeCandidate = try #require(resolve(processes: [audio(Self.nativeCalls[0])]))
+        let roomless = MeetingAutoStopSource(candidate: nativeCandidate)
+        #expect(roomless.normalizedURL == nil)
+        #expect(MeetingAutoStopPolicy.scopedBrowserMeetings(tabs, source: roomless) == tabs)
+    }
+
+    @Test("Control Center attribution proves a call only for the source's own platform")
+    func attributionIsLiveness() throws {
+        let teamsURL = try urlSource(Self.nativeCalls[0].url)
+        #expect(MeetingAutoStopPolicy.attributionIsLiveness(bundleID: "com.microsoft.teams2", source: teamsURL))
+        #expect(MeetingAutoStopPolicy.attributionIsLiveness(bundleID: "com.microsoft.teams", source: teamsURL))
+        #expect(!MeetingAutoStopPolicy.attributionIsLiveness(bundleID: "us.zoom.xos", source: teamsURL))
+        #expect(!MeetingAutoStopPolicy.attributionIsLiveness(bundleID: "com.google.Chrome", source: teamsURL))
+
+        let bound = teamsURL.refined(with: try #require(resolve(processes: [audio(Self.nativeCalls[0])])))
+        #expect(MeetingAutoStopPolicy.attributionIsLiveness(bundleID: "com.microsoft.teams2", source: bound))
+
+        let meetCandidate = MeetingCandidate(
+            id: "googleMeet:meet.google.com/abc-defg-hij", platform: .googleMeet, appName: "Chrome",
+            url: "meet.google.com/abc-defg-hij", evidence: [.browserURL], startedAt: now,
+            meetingTitle: nil, sourceBundleID: "com.google.Chrome"
+        )
+        #expect(!MeetingAutoStopPolicy.attributionIsLiveness(
+            bundleID: "com.google.Chrome", source: MeetingAutoStopSource(candidate: meetCandidate)
+        ))
+    }
 }

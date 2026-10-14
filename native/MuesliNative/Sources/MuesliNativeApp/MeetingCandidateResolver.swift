@@ -144,6 +144,19 @@ struct MeetingSignalSnapshot {
         self.foregroundBundleID = foregroundBundleID
         self.now = now
     }
+
+    func replacingBrowserMeetings(_ meetings: [BrowserMeetingContext]) -> MeetingSignalSnapshot {
+        MeetingSignalSnapshot(
+            micActive: micActive,
+            cameraActive: cameraActive,
+            calendarEvent: calendarEvent,
+            runningApps: runningApps,
+            browserMeetings: meetings,
+            audioInputProcesses: audioInputProcesses,
+            foregroundBundleID: foregroundBundleID,
+            now: now
+        )
+    }
 }
 
 struct NormalizedMeetingURL: Equatable {

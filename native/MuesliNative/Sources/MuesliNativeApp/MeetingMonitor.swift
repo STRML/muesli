@@ -581,7 +581,7 @@ private actor MeetingDetectionService {
             selfBundleID: resolver.selfBundleID
         )
 
-        let snapshot = MeetingSignalSnapshot(
+        let rawSnapshot = MeetingSignalSnapshot(
             micActive: mediaSignals.micActive,
             cameraActive: mediaSignals.cameraActive,
             calendarEvent: context.calendarEvent,
@@ -591,6 +591,7 @@ private actor MeetingDetectionService {
             foregroundBundleID: collectedSignals.foregroundBundleID,
             now: now
         )
+        let snapshot = scopedSnapshot(rawSnapshot, monitoringMode: context.monitoringMode)
 
         let resolverStart = Date()
         let resolvedActivityCandidate = scopedActivityCandidate(
@@ -814,13 +815,14 @@ private actor MeetingDetectionService {
         var processes = coreAudioProcesses
         let existingBundleIDs = Set(coreAudioProcesses.map(\.bundleID))
 
-        let sourceBundleID: String?
+        let source: MeetingAutoStopSource?
         switch monitoringMode {
-        case .sourceLiveness(_, let source):
-            sourceBundleID = source.sourceBundleID
+        case .sourceLiveness(_, let liveSource):
+            source = liveSource
         case .discovery, .suspended:
-            sourceBundleID = nil
+            source = nil
         }
+        let sourceBundleID = source?.sourceBundleID
 
         let sensorBundleIDs = sensorAttributions.micBundleIDs
             .union(sensorAttributions.cameraBundleIDs)
@@ -845,8 +847,9 @@ private actor MeetingDetectionService {
                 continue
             }
 
-            let isDedicatedSourceLiveness = sourceBundleID != nil
-                && MeetingCandidateResolver.dedicatedApps[bundleID] != nil
+            let isDedicatedSourceLiveness = source.map {
+                MeetingAutoStopPolicy.attributionIsLiveness(bundleID: bundleID, source: $0)
+            } ?? false
             processes.append(AudioProcessActivity(
                 pid: runningProcessIDsByBundleID[bundleID] ?? 0,
                 bundleID: bundleID,
@@ -861,6 +864,16 @@ private actor MeetingDetectionService {
         }
 
         return processes
+    }
+
+    private func scopedSnapshot(
+        _ snapshot: MeetingSignalSnapshot,
+        monitoringMode: MeetingMonitoringMode
+    ) -> MeetingSignalSnapshot {
+        guard case .sourceLiveness(_, let source) = monitoringMode else { return snapshot }
+        return snapshot.replacingBrowserMeetings(
+            MeetingAutoStopPolicy.scopedBrowserMeetings(snapshot.browserMeetings, source: source)
+        )
     }
 
     private func scopedActivityCandidate(
