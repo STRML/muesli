@@ -402,8 +402,8 @@ public final class MuesliController: NSObject {
     private static let pendingScreenContextRequestedAtKey = "settings.pendingScreenContextRequestedAt"
     private static let screenContextGrantIntentTimeout: TimeInterval = 15 * 60
     private let runtime: RuntimePaths
-    private let configStore: ConfigStore
-    private let dictationStore: DictationStore
+    let configStore: ConfigStore
+    let dictationStore: DictationStore
     private let downloadedBackendOptions: () -> [BackendOption]
     private let modelOSVersion: OperatingSystemVersion
     private var storedMeetingChatCoordinator: MeetingChatCoordinator?
@@ -534,7 +534,7 @@ public final class MuesliController: NSObject {
     }
     var activeMeetingStartedAt: Date? { activeMeetingSession?.startTime }
 
-    private var activeMeetingID: Int64? {
+    var activeMeetingID: Int64? {
         guard let capture = meetingCapture, !capture.session.capturePhase.isEnding else { return nil }
         return capture.id
     }
@@ -841,6 +841,7 @@ public final class MuesliController: NSObject {
         }
         recoverRetainedMeetingRecordings()
         recoverStaleLiveMeetings()
+        scheduleRecordingRetention(activeMeetingID: activeMeetingID)
         normalizeMeetingTranscriptionSelectionForAvailability()
         SoundController.prewarmLifecycleSounds()
 
@@ -8892,6 +8893,7 @@ public final class MuesliController: NSObject {
             existingMeetingID: existingMeetingID,
             preparedRecordingSave: preparedRecordingSave
         )
+        scheduleRecordingRetention(activeMeetingID: activeMeetingID)
         meetingHookDispatcher.dispatchCompletedMeetingHook(
             meetingID: persistenceResult.meetingID,
             completedAt: result.endTime,
