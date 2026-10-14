@@ -45,9 +45,13 @@ struct PlannedCalendarFolderTests {
         let store = DictationStore(databaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("planned-\(UUID()).db"))
         try store.migrateIfNeeded()
+        let configDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("planned-config-\(UUID())", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: configDirectory) }
         let controller = MuesliController(
             runtime: RuntimePaths(repoRoot: FileManager.default.temporaryDirectory, menuIcon: nil, appIcon: nil, bundlePath: nil),
-            dictationStore: store
+            dictationStore: store,
+            configStore: ConfigStore(supportDirectory: configDirectory)
         )
         let folderID = try store.createFolder(name: "Rush")
         controller.syncAppState()
