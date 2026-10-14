@@ -396,6 +396,7 @@ struct MeetingDetailView: View {
                 } else {
                     MeetingParticipantsView(meetingID: meeting.id, controller: controller)
                         .frame(maxWidth: 150)
+                    MeetingSpeakersView(meetingID: meeting.id, controller: controller)
                 }
                 Spacer(minLength: 0)
                 detailModePicker(for: meeting)
@@ -559,6 +560,7 @@ struct MeetingDetailView: View {
                 meetingID: meeting.id,
                 controller: controller
             )
+            MeetingSpeakersView(meetingID: meeting.id, controller: controller)
         }
     }
 
