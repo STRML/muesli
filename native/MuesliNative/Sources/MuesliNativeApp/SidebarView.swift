@@ -210,6 +210,9 @@ struct SidebarView: View {
                     }
                     Spacer(minLength: 0)
                 }
+                // The padding sits inside the button so the whole row stays clickable.
+                .padding(.leading, sidebarRowHorizontalPadding)
+                .padding(.vertical, MuesliTheme.spacing8)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -220,8 +223,7 @@ struct SidebarView: View {
                 callEndedActions(stopLabel: stopLabel, accent: accent)
             }
         }
-        .padding(.horizontal, sidebarRowHorizontalPadding)
-        .padding(.vertical, MuesliTheme.spacing8)
+        .padding(.trailing, sidebarRowHorizontalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)

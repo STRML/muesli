@@ -9605,6 +9605,7 @@ public final class MuesliController: NSObject {
         let isActive = meetingSignalLossPromptState.isCallEndedAlertActive
         guard appState.isMeetingCallEnded != isActive else { return }
         appState.isMeetingCallEnded = isActive
+        statusBarController?.updateMenuBarTitle()
     }
 
     /// The sidebar's "dismiss" on the call-ended alert: stop asking for this recording.
