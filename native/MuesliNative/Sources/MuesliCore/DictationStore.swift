@@ -3807,6 +3807,22 @@ public final class DictationStore {
         return ids
     }
 
+    /// Meetings flagged private themselves, without the ones private only through a folder.
+    public func directlyPrivateMeetingIDs() throws -> Set<Int64> {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT id FROM meetings WHERE is_private = 1", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        var ids: Set<Int64> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            ids.insert(sqlite3_column_int64(statement, 0))
+        }
+        return ids
+    }
+
     private func setPrivateFlag(table: String, id: Int64, isPrivate: Bool) throws {
         let db = try openDatabase()
         defer { sqlite3_close(db) }

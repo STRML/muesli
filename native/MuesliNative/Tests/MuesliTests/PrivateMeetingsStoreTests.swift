@@ -108,6 +108,20 @@ struct PrivateMeetingsStoreTests {
         #expect(try store.privateMeetingIDs().isEmpty)
     }
 
+    @Test("directlyPrivateMeetingIDs ignores meetings that are private only through a folder")
+    func directFlagsExcludeInherited() throws {
+        let store = try makeStore()
+        let folderID = try store.createFolder(name: "Legal")
+        try store.setFolderPrivate(id: folderID, isPrivate: true)
+        let inherited = try insertMeeting(store, title: "Inherited")
+        let direct = try insertMeeting(store, title: "Direct")
+        try store.moveMeeting(id: inherited, toFolder: folderID)
+        try store.setMeetingPrivate(id: direct, isPrivate: true)
+
+        #expect(try store.directlyPrivateMeetingIDs() == [direct])
+        #expect(try store.privateMeetingIDs() == [direct, inherited])
+    }
+
     // MARK: - Folder inheritance (F6, F7, F8)
 
     @Test("a meeting in a private folder is private")
