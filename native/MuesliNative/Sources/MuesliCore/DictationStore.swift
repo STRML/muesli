@@ -2735,6 +2735,7 @@ public final class DictationStore {
         try exec("BEGIN IMMEDIATE", db: db)
         defer { _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil) }
         try MeetingChatSQL.clear(db: db)
+        try FolderClassificationSQL.clear(db: db)
         try exec("DELETE FROM meeting_resume_snapshots", db: db)
         try exec("DELETE FROM meeting_transcript_checkpoints", db: db)
         try exec("DELETE FROM meeting_participants", db: db)
