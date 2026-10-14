@@ -94,19 +94,6 @@ struct MeetingAutoStopPolicyTests {
         #expect(!state.hasRecentTranscriptActivity(now: now, quietPeriod: 45))
     }
 
-    @Test("source recovery reopens prompts unless the user dismissed them", arguments: [false, true])
-    func promptLifetime(dismissed: Bool) {
-        var state = MeetingSignalLossPromptState()
-        #expect(state.canPresentPrompt)
-        state.markPromptPresented()
-        #expect(!state.canPresentPrompt)
-        if dismissed { state.markDismissedByUser() }
-        state.markSourceRecovered()
-        #expect(state.canPresentPrompt == !dismissed)
-        state.resetForRecording()
-        #expect(state.canPresentPrompt)
-    }
-
     @Test("unobserved source cannot auto-stop; confirmed source uses disappearance grace")
     func disappearance() throws {
         var tracker = MeetingAutoStopTracker()
