@@ -4,6 +4,17 @@ import CryptoKit
 
 enum MeetingChatSQL {
     enum Value { case text(String), integer(Int64), real(Double), null }
+    /// Matches index rows (alias `s`) whose meeting is not private, directly or through any ancestor folder.
+    static let notPrivateMeetingCondition = """
+    s.meeting_id NOT IN (
+        WITH RECURSIVE private_folders(id) AS (
+            SELECT id FROM meeting_folders WHERE is_private = 1
+            UNION
+            SELECT f.id FROM meeting_folders f JOIN private_folders p ON f.parent_id = p.id
+        )
+        SELECT id FROM meetings WHERE is_private = 1 OR folder_id IN (SELECT id FROM private_folders)
+    )
+    """
     static func execute(_ sql: String, _ values: [Value] = [], db: OpaquePointer?) throws {
         _ = try rows(sql, values, db: db) { _ in () }
     }
