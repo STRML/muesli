@@ -143,6 +143,7 @@ struct SidebarView: View {
         ActiveRecordingSidebarItem.make(
             activeMeetingID: appState.activeMeetingID,
             isPaused: appState.isMeetingRecordingPaused,
+            isCallEnded: appState.isMeetingCallEnded,
             titleFor: { id in appState.meetingRows.first(where: { $0.id == id })?.title }
         )
     }
@@ -164,49 +165,101 @@ struct SidebarView: View {
         Button {
             openActiveRecording(item)
         } label: {
-            RecordingPulseDot(isPulsing: item.isPulsing)
+            RecordingPulseDot(isPulsing: item.isPulsing, color: recordingAccent(for: item))
                 .frame(width: 40, height: 36)
                 .background(isShowingMeeting(item) ? MuesliTheme.surfacePrimary : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         }
         .buttonStyle(.plain)
-        .help("\(item.statusLabel): \(item.title)")
-        .accessibilityLabel("\(item.statusLabel): \(item.title)")
+        .help(item.helpText)
+        .accessibilityLabel(item.accessibilityLabel)
+        .contextMenu { callEndedMenu(for: item) }
+    }
+
+    private func recordingAccent(for item: ActiveRecordingSidebarItem) -> Color {
+        item.isCallEnded ? MuesliTheme.attention : MuesliTheme.recording
+    }
+
+    @ViewBuilder
+    private func callEndedMenu(for item: ActiveRecordingSidebarItem) -> some View {
+        if item.isCallEnded {
+            Button("Stop Transcribing") { controller.stopMeetingRecording() }
+            Button("Keep Recording, Stop Asking") { controller.dismissMeetingCallEndedAlert() }
+        }
     }
 
     private func activeRecordingRow(_ item: ActiveRecordingSidebarItem) -> some View {
         let isSelected = isShowingMeeting(item)
-        return Button {
-            openActiveRecording(item)
-        } label: {
-            HStack(spacing: MuesliTheme.spacing12) {
-                RecordingPulseDot(isPulsing: item.isPulsing)
-                    .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(item.statusLabel)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.recording)
-                    Text(item.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+        let accent = recordingAccent(for: item)
+        return HStack(spacing: MuesliTheme.spacing4) {
+            Button {
+                openActiveRecording(item)
+            } label: {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    RecordingPulseDot(isPulsing: item.isPulsing, color: accent)
+                        .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.statusLabel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(accent)
+                        Text(item.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                // The padding sits inside the button so the whole row stays clickable.
+                .padding(.leading, sidebarRowHorizontalPadding)
+                .padding(.vertical, MuesliTheme.spacing8)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, sidebarRowHorizontalPadding)
-            .padding(.vertical, MuesliTheme.spacing8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .fill(isSelected ? MuesliTheme.surfaceSelected : MuesliTheme.recording.opacity(0.08))
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .help(item.helpText)
+            .accessibilityLabel(item.accessibilityLabel)
+
+            if let stopLabel = item.stopActionLabel {
+                callEndedActions(stopLabel: stopLabel, accent: accent)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.trailing, sidebarRowHorizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .fill(isSelected ? MuesliTheme.surfaceSelected : accent.opacity(item.isCallEnded ? 0.18 : 0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .stroke(accent.opacity(item.isCallEnded ? 0.7 : 0), lineWidth: 1)
+        )
         .padding(.horizontal, sidebarRowOuterPadding)
-        .help("\(item.statusLabel): \(item.title)")
-        .accessibilityLabel("\(item.statusLabel): \(item.title)")
+        .contextMenu { callEndedMenu(for: item) }
+    }
+
+    private func callEndedActions(stopLabel: String, accent: Color) -> some View {
+        HStack(spacing: MuesliTheme.spacing4) {
+            Button(stopLabel) { controller.stopMeetingRecording() }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.88))
+                .padding(.horizontal, MuesliTheme.spacing8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(accent))
+                .help("Stop transcribing this meeting")
+            Button {
+                controller.dismissMeetingCallEndedAlert()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Keep recording and stop asking")
+            .accessibilityLabel("Dismiss call ended alert")
+        }
     }
 
     private var collapsedSidebar: some View {
