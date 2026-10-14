@@ -105,6 +105,25 @@ extension MuesliController {
             }
         }
 
+        // These delete user files, so they are manual-only (never voice).
+        let recordingsManualOnly = "Recording storage settings delete audio files and can only be changed manually in Settings."
+        add("recordings_budget", "Recordings storage budget",
+            [Choice(id: "off", label: "Off")] + [10, 25, 50, 100, 250, 500].map { Choice(id: String($0), label: "\($0) GB") },
+            read: { $0.recordingsBudgetGB == 0 ? "off" : String($0.recordingsBudgetGB) },
+            voiceRestriction: recordingsManualOnly) { value in
+            let gigabytes = value == "off" ? 0 : (Int(value) ?? 0)
+            self.updateConfig { $0.recordingsBudgetGB = gigabytes }
+            self.scheduleRecordingRetention(activeMeetingID: self.activeMeetingID)
+        }
+        add("recordings_min_age", "Keep recordings at least",
+            [3, 7, 14, 30].map { Choice(id: String($0), label: "\($0) days") },
+            read: { String($0.recordingsMinimumAgeDays) },
+            voiceRestriction: recordingsManualOnly) { value in
+            guard let days = Int(value), days > 0 else { return }
+            self.updateConfig { $0.recordingsMinimumAgeDays = days }
+            self.scheduleRecordingRetention(activeMeetingID: self.activeMeetingID)
+        }
+
         toggle("launch_at_login", "Launch at login", \.launchAtLogin, apply: setLaunchAtLogin)
         toggle("open_dashboard", "Open dashboard on launch", \.openDashboardOnLaunch)
         toggle("dark_mode", "Dark mode", \.darkMode)

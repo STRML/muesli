@@ -93,6 +93,9 @@ meeting, or iPhone meeting record.
   `note_only`, or `failed`)
 - Origin/type: `source` (`meeting`, `audio_import`, or `ios`)
 - Local files: `mic_audio_path`, `system_audio_path`, `saved_recording_path`
+- Audio retention: `recording_pinned` (`1` exempts the meeting's audio from
+  disk-budget pruning). Pruning only clears the three path columns; the
+  transcript, notes and row are never removed.
 - Calendar snapshot: `calendar_event_id`, `calendar_occurrence_key`,
   `calendar_source`, `calendar_id`, `calendar_series_id`,
   `calendar_occurrence_start`
@@ -114,6 +117,7 @@ occurrence can be recorded more than once.
 | `meeting_participants` | Calendar-attendee or Apple Contact name/email snapshots, including source and calendar suppression state | `(meeting_id, participant_identifier)`; cascades with its meeting | Local-only |
 | `meeting_transcript_checkpoints` | Incremental live transcript recovery segments | `id`; cascades with its meeting | Local-only |
 | `meeting_resume_snapshots` | Safety copy used while resuming a finished meeting | One row per `meeting_id`; cascades with its meeting | Local-only |
+| `recording_prune_log` | One row per audio file removed by disk-budget retention (`meeting_id`, `path`, `bytes`, `reason` of `budget`, `missing_file` or `repair_missing`, `pruned_at` as Unix `REAL`). Never holds transcript text | `id`; no foreign key, so it outlives the meeting | Local-only |
 
 Participant identifiers describe provenance and identity, while the stored name
 and email are snapshots. Calendar entries normally use a normalized email-based
