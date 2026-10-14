@@ -95,6 +95,31 @@ struct PrivateMeetingPolicyTests {
         #expect(PrivateMeetingPolicy.allowsBackend(config(backend: "", trusted: ["chatgpt"])))
     }
 
+    // MARK: - Trust list editing
+
+    @Test("trusting a backend adds its normalized id once")
+    func trustAddsOnce() {
+        var list: [String] = []
+        list = PrivateMeetingPolicy.updatedTrust(list, backend: "Custom_LLM", trusted: true)
+        list = PrivateMeetingPolicy.updatedTrust(list, backend: "custom_llm", trusted: true)
+        #expect(list == ["custom_llm"])
+        #expect(PrivateMeetingPolicy.isTrusted("custom_llm", in: list))
+    }
+
+    @Test("untrusting removes every spelling of the backend and keeps the others")
+    func untrustRemoves() {
+        let list = PrivateMeetingPolicy.updatedTrust([" Custom_LLM ", "ollama", "custom_llm"], backend: "custom_llm", trusted: false)
+        #expect(list == ["ollama"])
+        #expect(PrivateMeetingPolicy.isTrusted("custom_llm", in: list) == false)
+    }
+
+    @Test("trust in one backend never implies trust in another")
+    func trustIsPerBackend() {
+        let list = PrivateMeetingPolicy.updatedTrust([], backend: "ollama", trusted: true)
+        #expect(PrivateMeetingPolicy.isTrusted("lmstudio", in: list) == false)
+        #expect(PrivateMeetingPolicy.isTrusted("custom_llm", in: list) == false)
+    }
+
     // MARK: - Config (F3)
 
     @Test("config without the trusted-backend key decodes to an empty list")
