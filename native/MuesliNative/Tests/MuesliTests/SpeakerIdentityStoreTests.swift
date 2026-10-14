@@ -390,7 +390,12 @@ struct SpeakerIdentityStoreTests {
         _ = try store.recordMeetingSpeakers(meetingID: id, observations: [observation("Speaker 1", centroid)], renderNames: false)
         _ = try store.assignSpeaker(meetingID: id, label: "Speaker 1", name: "Zebulon Quarry")
 
-        let records = try store.textRecordsNeedingSync(limit: 50)
+        // While the meeting is private, nothing about it is offered to sync at all.
+        #expect(try store.textRecordsNeedingSync(limit: 50).filter { $0.kind == .meeting }.isEmpty)
+
+        // Once it is a normal meeting, its record still carries no speaker data.
+        try store.setMeetingPrivate(id: id, isPrivate: false)
+        let records = try store.textRecordsNeedingSync(limit: 50).filter { $0.kind == .meeting }
         #expect(!records.isEmpty)
         let encoded = String(decoding: try JSONEncoder().encode(records), as: UTF8.self)
         #expect(!encoded.contains("Zebulon"))
