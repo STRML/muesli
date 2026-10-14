@@ -22,6 +22,23 @@ enum PrivateMeetingPolicy {
         return trusted.contains(effectiveBackend(of: config))
     }
 
+    private static func normalized(_ backend: String) -> String {
+        backend.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    static func isTrusted(_ backend: String, in trustedBackends: [String]) -> Bool {
+        trustedBackends.contains { normalized($0) == normalized(backend) }
+    }
+
+    /// The trusted list after trusting or untrusting one backend, with one normalized entry per backend.
+    static func updatedTrust(_ trustedBackends: [String], backend: String, trusted: Bool) -> [String] {
+        let target = normalized(backend)
+        let others = trustedBackends.map(normalized).filter { $0 != target }
+        var seen = Set<String>()
+        let unique = others.filter { seen.insert($0).inserted }
+        return trusted ? unique + [target] : unique
+    }
+
     /// True when content for this meeting may be sent to the selected backend.
     static func allowsContent(isPrivateMeeting: Bool, config: AppConfig) -> Bool {
         !isPrivateMeeting || allowsBackend(config)
