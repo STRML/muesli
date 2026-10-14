@@ -199,6 +199,8 @@ final class AppState {
     // Live status
     var isMeetingRecording: Bool = false
     var isMeetingRecordingPaused: Bool = false
+    /// The meeting currently being recorded, nil while stopping or idle. Drives the sidebar's recording item.
+    var activeMeetingID: Int64?
     var isMeetingStarting: Bool = false
     var meetingStartStatus: String?
     var liveMeetingTranscript: String = ""
