@@ -16,13 +16,13 @@ extension MuesliController {
         }
     }
 
-    /// Every user-initiated move goes through here so suggestions resolve and the
-    /// classifier learns from it.
-    func moveMeetingAndLearn(id: Int64, toFolder folderID: Int64?) {
+    /// Call after every user-initiated move so suggestions resolve and the classifier
+    /// learns from it. Failure never undoes the move.
+    func recordFolderMove(meetingID: Int64, toFolder folderID: Int64?) {
         do {
-            try folderClassificationStore.moveMeeting(id: id, toFolder: folderID)
+            try folderClassificationStore.recordMove(meetingID: meetingID, toFolder: folderID)
         } catch {
-            fputs("[folder-classify] move failed meeting=\(id) error=\(type(of: error))\n", stderr)
+            fputs("[folder-classify] learning failed meeting=\(meetingID) error=\(type(of: error))\n", stderr)
         }
     }
 

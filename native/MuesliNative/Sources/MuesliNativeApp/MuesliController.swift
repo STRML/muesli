@@ -6846,8 +6846,9 @@ public final class MuesliController: NSObject {
 
     func createFolderAndMoveMeeting(name: String, meetingID: Int64) {
         guard let folderID = try? dictationStore.createFolder(name: name) else { return }
-        moveMeetingAndLearn(id: meetingID, toFolder: folderID)
+        try? dictationStore.moveMeeting(id: meetingID, toFolder: folderID)
         scheduleICloudSyncAfterLocalChange()
+        recordFolderMove(meetingID: meetingID, toFolder: folderID)
         syncAppState()
     }
 
@@ -6908,8 +6909,9 @@ public final class MuesliController: NSObject {
     }
 
     func moveMeeting(id: Int64, toFolder folderID: Int64?) {
-        moveMeetingAndLearn(id: id, toFolder: folderID)
+        try? dictationStore.moveMeeting(id: id, toFolder: folderID)
         scheduleICloudSyncAfterLocalChange()
+        recordFolderMove(meetingID: id, toFolder: folderID)
         syncAppState()
     }
 
