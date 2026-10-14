@@ -9,6 +9,7 @@ struct MeetingListItemView: View {
     let localeVersion: Int
     let folders: [MeetingFolder]
     let browsedFolderID: Int64?
+    let isPrivate: Bool
     private let folderByID: [Int64: MeetingFolder]
     private let folderIDsWithChildren: Set<Int64>
     let onSelect: () -> Void
@@ -28,6 +29,7 @@ struct MeetingListItemView: View {
         localeVersion: Int = 0,
         folders: [MeetingFolder],
         browsedFolderID: Int64? = nil,
+        isPrivate: Bool = false,
         onSelect: @escaping () -> Void,
         onMove: @escaping (Int64?) -> Void,
         onCreateFolderAndMove: ((String) -> Void)?,
@@ -39,6 +41,7 @@ struct MeetingListItemView: View {
         self.localeVersion = localeVersion
         self.folders = folders
         self.browsedFolderID = browsedFolderID
+        self.isPrivate = isPrivate
         self.folderByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
         self.folderIDsWithChildren = Set(folders.compactMap(\.parentID))
         self.onSelect = onSelect
@@ -64,6 +67,14 @@ struct MeetingListItemView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             HStack(alignment: .top) {
+                if isPrivate {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .padding(.top, 4)
+                        .help("Private meeting: never sent to a backend you haven't trusted for private meetings")
+                        .accessibilityLabel("Private meeting")
+                }
                 Text(record.title)
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)
