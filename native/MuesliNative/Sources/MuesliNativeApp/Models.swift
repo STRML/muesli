@@ -1797,6 +1797,9 @@ struct AppConfig: Codable {
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
+    /// Disk budget for saved meeting audio in GB. 0 means unlimited: never prune.
+    var recordingsBudgetGB: Int = 0
+    var recordingsMinimumAgeDays: Int = 7
     var defaultMeetingTemplateID: String = MeetingTemplates.autoID
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
@@ -1965,6 +1968,8 @@ struct AppConfig: Codable {
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
+        case recordingsBudgetGB = "recordings_budget_gb"
+        case recordingsMinimumAgeDays = "recordings_minimum_age_days"
         case defaultMeetingTemplateID = "default_meeting_template_id"
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
@@ -2137,6 +2142,9 @@ struct AppConfig: Codable {
             meetingTranscriptionBackend = migrated.backend; meetingTranscriptionModel = migrated.model
         }
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
+        // A corrupt budget must never start deleting audio: anything outside 0...100_000 means "unlimited".
+        recordingsBudgetGB = (try? c.decode(Int.self, forKey: .recordingsBudgetGB)).flatMap { (0...100_000).contains($0) ? $0 : nil } ?? defaults.recordingsBudgetGB
+        recordingsMinimumAgeDays = (try? c.decode(Int.self, forKey: .recordingsMinimumAgeDays)).flatMap { (1...3_650).contains($0) ? $0 : nil } ?? defaults.recordingsMinimumAgeDays
         defaultMeetingTemplateID = (try? c.decode(String.self, forKey: .defaultMeetingTemplateID)) ?? defaults.defaultMeetingTemplateID
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
