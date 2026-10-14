@@ -417,6 +417,14 @@ public final class MuesliController: NSObject {
         }
         set { storedMeetingChatCoordinator = newValue }
     }
+    private var storedFolderClassificationRunner: FolderClassificationRunner?
+    var folderClassificationRunner: FolderClassificationRunner {
+        if let existing = storedFolderClassificationRunner { return existing }
+        let runner = FolderClassificationRunner(classifier: FolderClassifier(databaseURL: dictationStore.resolvedDatabaseURL))
+        runner.onChange = { [weak self] in self?.syncAppState() }
+        storedFolderClassificationRunner = runner
+        return runner
+    }
     private let meetingHookDispatcher: MeetingHookDispatching
     private let meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting
     private let launchAtLoginCoordinator: LaunchAtLoginCoordinator
@@ -1594,6 +1602,7 @@ public final class MuesliController: NSObject {
         appState.totalMeetingCount = counts.total
         appState.meetingCountsByFolder = counts.byFolder
         appState.directMeetingCountsByFolder = counts.directByFolder
+        refreshFolderSuggestionInbox()
         if let selectedMeetingID = appState.selectedMeetingID {
             appState.selectedMeetingRecord = appState.meetingRows.first(where: { $0.id == selectedMeetingID })
                 ?? meeting(id: selectedMeetingID)
@@ -5863,6 +5872,7 @@ public final class MuesliController: NSObject {
         appState.meetingChatDocumentTarget = nil
         appState.selectedTab = .meetings
         appState.selectedFolderID = folderID
+        appState.isFolderInboxSelected = false
         appState.meetingsNavigationState = .browser
         syncAppState()
     }
@@ -6836,7 +6846,7 @@ public final class MuesliController: NSObject {
 
     func createFolderAndMoveMeeting(name: String, meetingID: Int64) {
         guard let folderID = try? dictationStore.createFolder(name: name) else { return }
-        try? dictationStore.moveMeeting(id: meetingID, toFolder: folderID)
+        moveMeetingAndLearn(id: meetingID, toFolder: folderID)
         scheduleICloudSyncAfterLocalChange()
         syncAppState()
     }
@@ -6898,7 +6908,7 @@ public final class MuesliController: NSObject {
     }
 
     func moveMeeting(id: Int64, toFolder folderID: Int64?) {
-        try? dictationStore.moveMeeting(id: id, toFolder: folderID)
+        moveMeetingAndLearn(id: id, toFolder: folderID)
         scheduleICloudSyncAfterLocalChange()
         syncAppState()
     }
@@ -8958,6 +8968,7 @@ public final class MuesliController: NSObject {
             completedAt: result.endTime,
             config: config
         )
+        classifyMeetingAfterCompletion(persistenceResult.meetingID)
         if config.autoExportMarkdownEnabled {
             do {
                 if let record = try dictationStore.meeting(id: persistenceResult.meetingID) {

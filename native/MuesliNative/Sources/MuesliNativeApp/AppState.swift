@@ -174,6 +174,10 @@ final class AppState {
     var privateMeetingIDs: Set<Int64> = []
     var directlyPrivateMeetingIDs: Set<Int64> = []
     var selectedFolderID: Int64?  // nil = "All Meetings"
+    // Folder suggestions Inbox (FolderClassification*.swift).
+    var folderSuggestionRows: [FolderSuggestionInboxRow] = []
+    var isFolderInboxSelected = false
+    var isClassifyingUnfiledMeetings = false
     var meetingsNavigationState: MeetingsNavigationState = .browser
     var meetingDetailReturnDestination: MeetingDetailReturnDestination = .meetings
     var meetingNotesFocusRequest = 0
