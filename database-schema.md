@@ -30,8 +30,9 @@ Do not edit a user's database directly while Muesli is running.
 - Only the text-record subset of dictations and meetings participates in iCloud
   sync. A column living on one of those tables is not automatically a synced
   field.
-- People, folders, computer-use traces, live checkpoints, resume snapshots,
-  audio paths, destination-app attribution, and Insights caches are local-only.
+- People, speaker profiles and voiceprints, folders, computer-use traces, live
+  checkpoints, resume snapshots, audio paths, destination-app attribution, and
+  Insights caches are local-only.
 - There is no FTS table. Global search currently uses parameterized `LIKE`
   queries over selected dictation, meeting, trace, and participant fields.
 - ISO-8601 strings are used for user-visible event times such as `timestamp` and
@@ -50,6 +51,9 @@ erDiagram
     meetings ||--o{ meeting_participants : "has local people"
     meetings ||--o{ meeting_transcript_checkpoints : "has live checkpoints"
     meetings ||--o| meeting_resume_snapshots : "has resume safety snapshot"
+    meetings ||--o{ meeting_speakers : "has diarized speakers"
+    speaker_profiles ||--o{ speaker_voiceprints : "has voiceprints"
+    speaker_profiles |o--o{ meeting_speakers : "names"
 
     insights_tokens ||--o| insights_token_totals : "has all-time totals"
     insights_tokens ||--o{ insights_daily_tokens : "has daily totals"
@@ -130,6 +134,25 @@ explicit local removals. This reconciliation is lifecycle/event-driven. The
 unreleased direct Google OAuth integration does not import or persist meeting
 participants; Google calendars exposed through macOS Calendar use this EventKit
 path.
+
+### Named speakers (voiceprints)
+
+Speaker embeddings are biometric data. These tables are strictly local: they
+never enter `SyncTextRecord`, CloudKit, telemetry, exports, CLI JSON, or logs.
+Code lives in `MuesliCore/SpeakerIdentityStore.swift` and
+`MuesliCore/SpeakerVoiceprintMatcher.swift`.
+
+| Table | Purpose | Key and deletion behavior |
+|---|---|---|
+| `speaker_profiles` | A named person (`name`, `created_at` Unix time) | `id`; names are unique case-insensitively (`idx_speaker_profiles_name`), so naming a speaker with an existing name merges into that profile |
+| `speaker_voiceprints` | Float32 embedding `BLOB` plus `dimension`, taken from a meeting speaker's centroid when the user names that speaker; `source_meeting_id` is a plain integer, not a foreign key | `id`; cascades with its profile |
+| `meeting_speakers` | Each meeting's diarized remote speakers: `label` is the token currently printed in `raw_transcript` ("Speaker 2", or the name after a rename), `embedding` is the meeting centroid (NULL when the speaker had too little audio), `profile_id` the matched or assigned person | `(meeting_id, label)`; cascades with a hard-deleted meeting, deleted explicitly when a meeting is soft-deleted or cleared, `profile_id` set to NULL when the person is deleted |
+
+Naming a speaker rewrites only exact `[HH:MM:SS] <label>: ` line prefixes in
+`raw_transcript` (marking the meeting `sync_dirty`, like any transcript edit),
+except for private meetings, whose transcript is left unchanged so a name never
+reaches iCloud through them. Deleting a person keeps the typed name in
+transcripts.
 
 ### Organization and state
 
