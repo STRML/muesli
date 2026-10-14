@@ -78,7 +78,9 @@ struct LiveSpeakerLabelerTests {
     func dominantSpeaker() {
         var sut = labeler()
         sut.ingest(liveSpeakerFrames(slotRun(0, frames: 10) + slotRun(1, frames: 30)))
-        #expect(sut.label(start: 0, end: 4) == "Speaker 2")
+        // Slot 1 talks for 3 of the 4 seconds, so it is the first speaker shown.
+        #expect(sut.label(start: 0, end: 4) == "Speaker 1")
+        #expect(sut.label(start: 0, end: 1) == "Speaker 2")
 
         var overlap = labeler()
         let both = LiveSpeakerFrames(
@@ -86,8 +88,10 @@ struct LiveSpeakerLabelerTests {
             probabilities: (0..<20).flatMap { _ in [Float(0.6), 0.95, 0.05, 0.05] }
         )
         overlap.ingest(both)
+        overlap.ingest(liveSpeakerFrames(slotRun(0, frames: 20), startFrame: 20))
         #expect(overlap.label(start: 0, end: 2) == "Speaker 1")
-        #expect(overlap.coveredThrough == 2.0)
+        #expect(overlap.label(start: 2, end: 4) == "Speaker 2")
+        #expect(overlap.coveredThrough == 4.0)
     }
 
     @Test("diarizer time is shifted by the origin offset")
@@ -106,7 +110,7 @@ struct LiveSpeakerLabelerTests {
         sut.ingest(liveSpeakerFrames(slotRun(1, frames: 10), startFrame: 20))
         #expect(sut.coveredThrough == 3.0)
         #expect(sut.label(start: 1, end: 2) == "Others")
-        #expect(sut.label(start: 2, end: 3) == "Speaker 2")
+        #expect(sut.label(start: 2, end: 3) == "Speaker 1")
 
         sut.ingest(liveSpeakerFrames(slotRun(3, frames: 10), startFrame: 25))
         #expect(sut.coveredThrough == 3.5)

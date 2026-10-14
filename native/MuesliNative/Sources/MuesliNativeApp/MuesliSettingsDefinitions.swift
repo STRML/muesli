@@ -516,6 +516,7 @@ extension MuesliController {
         settings.append(contentsOf: cleanupModelDefinitions())
 
         toggle("meeting_hover_transcript", "Show meeting transcript on hover", \.showMeetingTranscriptOnIndicatorHover)
+        toggle("live_speaker_labels", "Live speaker labels", \.enableLiveSpeakerLabels, apply: setLiveSpeakerLabelsEnabled)
         toggle("auto_record_meetings", "Auto-record calendar meetings", \.autoRecordMeetings)
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
         toggle("meeting_reminders", "Scheduled meeting notifications", \.showScheduledMeetingNotifications)

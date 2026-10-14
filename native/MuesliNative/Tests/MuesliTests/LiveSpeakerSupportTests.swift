@@ -139,6 +139,7 @@ struct LiveSpeakerSupportTests {
         let engine = ScriptedLiveSpeakerEngine { frame in frame < 25 ? 0 : 2 }
         let session = LiveSpeakerLabelSession(factory: { engine })
         session.start()
+        #expect(await liveSpeakerWaitUntil { session.status == .running })
         feedLiveSpeakerAudio(session, seconds: 10)
 
         let labels = await MeetingSession.liveDisplaySpeakers(for: segments(), using: session)

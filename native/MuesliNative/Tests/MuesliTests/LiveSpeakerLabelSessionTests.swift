@@ -23,6 +23,7 @@ struct LiveSpeakerLabelSessionTests {
     func labelsRunningMeeting() async {
         let engine = twoSpeakerEngine()
         let sut = session { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
         feedLiveSpeakerAudio(sut, seconds: 20)
 
         #expect(await sut.label(start: 1, end: 3) == "Speaker 1")
@@ -75,6 +76,7 @@ struct LiveSpeakerLabelSessionTests {
     func engineError() async {
         let engine = ScriptedLiveSpeakerEngine(failAtSamples: 40_000) { _ in 2 }
         let sut = session { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
         feedLiveSpeakerAudio(sut, seconds: 2)
         #expect(await liveSpeakerWaitUntil { engine.totalSamplesSeen == 32_000 })
 
@@ -120,12 +122,30 @@ struct LiveSpeakerLabelSessionTests {
         #expect(await sut.label(start: 0, end: 5) == "Others")
     }
 
+    @Test("while the model is still loading, lines are labeled Others at once instead of waiting")
+    func labelWhileLoadingDoesNotWait() async {
+        var limits = Session.Limits()
+        limits.coverageWait = .seconds(5)
+        let release = AsyncStream<Void>.makeStream()
+        let sut = session(limits: limits) {
+            for await _ in release.stream { break }
+            return ScriptedLiveSpeakerEngine { _ in 0 }
+        }
+        feedLiveSpeakerAudio(sut, seconds: 2)
+
+        let started = ContinuousClock.now
+        #expect(await sut.label(start: 0, end: 1) == "Others")
+        #expect(ContinuousClock.now - started < .seconds(1))
+        release.continuation.yield()
+    }
+
     @Test("a label request past the covered audio waits a bounded time, then answers Others")
     func coverageWaitIsBounded() async {
         var limits = Session.Limits()
         limits.coverageWait = .milliseconds(200)
         let engine = ScriptedLiveSpeakerEngine { _ in 0 }
         let sut = session(limits: limits) { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
         feedLiveSpeakerAudio(sut, seconds: 1)
 
         let started = ContinuousClock.now
@@ -139,6 +159,7 @@ struct LiveSpeakerLabelSessionTests {
     func stopFlushesTail() async {
         let engine = ScriptedLiveSpeakerEngine(lagFrames: 5) { _ in 1 }
         let sut = session { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
         feedLiveSpeakerAudio(sut, seconds: 10)
         #expect(await liveSpeakerWaitUntil { engine.totalSamplesSeen == 160_000 })
 
@@ -152,6 +173,7 @@ struct LiveSpeakerLabelSessionTests {
     func stopTwice() async {
         let engine = twoSpeakerEngine()
         let sut = session { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
         feedLiveSpeakerAudio(sut, seconds: 5)
         sut.stop()
         sut.stop()

@@ -1184,6 +1184,13 @@ struct SettingsView: View {
                 settingsControl("diarize_microphone")
             }
             Divider().background(MuesliTheme.surfaceBorder)
+            settingsCompactRow(
+                "Live speaker labels",
+                description: "Labels other voices Speaker 1, 2 while recording. The final transcript is unchanged. Downloads a small model on first use."
+            ) {
+                settingsControl("live_speaker_labels")
+            }
+            Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Final transcript", controlWidth: meetingControlWidth) {
                 if usesUnifiedMeetingTranscript {
                     Text("\(appState.config.resolvedMeetingLiveCaptionBackend.label) (same model)")
