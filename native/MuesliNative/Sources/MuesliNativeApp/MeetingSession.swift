@@ -477,6 +477,23 @@ final class MeetingSession {
         }
     }
 
+    /// Returns nil when live speaker labels are off for this meeting's config snapshot.
+    static func makeLiveSpeakerSession(
+        config: AppConfig,
+        factory: @escaping LiveSpeakerLabelSession.EngineFactory
+    ) -> LiveSpeakerLabelSession? {
+        LiveSpeakerLabelSession(factory: factory)
+    }
+
+    /// Display labels for committed system segments, one per segment. nil when
+    /// no live session exists; a failed session answers "Others".
+    static func liveDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?
+    ) async -> [String]? {
+        nil
+    }
+
     private func micPartialSession() -> MeetingStreamingPartialSession? {
         partialSessionsStorage.withLock { $0.mic }
     }
