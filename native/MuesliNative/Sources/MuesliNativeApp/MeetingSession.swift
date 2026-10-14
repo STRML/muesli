@@ -268,7 +268,6 @@ final class MeetingSession {
     /// Provisional speaker labels for system audio. Created from the config
     /// snapshot at start, so toggling the setting mid-meeting waits for the next one.
     private let liveSpeakerSessionStorage = OSAllocatedUnfairLock<LiveSpeakerLabelSession?>(initialState: nil)
-    private let liveSpeakerEngineFactory: LiveSpeakerLabelSession.EngineFactory
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
 
@@ -296,10 +295,8 @@ final class MeetingSession {
         transcriptionCoordinator: TranscriptionCoordinator,
         meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
         systemAudioCapture: SystemAudioCapturing? = nil,
-        aec: MeetingNeuralAec = MeetingNeuralAec(),
-        liveSpeakerEngineFactory: @escaping LiveSpeakerLabelSession.EngineFactory = LiveSpeakerModelStore.loadEngine
+        aec: MeetingNeuralAec = MeetingNeuralAec()
     ) {
-        self.liveSpeakerEngineFactory = liveSpeakerEngineFactory
         self.title = title
         self.calendarEventID = calendarEventID
         backendLock.withLock { $0 = backend }
@@ -444,7 +441,7 @@ final class MeetingSession {
             setupRetainedRecordingWriterIfNeeded()
             // Created before the first system sample so its clock matches the chunk timing.
             liveSpeakerSessionStorage.withLock {
-                $0 = Self.makeLiveSpeakerSession(config: config, factory: liveSpeakerEngineFactory)
+                $0 = Self.makeLiveSpeakerSession(config: config, factory: LiveSpeakerModelStore.loadEngine)
             }
         }
         try await captureLifecycle.start()

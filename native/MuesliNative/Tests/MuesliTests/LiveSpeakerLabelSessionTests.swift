@@ -169,6 +169,23 @@ struct LiveSpeakerLabelSessionTests {
         #expect(await sut.label(start: 9.6, end: 10.0) == "Speaker 1")
     }
 
+    @Test("odd-sized system buffers reach the engine as whole 100 ms blocks; stop flushes the remainder")
+    func engineOnlySeesWholeBlocks() async {
+        let engine = ScriptedLiveSpeakerEngine { _ in 1 }
+        let sut = session { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
+
+        let odd = [Float](repeating: 0.1, count: 1_601)
+        for _ in 0..<1_000 { sut.enqueue(odd) }
+        let whole = (1_000 * 1_601) / 1_600 * 1_600
+        #expect(await liveSpeakerWaitUntil { engine.totalSamplesSeen == whole })
+        #expect(engine.calledWithPartialBlock == 0)
+
+        sut.stop()
+        #expect(await liveSpeakerWaitUntil { sut.status == .stopped })
+        #expect(engine.totalSamplesSeen == 1_000 * 1_601)
+    }
+
     @Test("stop is idempotent and later audio is ignored")
     func stopTwice() async {
         let engine = twoSpeakerEngine()

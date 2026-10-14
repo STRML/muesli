@@ -23,6 +23,11 @@ protocol LiveSpeakerEngine: AnyObject, Sendable {
 /// while the model loads is dropped oldest-first and the clock origin moves with
 /// it, so labels stay aligned. After the engine is running nothing is dropped:
 /// overflow fails the session instead of silently desynchronising it.
+///
+/// The engine only ever sees whole 100 ms blocks (1,600 samples; the rest waits
+/// for the next call). FluidAudio resamples each call on its own and rounds odd
+/// lengths up, which would stretch the diarizer's clock against the chunk timing
+/// by a fraction of a percent, a few seconds over an hour-long meeting.
 final class LiveSpeakerLabelSession: @unchecked Sendable {
     typealias EngineFactory = @Sendable () async throws -> LiveSpeakerEngine
 
@@ -49,14 +54,15 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
     }
 
     static let sampleRate = 16_000
+    /// 100 ms: halves exactly when resampled to the model's 8 kHz.
+    static let blockSamples = 1_600
     private static let logger = Logger(subsystem: "com.muesli.native", category: "LiveSpeakerLabels")
 
     private struct State {
         var status = Status.loading
         var engine: LiveSpeakerEngine?
         var labeler: LiveSpeakerLabeler?
-        var pending: [[Float]] = []
-        var pendingSamples = 0
+        var pending: [Float] = []
         var droppedSamples = 0
         var loadTask: Task<Void, Never>?
         var timeoutTask: Task<Void, Never>?
@@ -69,7 +75,6 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
             status = .failed(failure)
             engine = nil
             pending = []
-            pendingSamples = 0
             loadTask?.cancel()
             timeoutTask?.cancel()
         }
@@ -128,9 +133,8 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
         guard !samples.isEmpty else { return }
         let isRunning = state.withLock { s -> Bool in
             guard s.acceptsAudio else { return false }
-            s.pending.append(samples)
-            s.pendingSamples += samples.count
-            guard s.pendingSamples > maxBacklogSamples else { return s.status == .running }
+            s.pending.append(contentsOf: samples)
+            guard s.pending.count > maxBacklogSamples else { return s.status == .running }
             if s.status == .loading {
                 dropOldestPending(&s)
                 return false
@@ -164,7 +168,6 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
                 s.loadTask?.cancel()
                 s.timeoutTask?.cancel()
                 s.pending = []
-                s.pendingSamples = 0
                 return false
             case .stopping, .stopped, .failed:
                 return false
@@ -188,7 +191,7 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
                 retainSeconds: limits.retainSeconds
             )
             s.timeoutTask?.cancel()
-            return !s.pending.isEmpty
+            return s.pending.count >= Self.blockSamples
         }
         if shouldDrain { processingQueue.async { self.drainPending() } }
     }
@@ -203,17 +206,15 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
     }
 
     private func dropOldestPending(_ s: inout State) {
-        while s.pendingSamples > maxBacklogSamples, !s.pending.isEmpty {
-            let dropped = s.pending.removeFirst()
-            s.pendingSamples -= dropped.count
-            s.droppedSamples += dropped.count
-        }
+        let excess = s.pending.count - maxBacklogSamples
+        s.pending.removeFirst(excess)
+        s.droppedSamples += excess
     }
 
     // MARK: - Processing queue
 
-    private func drainPending() {
-        while let (engine, samples) = takePending() {
+    private func drainPending(includingPartialBlock: Bool = false) {
+        while let (engine, samples) = takePending(includingPartialBlock: includingPartialBlock) {
             do {
                 ingest(try engine.process(samples: samples))
             } catch {
@@ -223,19 +224,19 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
         }
     }
 
-    private func takePending() -> (LiveSpeakerEngine, [Float])? {
+    private func takePending(includingPartialBlock: Bool) -> (LiveSpeakerEngine, [Float])? {
         state.withLock { s in
-            guard s.status == .running || s.status == .stopping,
-                  let engine = s.engine, !s.pending.isEmpty else { return nil }
-            let samples = s.pending.flatMap { $0 }
-            s.pending = []
-            s.pendingSamples = 0
+            guard s.status == .running || s.status == .stopping, let engine = s.engine else { return nil }
+            let count = includingPartialBlock ? s.pending.count : s.pending.count - s.pending.count % Self.blockSamples
+            guard count > 0 else { return nil }
+            let samples = Array(s.pending.prefix(count))
+            s.pending.removeFirst(count)
             return (engine, samples)
         }
     }
 
     private func finishAndRelease() {
-        drainPending()
+        drainPending(includingPartialBlock: true)
         let engine = state.withLock { $0.status == .stopping ? $0.engine : nil }
         if let engine {
             do {
