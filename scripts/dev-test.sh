@@ -151,6 +151,10 @@ BUILD_ENV=(
 if [[ -n "$LANE" ]]; then
   BUILD_ENV+=(MUESLI_EXECUTABLE_NAME="$DEV_APP_NAME")
 fi
+# Build without any telemetry (an unconfigured build sends nothing).
+if [[ "${MUESLI_DISABLE_TELEMETRY:-0}" == "1" ]]; then
+  BUILD_ENV+=(MUESLI_TELEMETRYDECK_APP_ID="" MUESLI_TELEMETRY_CHANNEL="")
+fi
 
 use_local_only_entitlements() {
   RESOLVED_PROVISIONING_PROFILE=""
