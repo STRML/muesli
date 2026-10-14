@@ -1170,7 +1170,7 @@ struct SettingsView: View {
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow(
                 "Live speaker labels",
-                description: "Labels other voices Speaker 1, 2 while recording. The final transcript is unchanged. Downloads a small model on first use.",
+                description: "Labels other voices Speaker 1, 2 while recording. The final transcript is unchanged. Downloads a model on first use.",
                 controlWidth: meetingControlWidth
             ) {
                 settingsControl("live_speaker_labels")

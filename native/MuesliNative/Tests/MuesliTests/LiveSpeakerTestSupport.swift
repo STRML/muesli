@@ -34,6 +34,7 @@ final class ScriptedLiveSpeakerEngine: LiveSpeakerEngine, @unchecked Sendable {
     private var samplesSeen = 0
     private var framesEmitted = 0
     private var finishes = 0
+    private var partialBlockCalls = 0
 
     init(
         slotCount: Int = 4,
@@ -51,11 +52,14 @@ final class ScriptedLiveSpeakerEngine: LiveSpeakerEngine, @unchecked Sendable {
 
     var totalSamplesSeen: Int { lock.withLock { samplesSeen } }
     var finishCalls: Int { lock.withLock { finishes } }
+    /// Calls whose length was not a whole number of 100 ms blocks.
+    var calledWithPartialBlock: Int { lock.withLock { partialBlockCalls } }
 
     func process(samples: [Float]) throws -> LiveSpeakerFrames? {
         gate?.wait()
         return try lock.withLock {
             if let failAtSamples, samplesSeen + samples.count >= failAtSamples { throw Failure() }
+            if !samples.count.isMultiple(of: LiveSpeakerLabelSession.blockSamples) { partialBlockCalls += 1 }
             samplesSeen += samples.count
             return emit(upTo: max(samplesSeen / 1_600 - lagFrames, 0))
         }
