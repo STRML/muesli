@@ -1771,6 +1771,24 @@ extension AppConfig {
         let locked = lockedSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines)
         if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
     }
+
+    /// Remembers (or, with nil, clears) the folder picked for an upcoming meeting, and drops
+    /// choices for meetings that started more than a week ago.
+    mutating func planFolder(_ folderID: Int64?, for occurrenceKey: String, startTime: Date, now: Date = Date()) {
+        plannedCalendarFolders = plannedCalendarFolders.filter { $0.value.startTime > now.addingTimeInterval(-7 * 86_400) }
+        plannedCalendarFolders[occurrenceKey] = folderID.map { PlannedCalendarFolder(folderID: $0, startTime: startTime) }
+    }
+
+    /// The remembered folder, or nil when none was picked or the folder no longer exists.
+    func plannedFolderID(for occurrenceKey: String, existingFolderIDs: Set<Int64>) -> Int64? {
+        guard let id = plannedCalendarFolders[occurrenceKey]?.folderID, existingFolderIDs.contains(id) else { return nil }
+        return id
+    }
+}
+
+struct PlannedCalendarFolder: Codable, Equatable {
+    var folderID: Int64
+    var startTime: Date
 }
 
 struct AppConfig: Codable {
@@ -1940,6 +1958,9 @@ struct AppConfig: Codable {
     /// When non-empty, `meetingSummaryBackend` is pinned to this id. Onboarding, ChatGPT sign-in or any
     /// other writer that sets a different backend is reverted, so text can only go where you chose.
     var lockedSummaryBackend: String = ""
+    /// Folder picked on an upcoming calendar event, keyed by the occurrence's identity key. The
+    /// meeting is only created when a note or recording starts, and it then lands in this folder.
+    var plannedCalendarFolders: [String: PlannedCalendarFolder] = [:]
     /// Keep one vault note per meeting up to date (stable name, updated in place, removed when the
     /// meeting is deleted or becomes private) instead of appending a new file per export.
     var autoExportKeepInSync: Bool = false
@@ -2104,6 +2125,7 @@ struct AppConfig: Codable {
         case autoExportFileFormat = "auto_export_file_format"
         case privateTrustedBackends = "private_trusted_backends"
         case lockedSummaryBackend = "locked_summary_backend"
+        case plannedCalendarFolders = "planned_calendar_folders"
         case autoExportKeepInSync = "auto_export_keep_in_sync"
         case autoExportByFolder = "auto_export_by_folder"
         case autoClassifyMeetings = "auto_classify_meetings"
@@ -2383,6 +2405,7 @@ struct AppConfig: Codable {
         autoExportFileFormat = MeetingAutoExportFileFormat(rawValue: decodedAutoExportFileFormat)?.rawValue ?? defaults.autoExportFileFormat
         privateTrustedBackends = (try? c.decode([String].self, forKey: .privateTrustedBackends)) ?? defaults.privateTrustedBackends
         lockedSummaryBackend = (try? c.decode(String.self, forKey: .lockedSummaryBackend)) ?? defaults.lockedSummaryBackend
+        plannedCalendarFolders = (try? c.decode([String: PlannedCalendarFolder].self, forKey: .plannedCalendarFolders)) ?? defaults.plannedCalendarFolders
         autoExportKeepInSync = (try? c.decode(Bool.self, forKey: .autoExportKeepInSync)) ?? defaults.autoExportKeepInSync
         autoExportByFolder = (try? c.decode(Bool.self, forKey: .autoExportByFolder)) ?? defaults.autoExportByFolder
         autoClassifyMeetings = (try? c.decode(Bool.self, forKey: .autoClassifyMeetings)) ?? defaults.autoClassifyMeetings
