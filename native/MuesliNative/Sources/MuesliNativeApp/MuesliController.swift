@@ -1485,6 +1485,7 @@ public final class MuesliController: NSObject {
         appState.config = config
         appState.isMeetingRecording = isMeetingRecording()
         appState.isMeetingRecordingPaused = isMeetingRecordingPaused()
+        appState.activeMeetingID = activeMeetingID
         appState.isMeetingStarting = isStartingMeetingRecording
         appState.meetingStartStatus = meetingStartStatus
         appState.activeMeetingAudioWarning = activeMeetingAudioWarning

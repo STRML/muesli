@@ -139,12 +139,85 @@ struct SidebarView: View {
         }
     }
 
+    private var activeRecordingItem: ActiveRecordingSidebarItem? {
+        ActiveRecordingSidebarItem.make(
+            activeMeetingID: appState.activeMeetingID,
+            isPaused: appState.isMeetingRecordingPaused,
+            titleFor: { id in appState.meetingRows.first(where: { $0.id == id })?.title }
+        )
+    }
+
+    private func isShowingMeeting(_ item: ActiveRecordingSidebarItem) -> Bool {
+        appState.selectedMeetingID == item.meetingID
+            && (appState.selectedTab == .meetings || appState.selectedTab == .timeline)
+            && appState.meetingsNavigationState == .document(item.meetingID)
+    }
+
+    private func openActiveRecording(_ item: ActiveRecordingSidebarItem) {
+        guard !isShowingMeeting(item) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            controller.showMeetingDocument(id: item.meetingID)
+        }
+    }
+
+    private func collapsedRecordingItem(_ item: ActiveRecordingSidebarItem) -> some View {
+        Button {
+            openActiveRecording(item)
+        } label: {
+            RecordingPulseDot(isPulsing: item.isPulsing)
+                .frame(width: 40, height: 36)
+                .background(isShowingMeeting(item) ? MuesliTheme.surfacePrimary : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .help("\(item.statusLabel): \(item.title)")
+        .accessibilityLabel("\(item.statusLabel): \(item.title)")
+    }
+
+    private func activeRecordingRow(_ item: ActiveRecordingSidebarItem) -> some View {
+        let isSelected = isShowingMeeting(item)
+        return Button {
+            openActiveRecording(item)
+        } label: {
+            HStack(spacing: MuesliTheme.spacing12) {
+                RecordingPulseDot(isPulsing: item.isPulsing)
+                    .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.statusLabel)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.recording)
+                    Text(item.title)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, sidebarRowHorizontalPadding)
+            .padding(.vertical, MuesliTheme.spacing8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                    .fill(isSelected ? MuesliTheme.surfaceSelected : MuesliTheme.recording.opacity(0.08))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, sidebarRowOuterPadding)
+        .help("\(item.statusLabel): \(item.title)")
+        .accessibilityLabel("\(item.statusLabel): \(item.title)")
+    }
+
     private var collapsedSidebar: some View {
         VStack(spacing: MuesliTheme.spacing8) {
             sidebarToggleButton
                 .padding(.top, MuesliTheme.spacing16)
                 .padding(.bottom, MuesliTheme.spacing12)
 
+            if let recording = activeRecordingItem {
+                collapsedRecordingItem(recording)
+            }
             collapsedItem(tab: .timeline, icon: "clock", label: "Timeline")
             collapsedItem(tab: .dictations, icon: "waveform", label: "Dictations")
             collapsedItem(tab: .meetings, icon: "person.2", label: "Meetings")
@@ -214,6 +287,9 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        if let recording = activeRecordingItem {
+                            activeRecordingRow(recording)
+                        }
                         sidebarItem(tab: .timeline, icon: "clock", label: "Timeline")
                         sidebarItem(tab: .dictations, icon: "waveform", label: "Dictations")
                         meetingsSection

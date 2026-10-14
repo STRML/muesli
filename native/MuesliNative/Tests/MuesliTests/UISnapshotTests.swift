@@ -50,9 +50,12 @@ struct UISnapshotTests {
         let store = DictationStore(databaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("ui-snapshot-\(UUID()).db"))
         try store.migrateIfNeeded()
+        let configDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ui-snapshot-config-\(UUID())", isDirectory: true)
         let controller = MuesliController(
             runtime: RuntimePaths(repoRoot: FileManager.default.temporaryDirectory, menuIcon: nil, appIcon: nil, bundlePath: nil),
-            dictationStore: store
+            dictationStore: store,
+            configStore: ConfigStore(supportDirectory: configDirectory)
         )
         let rush = try store.createFolder(name: "Rush")
         let legal = try store.createFolder(name: "Legal")
@@ -96,6 +99,14 @@ struct UISnapshotTests {
         let f = try makeFixture()
         f.controller.appState.selectedTab = .meetings
         try render(SidebarView(appState: f.controller.appState, controller: f.controller), width: 260, height: 640, name: "02-sidebar")
+    }
+
+    @Test("sidebar shows the recording item above Timeline while a meeting records")
+    func sidebarRecording() throws {
+        let f = try makeFixture()
+        f.controller.appState.selectedTab = .timeline
+        f.controller.appState.activeMeetingID = f.normalMeeting
+        try render(SidebarView(appState: f.controller.appState, controller: f.controller), width: 260, height: 640, name: "05-sidebar-recording")
     }
 
     @Test("folder suggestions inbox")
