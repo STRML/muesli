@@ -2097,6 +2097,21 @@ struct SettingsView: View {
                     settingsRow("File format") {
                         settingsControl("export_format")
                     }
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    settingsRow("Keep notes up to date") {
+                        settingsControl("auto_export_keep_in_sync")
+                    }
+                    if appState.config.autoExportKeepInSync {
+                        Divider().background(MuesliTheme.surfaceBorder)
+                        settingsRow("File by meeting folder") {
+                            settingsControl("auto_export_by_folder")
+                        }
+                        Text("One Markdown note per meeting, named with its id and updated in place. It is moved when you rename or refile the meeting, and removed when you delete the meeting or mark it private. Notes are written as Markdown with Obsidian frontmatter; PDF is not used in this mode.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, MuesliTheme.spacing8)
+                    }
                 }
                 Text("Automatically saves each completed meeting to the chosen folder in the selected format.")
                     .font(MuesliTheme.caption())

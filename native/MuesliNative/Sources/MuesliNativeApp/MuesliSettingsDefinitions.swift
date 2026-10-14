@@ -323,6 +323,8 @@ extension MuesliController {
         toggle("meeting_hover_transcript", "Show meeting transcript on hover", \.showMeetingTranscriptOnIndicatorHover)
         toggle("auto_record_meetings", "Auto-record calendar meetings", \.autoRecordMeetings)
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
+        toggle("auto_export_keep_in_sync", "Keep one note per meeting up to date", \.autoExportKeepInSync)
+        toggle("auto_export_by_folder", "File notes by meeting folder", \.autoExportByFolder)
         toggle("meeting_reminders", "Scheduled meeting notifications", \.showScheduledMeetingNotifications)
         toggle("meeting_detection", "Detected meeting notifications", \.showMeetingDetectionNotification)
         toggle("meeting_hook", "Post-meeting hook", \.meetingHookEnabled)

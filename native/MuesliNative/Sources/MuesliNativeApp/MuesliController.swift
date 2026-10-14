@@ -391,6 +391,7 @@ public final class MuesliController: NSObject {
     }
     private let meetingHookDispatcher: MeetingHookDispatching
     private let meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting
+    private lazy var vaultExporter = MeetingVaultExporter(store: dictationStore)
     private let launchAtLoginCoordinator: LaunchAtLoginCoordinator
     let transcriptionCoordinator = TranscriptionCoordinator()
     private let hotkeyMonitor = HotkeyMonitor()
@@ -737,6 +738,7 @@ public final class MuesliController: NSObject {
         }
         recoverRetainedMeetingRecordings()
         recoverStaleLiveMeetings()
+        retryVaultRemovalsAndRefresh()
         normalizeMeetingTranscriptionSelectionForAvailability()
         SoundController.prewarmLifecycleSounds()
 
@@ -5898,6 +5900,7 @@ public final class MuesliController: NSObject {
                 }
                 await MainActor.run {
                     self.scheduleICloudSyncAfterLocalChange()
+                    self.scheduleVaultExport(meetingID: meeting.id)
                     self.syncAppState()
                     self.historyWindowController?.reload()
                     completion(.success(()))
@@ -6300,6 +6303,7 @@ public final class MuesliController: NSObject {
             try dictationStore.updateMeetingTitle(id: id, title: title)
             liveMeetingTitleCache[id] = nil
             scheduleICloudSyncAfterLocalChange()
+            scheduleVaultExport(meetingID: id)
         } catch {
             fputs("[muesli-native] failed to update meeting title \(id): \(error)\n", stderr)
         }
@@ -6313,6 +6317,7 @@ public final class MuesliController: NSObject {
     func updateMeetingNotes(id: Int64, notes: String) {
         try? dictationStore.updateMeetingNotes(id: id, formattedNotes: notes)
         scheduleICloudSyncAfterLocalChange()
+        scheduleVaultExport(meetingID: id)
         syncAppState()
     }
 
@@ -6320,6 +6325,7 @@ public final class MuesliController: NSObject {
         do {
             try dictationStore.updateMeetingTranscript(id: id, rawTranscript: transcript)
             scheduleICloudSyncAfterLocalChange()
+            scheduleVaultExport(meetingID: id)
         } catch {
             fputs("[muesli-native] failed to update meeting transcript \(id): \(error)\n", stderr)
         }
@@ -6425,6 +6431,7 @@ public final class MuesliController: NSObject {
             try dictationStore.updateMeetingTitle(id: id, title: title)
             liveMeetingTitleCache[id] = nil
             scheduleICloudSyncAfterLocalChange()
+            scheduleVaultExport(meetingID: id)
         } catch {
             fputs("[muesli-native] failed to flush cached meeting title \(id): \(error)\n", stderr)
         }
@@ -6499,6 +6506,7 @@ public final class MuesliController: NSObject {
 
     func renameFolder(id: Int64, name: String) {
         try? dictationStore.renameFolder(id: id, name: name)
+        scheduleVaultExport()
         syncAppState()
     }
 
@@ -6516,12 +6524,14 @@ public final class MuesliController: NSObject {
 
     func moveFolder(id: Int64, toParent newParentID: Int64?) {
         try? dictationStore.moveFolder(id: id, toParent: newParentID)
+        scheduleVaultExport()
         syncAppState()
     }
 
     func createFolderAndMoveMeeting(name: String, meetingID: Int64) {
         guard let folderID = try? dictationStore.createFolder(name: name) else { return }
         try? dictationStore.moveMeeting(id: meetingID, toFolder: folderID)
+        scheduleVaultExport(meetingID: meetingID)
         syncAppState()
     }
 
@@ -6530,6 +6540,7 @@ public final class MuesliController: NSObject {
         if appState.selectedFolderID == id {
             appState.selectedFolderID = nil
         }
+        scheduleVaultExport()
         syncAppState()
     }
 
@@ -6581,7 +6592,33 @@ public final class MuesliController: NSObject {
 
     func moveMeeting(id: Int64, toFolder folderID: Int64?) {
         try? dictationStore.moveMeeting(id: id, toFolder: folderID)
+        scheduleVaultExport(meetingID: id)
         syncAppState()
+    }
+
+    /// Keeps the vault copy of a meeting (or of every meeting, with nil) current. Runs off the main
+    /// thread and does nothing unless keep-in-sync is on.
+    func scheduleVaultExport(meetingID: Int64? = nil) {
+        let config = self.config
+        guard config.autoExportMarkdownEnabled, config.autoExportKeepInSync else { return }
+        let exporter = vaultExporter
+        Task.detached(priority: .utility) {
+            if let meetingID {
+                exporter.refresh(meetingID: meetingID, config: config)
+            } else {
+                exporter.refreshAll(config: config)
+            }
+        }
+    }
+
+    private func retryVaultRemovalsAndRefresh() {
+        let config = self.config
+        guard config.autoExportMarkdownEnabled, config.autoExportKeepInSync else { return }
+        let exporter = vaultExporter
+        Task.detached(priority: .utility) {
+            exporter.retryPendingRemovals()
+            exporter.refreshAll(config: config)
+        }
     }
 
     func setMeetingPrivate(id: Int64, isPrivate: Bool) {
@@ -6590,6 +6627,7 @@ public final class MuesliController: NSObject {
         } catch {
             presentErrorAlert(title: "Couldn't Update Privacy", message: error.localizedDescription)
         }
+        scheduleVaultExport(meetingID: id)
         syncAppState()
     }
 
@@ -6599,6 +6637,7 @@ public final class MuesliController: NSObject {
         } catch {
             presentErrorAlert(title: "Couldn't Update Privacy", message: error.localizedDescription)
         }
+        scheduleVaultExport()
         syncAppState()
     }
 
@@ -6734,6 +6773,7 @@ public final class MuesliController: NSObject {
         clearCachedMeetingManualNotes(id: id)
         clearCachedMeetingTitle(id: id)
         staleLiveMeetingRecoveryFailures.remove(id)
+        scheduleVaultExport(meetingID: id)
 
         historyWindowController?.reload()
         statusBarController?.refresh()
@@ -8568,7 +8608,9 @@ public final class MuesliController: NSObject {
             completedAt: result.endTime,
             config: config
         )
-        if config.autoExportMarkdownEnabled {
+        if config.autoExportMarkdownEnabled && config.autoExportKeepInSync {
+            scheduleVaultExport(meetingID: persistenceResult.meetingID)
+        } else if config.autoExportMarkdownEnabled {
             do {
                 if let record = try dictationStore.meeting(id: persistenceResult.meetingID) {
                     meetingMarkdownAutoExporter.exportIfConfigured(
