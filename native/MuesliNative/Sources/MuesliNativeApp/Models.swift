@@ -1765,6 +1765,14 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
     }
 }
 
+extension AppConfig {
+    /// Reverts any change to the summary backend while `lockedSummaryBackend` is set.
+    mutating func enforceSummaryBackendLock() {
+        let locked = lockedSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
+    }
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var enablePushToTalk: Bool = true
@@ -1929,6 +1937,9 @@ struct AppConfig: Codable {
     /// Summary backend ids allowed to receive private meetings. Empty by default,
     /// so private meetings are never sent anywhere until the user opts a backend in.
     var privateTrustedBackends: [String] = []
+    /// When non-empty, `meetingSummaryBackend` is pinned to this id. Onboarding, ChatGPT sign-in or any
+    /// other writer that sets a different backend is reverted, so text can only go where you chose.
+    var lockedSummaryBackend: String = ""
     /// Keep one vault note per meeting up to date (stable name, updated in place, removed when the
     /// meeting is deleted or becomes private) instead of appending a new file per export.
     var autoExportKeepInSync: Bool = false
@@ -2092,6 +2103,7 @@ struct AppConfig: Codable {
         case autoExportMarkdownContent = "auto_export_markdown_content"
         case autoExportFileFormat = "auto_export_file_format"
         case privateTrustedBackends = "private_trusted_backends"
+        case lockedSummaryBackend = "locked_summary_backend"
         case autoExportKeepInSync = "auto_export_keep_in_sync"
         case autoExportByFolder = "auto_export_by_folder"
         case autoClassifyMeetings = "auto_classify_meetings"
@@ -2370,6 +2382,7 @@ struct AppConfig: Codable {
         let decodedAutoExportFileFormat = (try? c.decode(String.self, forKey: .autoExportFileFormat)) ?? defaults.autoExportFileFormat
         autoExportFileFormat = MeetingAutoExportFileFormat(rawValue: decodedAutoExportFileFormat)?.rawValue ?? defaults.autoExportFileFormat
         privateTrustedBackends = (try? c.decode([String].self, forKey: .privateTrustedBackends)) ?? defaults.privateTrustedBackends
+        lockedSummaryBackend = (try? c.decode(String.self, forKey: .lockedSummaryBackend)) ?? defaults.lockedSummaryBackend
         autoExportKeepInSync = (try? c.decode(Bool.self, forKey: .autoExportKeepInSync)) ?? defaults.autoExportKeepInSync
         autoExportByFolder = (try? c.decode(Bool.self, forKey: .autoExportByFolder)) ?? defaults.autoExportByFolder
         autoClassifyMeetings = (try? c.decode(Bool.self, forKey: .autoClassifyMeetings)) ?? defaults.autoClassifyMeetings

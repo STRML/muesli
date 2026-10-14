@@ -1655,6 +1655,7 @@ public final class MuesliController: NSObject {
         let previousEnableDictionaryCorrectionPrompts = config.enableDictionaryCorrectionPrompts
         let previousEnableLiveStreamingPartials = config.enableLiveStreamingPartials
         mutate(&config)
+        config.enforceSummaryBackendLock()
         if previousEnableLiveStreamingPartials, !config.enableLiveStreamingPartials {
             activeMeetingSession?.stopStreamingPartials()
             clearLiveMeetingPartialTails()

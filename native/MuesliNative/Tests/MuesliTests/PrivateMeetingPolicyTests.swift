@@ -277,3 +277,36 @@ struct PrivateMeetingPolicyTests {
         #expect(server.connections >= 1)
     }
 }
+
+@Suite("Summary backend lock")
+struct SummaryBackendLockTests {
+    @Test("a locked backend is restored after any other writer changes it")
+    func lockRevertsChanges() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = "custom_llm"
+        config.lockedSummaryBackend = "custom_llm"
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.chatGPT.backend   // e.g. onboarding default
+        config.enforceSummaryBackendLock()
+        #expect(config.meetingSummaryBackend == "custom_llm")
+    }
+
+    @Test("without a lock nothing changes")
+    func noLock() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        config.enforceSummaryBackendLock()
+        #expect(config.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+    }
+
+    @Test("the lock survives a save and load, and fixes a file edited to another backend")
+    func persisted() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("lock-\(UUID())", isDirectory: true)
+        let store = ConfigStore(supportDirectory: dir)
+        var config = AppConfig()
+        config.lockedSummaryBackend = "custom_llm"
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.chatGPT.backend
+        store.save(config)
+        #expect(store.load().meetingSummaryBackend == "custom_llm")
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
