@@ -7723,7 +7723,7 @@ public final class MuesliController: NSObject {
                             meetingStart: meetingSession?.startTime ?? Date()
                         )
                         guard !transcript.checkpointEntries.isEmpty else { return }
-                        self.noteMeetingTranscriptActivity()
+                        self.noteMeetingTranscriptActivity(from: speaker)
                         do {
                             // Checkpoints keep the source label ("Others"): crash recovery has no
                             // final diarization pass, so provisional Speaker N must not persist.
@@ -7759,7 +7759,7 @@ public final class MuesliController: NSObject {
                             self.appState.liveMeetingPartialOthers = tail
                         }
                         if !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            self.noteMeetingTranscriptActivity()
+                            self.noteMeetingTranscriptActivity(from: speaker)
                         }
                         self.indicator.updateMeetingTranscript(
                             transcript: self.appState.liveMeetingTranscript,
@@ -9627,8 +9627,8 @@ public final class MuesliController: NSObject {
         meetingNotification.close()
     }
 
-    private func noteMeetingTranscriptActivity() {
-        meetingSignalLossPromptState.noteTranscriptActivity(now: Date())
+    private func noteMeetingTranscriptActivity(from speaker: String) {
+        meetingSignalLossPromptState.noteTranscriptActivity(from: speaker, now: Date())
         let promptID = meetingSignalLossPromptID(for: activeMeetingID)
         if meetingNotification.isVisible,
            meetingNotification.currentPromptID == promptID {
@@ -9646,6 +9646,7 @@ public final class MuesliController: NSObject {
         )
         syncMeetingCallEndedAlert()
         guard action != .none else { return }
+        fputs("[meeting-monitor] signal_loss_alert action=\(action) meeting=\(activeMeetingID.map(String.init) ?? "nil")\n", stderr)
 
         let meetingID = activeMeetingID
         let promptID = meetingSignalLossPromptID(for: meetingID)

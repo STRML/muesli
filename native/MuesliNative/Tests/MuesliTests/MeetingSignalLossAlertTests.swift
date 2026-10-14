@@ -90,6 +90,22 @@ struct MeetingSignalLossAlertTests {
         #expect(evaluate(&state, after: 385) == .reofferToast)
     }
 
+    @Test("the user's own voice is not evidence that the call is still going")
+    func ownVoiceDoesNotDeferTheAlert() {
+        var state = MeetingSignalLossPromptState()
+        // The call ended and the user kept talking at the desk: the mic keeps producing words.
+        state.noteTranscriptActivity(from: "You", now: t0)
+        #expect(evaluate(&state, after: 10) == .raiseAlertAndToast)
+
+        // Remote speech still holds the alert back.
+        var remote = MeetingSignalLossPromptState()
+        remote.noteTranscriptActivity(from: "Others", now: t0)
+        #expect(evaluate(&remote, after: 10) == .none)
+        var labelled = MeetingSignalLossPromptState()
+        labelled.noteTranscriptActivity(from: "Speaker 2", now: t0)
+        #expect(evaluate(&labelled, after: 10) == .none)
+    }
+
     @Test("a new recording starts clean")
     func reset() {
         var state = MeetingSignalLossPromptState()

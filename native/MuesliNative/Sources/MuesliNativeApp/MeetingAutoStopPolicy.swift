@@ -77,6 +77,15 @@ struct MeetingSignalLossPromptState: Equatable {
         lastTranscriptActivityAt = now
     }
 
+    /// Speech from the remote side is evidence that the call is still going. The user's own
+    /// voice is not: the mic keeps hearing them after the call ends.
+    mutating func noteTranscriptActivity(from speaker: String, now: Date) {
+        guard speaker != Self.ownVoiceSpeakerLabel else { return }
+        noteTranscriptActivity(now: now)
+    }
+
+    static let ownVoiceSpeakerLabel = "You"
+
     func hasRecentTranscriptActivity(now: Date, quietPeriod: TimeInterval) -> Bool {
         guard let lastTranscriptActivityAt else { return false }
         return now.timeIntervalSince(lastTranscriptActivityAt) < quietPeriod
