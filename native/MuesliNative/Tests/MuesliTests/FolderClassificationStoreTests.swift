@@ -142,6 +142,31 @@ struct FolderClassificationStoreTests {
         #expect(try fixture.rawCount("folder_suggestions") == 0)
     }
 
+    @Test("clearing meeting history also clears suggestions and learned memory")
+    func historyWipeClearsMemory() throws {
+        let fixture = try FolderClassificationFixture()
+        let rush = try fixture.store.createFolder(name: "Rush")
+        let filed = try fixture.meeting(series: "s1", emails: ["a@x.com"])
+        try fixture.classification.moveMeeting(id: filed, toFolder: rush)
+        let unfiled = try fixture.meeting()
+        try fixture.classification.recordSuggestion(meetingID: unfiled, candidate: candidate(rush))
+
+        try fixture.store.clearMeetings()
+
+        #expect(try fixture.rawCount("folder_suggestions") == 0)
+        #expect(try fixture.rawCount("classification_memory") == 0)
+        #expect(try fixture.rawCount("classification_learned") == 0)
+    }
+
+    @Test("recording a move that did not happen learns nothing")
+    func recordMoveRequiresTheMove() throws {
+        let fixture = try FolderClassificationFixture()
+        let rush = try fixture.store.createFolder(name: "Rush")
+        let id = try fixture.meeting(series: "s1")
+        try fixture.classification.recordMove(meetingID: id, toFolder: rush)
+        #expect(try fixture.memory(.series, "s1").isEmpty)
+    }
+
     // MARK: - Snapshot
 
     @Test("snapshot carries series, emails, names and at most 1,500 characters of notes")

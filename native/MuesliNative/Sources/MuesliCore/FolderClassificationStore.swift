@@ -108,6 +108,13 @@ enum FolderClassificationSQL {
             try MeetingChatSQL.execute(statement, db: db)
         }
     }
+
+    /// Part of the meeting-history wipe: memory holds attendee addresses and titles.
+    static func clear(db: OpaquePointer?) throws {
+        for table in ["folder_suggestions", "classification_memory", "classification_learned"] {
+            try MeetingChatSQL.execute("DELETE FROM \(table)", db: db)
+        }
+    }
 }
 
 /// Suggestion, memory and learning storage for folder auto-classification.
@@ -245,29 +252,21 @@ public struct FolderClassificationStore: Sendable {
         }
     }
 
-    /// A user's move: files the meeting, resolves its suggestions, and learns from it,
-    /// in one transaction. Learning counts a meeting once per folder it is filed in;
-    /// moving it again takes the earlier count back.
+    /// A user's move: files the meeting, then records it with `recordMove`.
     public func moveMeeting(id meetingID: Int64, toFolder folderID: Int64?, now: Date = Date()) throws {
+        try DictationStore(databaseURL: databaseURL).moveMeeting(id: meetingID, toFolder: folderID)
+        try recordMove(meetingID: meetingID, toFolder: folderID, now: now)
+    }
+
+    /// Call after a user moved a meeting with `DictationStore.moveMeeting`: resolves its
+    /// suggestions and learns from the move, all or nothing. Learning counts a meeting
+    /// once per folder it is filed in; moving it again takes the earlier count back.
+    public func recordMove(meetingID: Int64, toFolder folderID: Int64?, now: Date = Date()) throws {
         try connection { db in try MeetingChatSQL.transaction(db: db) {
-            try MeetingChatSQL.execute(
-                "UPDATE meetings SET folder_id = ? WHERE id = ?",
-                [folderID.map { .integer($0) } ?? .null, .integer(meetingID)], db: db
-            )
-            // The move must not depend on learning: learn all-or-nothing in a savepoint.
-            try MeetingChatSQL.execute("SAVEPOINT folder_learning", db: db)
-            do {
-                if let snapshot = try snapshot(meetingID: meetingID, db: db) {
-                    let keys = FolderClassificationRules.memoryKeys(for: snapshot.evidence, selfEmails: try selfEmails(db: db))
-                    try resolveSuggestions(meetingID: meetingID, movedTo: folderID, keys: keys, now: now, db: db)
-                    try learn(meetingID: meetingID, folderID: folderID, keys: keys, now: now, db: db)
-                }
-                try MeetingChatSQL.execute("RELEASE folder_learning", db: db)
-            } catch {
-                try MeetingChatSQL.execute("ROLLBACK TO folder_learning", db: db)
-                try MeetingChatSQL.execute("RELEASE folder_learning", db: db)
-                fputs("[folder-classify] learning skipped meeting=\(meetingID)\n", stderr)
-            }
+            guard let snapshot = try snapshot(meetingID: meetingID, db: db), snapshot.folderID == folderID else { return }
+            let keys = FolderClassificationRules.memoryKeys(for: snapshot.evidence, selfEmails: try selfEmails(db: db))
+            try resolveSuggestions(meetingID: meetingID, movedTo: folderID, keys: keys, now: now, db: db)
+            try learn(meetingID: meetingID, folderID: folderID, keys: keys, now: now, db: db)
         } }
     }
 

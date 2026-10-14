@@ -152,6 +152,32 @@ struct FolderClassificationLLMTests {
         #expect(await spy.requests.first?.config.meetingSummaryBackend == config.meetingSummaryBackend)
     }
 
+    @Test("an untrusted backend never sees private folder names, a trusted one does")
+    func privateFoldersHiddenFromUntrusted() async {
+        let folders = [
+            MeetingFolder(id: 1, name: "Rush", createdAt: ""),
+            MeetingFolder(id: 2, name: "Therapy", createdAt: "", isPrivate: true),
+            MeetingFolder(id: 3, name: "Sessions", parentID: 2, createdAt: ""),
+        ]
+        let spy = FolderClassificationSpyGenerator(reply: #"{"folder":"Therapy","confidence":0.9}"#)
+        let result = await FolderClassificationLLM.suggest(
+            snapshot: snapshot(), folders: folders, config: untrustedConfig(), isPrivateMeeting: false, generator: spy
+        )
+        #expect(result == nil)
+        let system = await spy.requests.first?.system ?? ""
+        #expect(system.contains("- Rush"))
+        #expect(!system.contains("Therapy"))
+        #expect(!system.contains("Sessions"))
+
+        var trusted = AppConfig()
+        trusted.privateTrustedBackends = [PrivateMeetingPolicy.effectiveBackend(of: trusted)]
+        let trustedSpy = FolderClassificationSpyGenerator(reply: #"{"folder":"Therapy","confidence":0.9}"#)
+        let trustedResult = await FolderClassificationLLM.suggest(
+            snapshot: snapshot(), folders: folders, config: trusted, isPrivateMeeting: false, generator: trustedSpy
+        )
+        #expect(trustedResult?.folderID == 2)
+    }
+
     @Test("no folders means no backend call")
     func noFoldersSkips() async {
         let spy = FolderClassificationSpyGenerator(reply: "{}")

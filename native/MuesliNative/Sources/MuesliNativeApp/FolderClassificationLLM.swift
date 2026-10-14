@@ -89,6 +89,22 @@ enum FolderClassificationLLM {
         return byName.count == 1 ? byName.first : nil
     }
 
+    /// Folders that are neither private nor inside a private folder. A private folder's
+    /// name is private content too, so an untrusted backend never sees it.
+    static func foldersOutsidePrivate(_ folders: [MeetingFolder]) -> [MeetingFolder] {
+        let byID = Dictionary(folders.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func isPrivate(_ folder: MeetingFolder) -> Bool {
+            var current: MeetingFolder? = folder
+            var seen = Set<Int64>()
+            while let node = current, seen.insert(node.id).inserted {
+                if node.isPrivate { return true }
+                current = node.parentID.flatMap { byID[$0] }
+            }
+            return false
+        }
+        return folders.filter { !isPrivate($0) }
+    }
+
     /// Nil whenever the meeting may not be sent, the backend fails, or the reply is invalid.
     static func suggest(
         snapshot: MeetingClassificationSnapshot,
@@ -98,7 +114,8 @@ enum FolderClassificationLLM {
         generator: MeetingTextGenerating
     ) async -> FolderSuggestionCandidate? {
         guard PrivateMeetingPolicy.allowsContent(isPrivateMeeting: isPrivateMeeting, config: config) else { return nil }
-        let choices = choices(from: folders)
+        let shareable = PrivateMeetingPolicy.allowsBackend(config) ? folders : foldersOutsidePrivate(folders)
+        let choices = choices(from: shareable)
         guard !choices.isEmpty else { return nil }
         let request = MeetingTextGenerationRequest(
             system: systemPrompt(choices: choices),
