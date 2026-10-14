@@ -299,7 +299,40 @@ struct MeetingCallEndDetectionTests {
         #expect(MeetingAutoStopPolicy.matches(candidate: native, source: source))
     }
 
-    @Test("scoping keeps the tab in the source's own room, and everything for a room-less source")
+    @Test("a seen browser source still sees the next room in the same browser as a different call")
+    func nextRoomInSameBrowserIsNotTheSameCall() throws {
+        let roomA = try #require(MeetingURLNormalizer.normalize("https://meet.google.com/abc-defg-hij"))
+        let roomB = try #require(MeetingURLNormalizer.normalize("https://meet.google.com/zzz-yyyy-xxx"))
+        let seenInRoomA = MeetingCandidate(
+            id: roomA.id, platform: .googleMeet, appName: "Chrome", url: roomA.url,
+            evidence: [.browserURL, .audioInputProcess], startedAt: now, meetingTitle: nil,
+            sourceBundleID: "com.google.Chrome"
+        )
+        let source = MeetingAutoStopSource(candidate: seenInRoomA)
+        let tabInRoomB = BrowserMeetingContext(
+            bundleID: "com.google.Chrome", appName: "Chrome", url: roomB.url,
+            normalizedID: roomB.id, platform: roomB.platform, isFocused: true
+        )
+        let chromeAudio = AudioProcessActivity(
+            pid: 77, bundleID: "com.google.Chrome", appName: "Chrome",
+            isRunningInput: true, isRunningOutput: true
+        )
+        let snapshot = MeetingSignalSnapshot(
+            micActive: true, cameraActive: false, calendarEvent: nil, runningApps: [],
+            browserMeetings: [tabInRoomB], audioInputProcesses: [chromeAudio],
+            foregroundBundleID: "com.google.Chrome", now: now
+        )
+        // What the monitor feeds the resolver while it follows this source.
+        let scoped = snapshot.replacingBrowserMeetings(
+            MeetingAutoStopPolicy.scopedBrowserMeetings(snapshot.browserMeetings, source: source)
+        )
+        let candidate = try #require(resolver().resolve(scoped))
+        // Room B's tab must stay visible: dropping it leaves room-less Chrome audio, which the
+        // seen source would take for room A and the recording would run on through meeting B.
+        #expect(!MeetingAutoStopPolicy.matches(candidate: candidate, source: source))
+    }
+
+    @Test("scoping keeps the tab in the source's own room, and everything once the source is bound or room-less")
     func scopedBrowserMeetings() throws {
         let roomA = try #require(MeetingURLNormalizer.normalize("https://meet.google.com/abc-defg-hij"))
         let roomB = try #require(MeetingURLNormalizer.normalize("https://meet.google.com/zzz-yyyy-xxx"))
@@ -317,6 +350,10 @@ struct MeetingCallEndDetectionTests {
         let roomless = MeetingAutoStopSource(candidate: nativeCandidate)
         #expect(roomless.normalizedURL == nil)
         #expect(MeetingAutoStopPolicy.scopedBrowserMeetings(tabs, source: roomless) == tabs)
+
+        let bound = urlSource.refined(with: nativeCandidate)
+        #expect(bound.sourceBundleID == Self.nativeCalls[0].bundleID)
+        #expect(MeetingAutoStopPolicy.scopedBrowserMeetings(tabs, source: bound) == tabs)
     }
 
     @Test("Control Center attribution proves a call only for the source's own platform")

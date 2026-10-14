@@ -297,15 +297,20 @@ enum MeetingAutoStopPolicy {
         return !candidate.evidence.isDisjoint(with: [.audioInputProcess, .dedicatedApp])
     }
 
-    /// While a recording follows a source, a browser tab in some other room is not evidence for
-    /// it. It must not shadow lower-precedence evidence either: the resolver prefers a browser tab
-    /// over the native app, so a stale tab (a Teams launcher page left behind by the hand-off to
-    /// the desktop app) would hide the very call the source is waiting for.
+    /// While a recording is armed from a link and has not bound to anything, a browser tab in some
+    /// other room is not evidence for it, and it must not shadow lower-precedence evidence: the
+    /// resolver prefers a browser tab over the native app, so a stale tab (a Teams launcher page
+    /// left behind by the hand-off to the desktop app) would hide the very call the source is
+    /// waiting for.
+    ///
+    /// Once the source is bound the tabs stay. A bound browser source accepts room-less audio from
+    /// its own browser, so hiding the next room's tab would let a second meeting in the same
+    /// browser pass for the first and the recording would run on through it.
     static func scopedBrowserMeetings(
         _ meetings: [BrowserMeetingContext],
         source: MeetingAutoStopSource
     ) -> [BrowserMeetingContext] {
-        guard let room = source.normalizedURL else { return meetings }
+        guard source.sourceBundleID == nil, let room = source.normalizedURL else { return meetings }
         return meetings.filter { $0.url == room }
     }
 
