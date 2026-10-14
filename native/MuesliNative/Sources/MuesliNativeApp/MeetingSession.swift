@@ -224,6 +224,9 @@ final class MeetingSession {
     /// Answers whether this meeting is private at the moment of the call. It is asked
     /// before every outbound request because the flag can change during processing.
     var isPrivateMeetingProvider: (() async -> Bool)?
+    /// Persists this meeting's diarized speakers and returns `Speaker N -> name` for
+    /// recognized voices. An empty map keeps the transcript exactly as before.
+    var speakerNamesProvider: (([MeetingSpeakerObservation]) async -> [String: String])?
     var liveTitleProvider: (() async -> String?)?
     /// Formatted notes of the predecessor meeting when this session records a
     /// follow-up; injected into the summary prompt for action-item carry-forward.
@@ -845,11 +848,15 @@ final class MeetingSession {
         )
         let protectedTranscriptInputs = reconciledTranscriptInputs
 
+        let speakerObservations = SpeakerCentroidBuilder.observations(from: protectedTranscriptInputs.diarizationSegments ?? [])
+        let speakerNames = speakerObservations.isEmpty ? [:] : await speakerNamesProvider?(speakerObservations) ?? [:]
+
         let rawTranscript = TranscriptFormatter.merge(
             micSegments: protectedTranscriptInputs.micSegments,
             systemSegments: protectedTranscriptInputs.systemSegments,
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
-            meetingStart: meetingStart
+            meetingStart: meetingStart,
+            speakerNames: speakerNames
         )
 
         let titleManualNotes = await manualNotesProvider?()
