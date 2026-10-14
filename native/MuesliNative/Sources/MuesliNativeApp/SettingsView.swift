@@ -1584,6 +1584,23 @@ struct SettingsView: View {
         }
     }
 
+    /// Private meetings are never sent to a summary or chat backend unless it is switched on here.
+    private var privateMeetingsSettingsSection: some View {
+        settingsSection("Private Meetings") {
+            Text("Mark a meeting or folder private with the lock. Private meetings are kept out of summaries, titles, Ask Meetings, and auto-export unless the backend below is allowed. Turn on only services you trust with private content, such as your own server.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, MuesliTheme.spacing8)
+            ForEach(Array(MeetingSummaryBackendOption.all.enumerated()), id: \.element.backend) { index, option in
+                if index > 0 { Divider().background(MuesliTheme.surfaceBorder) }
+                settingsRow("Allow on \(option.label)", controlWidth: meetingControlWidth) {
+                    settingsControl("private_trust_\(option.backend)")
+                }
+            }
+        }
+    }
+
     private var meetingSummarySettingsSection: some View {
         settingsSection("Meeting Summaries") {
             settingsRow(
@@ -2012,6 +2029,8 @@ struct SettingsView: View {
             }
 
             meetingSummarySettingsSection
+
+            privateMeetingsSettingsSection
 
             settingsSection("Meeting Notes") {
                 settingsRow("Default template", controlWidth: meetingControlWidth) {

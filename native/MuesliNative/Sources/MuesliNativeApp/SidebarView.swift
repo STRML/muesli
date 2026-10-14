@@ -447,7 +447,7 @@ struct SidebarView: View {
                                 .id(folder.id)
                         } else {
                             meetingFilterRow(
-                                icon: "folder",
+                                icon: folder.isPrivate ? "lock.fill" : "folder",
                                 label: folder.name,
                                 count: appState.meetingCountsByFolder[folder.id] ?? 0,
                                 isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == folder.id,
@@ -481,6 +481,9 @@ struct SidebarView: View {
                                     Button("Move to Top Level") {
                                         controller.moveFolder(id: folder.id, toParent: nil)
                                     }
+                                }
+                                Button(folder.isPrivate ? "Remove Private Mark" : "Mark Folder Private") {
+                                    controller.setFolderPrivate(id: folder.id, isPrivate: !folder.isPrivate)
                                 }
                                 Divider()
                                 Button("Delete", role: .destructive) {

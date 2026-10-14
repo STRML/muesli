@@ -297,6 +297,7 @@ struct MeetingsView: View {
                                 isSelected: appState.selectedMeetingID == meeting.id,
                                 hasFollowUps: presentation.meetingIDsWithFollowUps.contains(meeting.id),
                                 folders: appState.folders,
+                                isPrivate: appState.privateMeetingIDs.contains(meeting.id),
                                 onSelect: { controller.showMeetingDocument(id: meeting.id) },
                                 onMove: { folderID in
                                     controller.moveMeeting(id: meeting.id, toFolder: folderID)
