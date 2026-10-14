@@ -2414,6 +2414,8 @@ struct AppConfig: Codable {
     var useCoreAudioTap: Bool = true
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
+    /// Labels system audio as Speaker 1, 2, ... in the Live tab while recording.
+    var enableLiveSpeakerLabels: Bool = true
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.
