@@ -39,6 +39,24 @@ public struct MeetingClassificationSnapshot: Equatable, Sendable {
     /// At most the first `notesLimit` characters of the meeting notes.
     public let notes: String
 
+    public init(
+        meetingID: Int64,
+        folderID: Int64?,
+        status: MeetingStatus?,
+        isDeleted: Bool,
+        evidence: ClassificationEvidence,
+        participantNames: [String],
+        notes: String
+    ) {
+        self.meetingID = meetingID
+        self.folderID = folderID
+        self.status = status
+        self.isDeleted = isDeleted
+        self.evidence = evidence
+        self.participantNames = participantNames
+        self.notes = notes
+    }
+
     public var isEligible: Bool {
         folderID == nil && !isDeleted && (status == .completed || status == .noteOnly)
     }
