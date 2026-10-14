@@ -389,6 +389,18 @@ public final class MuesliController: NSObject {
         }
         set { storedMeetingChatCoordinator = newValue }
     }
+    private var storedFolderClassificationRunner: FolderClassificationRunner?
+    var folderClassificationRunner: FolderClassificationRunner {
+        if let existing = storedFolderClassificationRunner { return existing }
+        let runner = FolderClassificationRunner(classifier: FolderClassifier(databaseURL: dictationStore.resolvedDatabaseURL))
+        runner.onChange = { [weak self] in
+            // Auto-filing moves a meeting, which moves its vault note.
+            self?.scheduleVaultExport()
+            self?.syncAppState()
+        }
+        storedFolderClassificationRunner = runner
+        return runner
+    }
     private let meetingHookDispatcher: MeetingHookDispatching
     private let meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting
     private lazy var vaultExporter = MeetingVaultExporter(store: dictationStore)
@@ -1441,6 +1453,7 @@ public final class MuesliController: NSObject {
         appState.totalMeetingCount = counts.total
         appState.meetingCountsByFolder = counts.byFolder
         appState.directMeetingCountsByFolder = counts.directByFolder
+        refreshFolderSuggestionInbox()
         if let selectedMeetingID = appState.selectedMeetingID {
             appState.selectedMeetingRecord = appState.meetingRows.first(where: { $0.id == selectedMeetingID })
                 ?? meeting(id: selectedMeetingID)
@@ -5594,6 +5607,7 @@ public final class MuesliController: NSObject {
         appState.meetingChatDocumentTarget = nil
         appState.selectedTab = .meetings
         appState.selectedFolderID = folderID
+        appState.isFolderInboxSelected = false
         appState.meetingsNavigationState = .browser
         syncAppState()
     }
@@ -6540,6 +6554,7 @@ public final class MuesliController: NSObject {
         guard let folderID = try? dictationStore.createFolder(name: name) else { return }
         try? dictationStore.moveMeeting(id: meetingID, toFolder: folderID)
         scheduleVaultExport(meetingID: meetingID)
+        recordFolderMove(meetingID: meetingID, toFolder: folderID)
         syncAppState()
     }
 
@@ -6601,6 +6616,7 @@ public final class MuesliController: NSObject {
     func moveMeeting(id: Int64, toFolder folderID: Int64?) {
         try? dictationStore.moveMeeting(id: id, toFolder: folderID)
         scheduleVaultExport(meetingID: id)
+        recordFolderMove(meetingID: id, toFolder: folderID)
         syncAppState()
     }
 
@@ -8620,6 +8636,7 @@ public final class MuesliController: NSObject {
             completedAt: result.endTime,
             config: config
         )
+        classifyMeetingAfterCompletion(persistenceResult.meetingID)
         if config.autoExportMarkdownEnabled && config.autoExportKeepInSync {
             scheduleVaultExport(meetingID: persistenceResult.meetingID)
         } else if config.autoExportMarkdownEnabled {

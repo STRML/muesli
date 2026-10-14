@@ -1934,6 +1934,10 @@ struct AppConfig: Codable {
     var autoExportKeepInSync: Bool = false
     /// With keep-in-sync, file each note under its meeting folder.
     var autoExportByFolder: Bool = true
+    /// Generate folder suggestions for unfiled meetings after they finish.
+    var autoClassifyMeetings: Bool = true
+    /// File a meeting automatically when a learned rule is decisive. LLM suggestions are never applied.
+    var autoApplyFolderSuggestions: Bool = false
     var iCloudSyncEnabled: Bool = false
     var showIOSCompanionPrompt: Bool = true
     var contributionPromptNextWordCount: Int?
@@ -2090,6 +2094,8 @@ struct AppConfig: Codable {
         case privateTrustedBackends = "private_trusted_backends"
         case autoExportKeepInSync = "auto_export_keep_in_sync"
         case autoExportByFolder = "auto_export_by_folder"
+        case autoClassifyMeetings = "auto_classify_meetings"
+        case autoApplyFolderSuggestions = "auto_apply_folder_suggestions"
         case iCloudSyncEnabled = "icloud_sync_enabled"
         case showIOSCompanionPrompt = "show_ios_companion_prompt"
         case contributionPromptNextWordCount = "contribution_prompt_next_word_count"
@@ -2366,6 +2372,8 @@ struct AppConfig: Codable {
         privateTrustedBackends = (try? c.decode([String].self, forKey: .privateTrustedBackends)) ?? defaults.privateTrustedBackends
         autoExportKeepInSync = (try? c.decode(Bool.self, forKey: .autoExportKeepInSync)) ?? defaults.autoExportKeepInSync
         autoExportByFolder = (try? c.decode(Bool.self, forKey: .autoExportByFolder)) ?? defaults.autoExportByFolder
+        autoClassifyMeetings = (try? c.decode(Bool.self, forKey: .autoClassifyMeetings)) ?? defaults.autoClassifyMeetings
+        autoApplyFolderSuggestions = (try? c.decode(Bool.self, forKey: .autoApplyFolderSuggestions)) ?? defaults.autoApplyFolderSuggestions
         contributionPromptNextWordCount = try? c.decode(Int.self, forKey: .contributionPromptNextWordCount)
         contributionPromptNextMeetingCount = try? c.decode(Int.self, forKey: .contributionPromptNextMeetingCount)
         contributionGitHubStarClicked = (try? c.decode(Bool.self, forKey: .contributionGitHubStarClicked)) ?? defaults.contributionGitHubStarClicked

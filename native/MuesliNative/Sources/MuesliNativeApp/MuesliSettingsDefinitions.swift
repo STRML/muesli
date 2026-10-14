@@ -344,6 +344,8 @@ extension MuesliController {
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
         toggle("auto_export_keep_in_sync", "Keep one note per meeting up to date", \.autoExportKeepInSync)
         toggle("auto_export_by_folder", "File notes by meeting folder", \.autoExportByFolder)
+        toggle("auto_classify_meetings", "Suggest folders for meetings", \.autoClassifyMeetings)
+        toggle("auto_apply_folder_suggestions", "Auto-file confident folder matches", \.autoApplyFolderSuggestions)
         toggle("meeting_reminders", "Scheduled meeting notifications", \.showScheduledMeetingNotifications)
         toggle("meeting_detection", "Detected meeting notifications", \.showMeetingDetectionNotification)
         toggle("meeting_hook", "Post-meeting hook", \.meetingHookEnabled)
