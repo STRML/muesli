@@ -32,10 +32,24 @@ actor MeetingChatWorker {
     func saveRollingSummary(_ text: String, coveredTurns: [MeetingChatTurn], turn: MeetingChatTurn) throws -> Bool {
         try store.saveRollingSummary(text: text, coveredTurns: coveredTurns, for: turn)
     }
-    func evidence(for turn: MeetingChatTurn) throws -> (MeetingChatEvidence, [MeetingChatTurn]) {
+    func evidence(for turn: MeetingChatTurn, excludePrivate: Bool = false) throws -> (MeetingChatEvidence, [MeetingChatTurn]) {
         try Task.checkCancellation()
         let context = try store.historyContext(before: turn)
         let history = context.turns
+        if excludePrivate {
+            // Earlier answers were written from the meetings they cite. If any of those
+            // meetings is private, the history itself must not reach an untrusted backend.
+            // This covers every earlier turn of the session, not only the ones that fit the
+            // context window, because older turns are folded into a rolling summary.
+            let privateIDs = try DictationStore(databaseURL: retrieval.databaseURL).privateMeetingIDs()
+            if !privateIDs.isEmpty {
+                let earlier = try store.turns(sessionID: turn.sessionID).filter { $0.ordinal < turn.ordinal }
+                let cited = try earlier.flatMap { try store.dependencies(turnID: $0.id) }
+                if cited.contains(where: { privateIDs.contains($0.meetingID) }) {
+                    throw MeetingChatError.privateMeetingBlocked
+                }
+            }
+        }
         // Prior conversation can be transformed without re-reading meetings. Start with
         // no source packet and let the model explicitly search the current scope if it
         // needs new facts. Removing a meeting affects retrieval, not validated history.
@@ -60,9 +74,9 @@ actor MeetingChatWorker {
         // Every question gets lexical relevance first. Broad vocabulary never disables a topic match.
         let attachedContext: Bool
         if case .meetings(let ids) = turn.scope.selection { attachedContext = !ids.isEmpty } else { attachedContext = false }
-        var evidence = try retrieval.retrieve(question: turn.question, scope: turn.scope, priorQuestions: history.map(\.question), includeScopeContext: attachedContext)
+        var evidence = try retrieval.retrieve(question: turn.question, scope: turn.scope, priorQuestions: history.map(\.question), includeScopeContext: attachedContext, excludePrivateMeetings: excludePrivate)
         if broadIntent && !attachedContext {
-            let representative = try retrieval.retrieve(question: turn.question, scope: turn.scope, broadRecap: true)
+            let representative = try retrieval.retrieve(question: turn.question, scope: turn.scope, broadRecap: true, excludePrivateMeetings: excludePrivate)
             var selected: [MeetingChatPassage] = []; var seen = Set<String>(); var bytes = 0; var packetBytes = 0
             for var passage in evidence.passages where bytes + passage.excerpt.utf8.count <= 6_000 {
                 passage.sourceKey = "S\(selected.count + 1)"
@@ -91,7 +105,7 @@ actor MeetingChatWorker {
         try store.attachEvidence(turnID: turn.id, dependencies: evidence.dependencies, attemptID: turn.attemptID)
         return (evidence, history)
     }
-    func execute(_ call: MeetingChatToolCall, turn: MeetingChatTurn, evidence: MeetingChatEvidence, nextSourceKey: Int, native: Bool = false) throws -> (MeetingChatEvidence, Int, Int, Int?) {
+    func execute(_ call: MeetingChatToolCall, turn: MeetingChatTurn, evidence: MeetingChatEvidence, nextSourceKey: Int, native: Bool = false, excludePrivate: Bool = false) throws -> (MeetingChatEvidence, Int, Int, Int?) {
         try Task.checkCancellation()
         guard try store.dependenciesAreCurrent(evidence.dependencies) else { throw MeetingChatError.sourceChanged }
         let incoming: [MeetingChatPassage]
@@ -99,23 +113,23 @@ actor MeetingChatWorker {
         var nextPage: Int?
         switch call {
         case .search(let query):
-            let retrieved = try retrieval.retrieve(question: query, scope: turn.scope)
+            let retrieved = try retrieval.retrieve(question: query, scope: turn.scope, excludePrivateMeetings: excludePrivate)
             incoming = retrieved.passages
             incomingIsPartialRecap = retrieved.coverage.isPartialRecap
         case .browse:
-            let retrieved = try retrieval.retrieve(question: turn.question, scope: turn.scope, broadRecap: true)
+            let retrieved = try retrieval.retrieve(question: turn.question, scope: turn.scope, broadRecap: true, excludePrivateMeetings: excludePrivate)
             incoming = retrieved.passages
             incomingIsPartialRecap = retrieved.coverage.isPartialRecap
         case .read(let key):
             guard let passage = evidence.passages.first(where: { $0.sourceKey == key }),
-                let snapshot = try scopedSource(passage.meetingID, scope: turn.scope), snapshot.revision == passage.revision else { throw MeetingChatError.sourceChanged }
+                let snapshot = try scopedSource(passage.meetingID, scope: turn.scope, excludePrivate: excludePrivate), snapshot.revision == passage.revision else { throw MeetingChatError.sourceChanged }
             // The capability is an issued source marker, never a model-supplied meeting ID.
             let sameKind = MeetingChatPassages.extract(from: snapshot).filter { $0.kind == passage.kind }
             guard let index = sameKind.firstIndex(where: { $0.id == passage.id }) else { throw MeetingChatError.sourceChanged }
             incoming = Array(sameKind[max(0, index - 2)...min(sameKind.count - 1, index + 2)])
         case .readMeeting(let meetingID, let page):
             guard native else { throw MeetingChatError.invalidResponse }
-            guard let snapshot = try scopedSource(meetingID, scope: turn.scope) else { throw MeetingChatError.sourceChanged }
+            guard let snapshot = try scopedSource(meetingID, scope: turn.scope, excludePrivate: excludePrivate) else { throw MeetingChatError.sourceChanged }
             let pageResult = try Self.meetingPage(snapshot, page: page)
             incoming = pageResult.passages
             nextPage = pageResult.nextPage
@@ -150,8 +164,9 @@ actor MeetingChatWorker {
         try store.attachEvidence(turnID: turn.id, dependencies: result.dependencies, attemptID: turn.attemptID)
         return (result, nextKey, incoming.count, nextPage)
     }
-    private func scopedSource(_ id: Int64, scope: MeetingChatScope) throws -> MeetingChatSourceSnapshot? {
+    private func scopedSource(_ id: Int64, scope: MeetingChatScope, excludePrivate: Bool = false) throws -> MeetingChatSourceSnapshot? {
         if case .meetings(let ids) = scope.selection, !ids.contains(id) { return nil }
+        if excludePrivate, try DictationStore(databaseURL: retrieval.databaseURL).isMeetingPrivate(id: id) { return nil }
         let selected = MeetingChatScope(selection: .meetings([id]), startDate: scope.startDate, endDateExclusive: scope.endDateExclusive)
         guard let snapshot = try store.sourceSnapshots(scope: selected).first else { return nil }
         if case .folder(let folderID) = scope.selection, snapshot.folderID != folderID { return nil }
@@ -520,7 +535,9 @@ final class MeetingChatCoordinator {
                 reload()
             }
             do {
-                let (evidence, history) = try await worker.evidence(for: turn)
+                // Private meetings are withheld unless the selected backend is trusted for them.
+                let excludePrivate = !PrivateMeetingPolicy.allowsBackend(config)
+                let (evidence, history) = try await worker.evidence(for: turn, excludePrivate: excludePrivate)
                 let budget = MeetingChatContextBudget(config: config, contextWindowTokens: contextWindowTokens)
                 let savedSummary = try await worker.rollingSummary(for: turn)
                 let plan = budget.plan(history: history, existingSummaryThroughOrdinal: savedSummary?.throughOrdinal)
@@ -545,7 +562,7 @@ final class MeetingChatCoordinator {
                     evidence: evidence, history: plan.recentTurns, config: config, sessionID: turn.sessionID, generator: generator,
                     execute: { call, current in
                         try Task.checkCancellation()
-                        let (result, next, count, nextPage) = try await worker.execute(call, turn: turn, evidence: current, nextSourceKey: nextSourceKey, native: generator.supportsNativeTools(config: config))
+                        let (result, next, count, nextPage) = try await worker.execute(call, turn: turn, evidence: current, nextSourceKey: nextSourceKey, native: generator.supportsNativeTools(config: config), excludePrivate: excludePrivate)
                         nextSourceKey = next
                         if self.activeRequestID == requestID, let index = self.activities.indices.last {
                             self.activities[index].output = "\(count) passages returned · \(result.coverage.evidenceMeetingCount) meetings in the current source packet"
