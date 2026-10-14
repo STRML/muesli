@@ -523,20 +523,33 @@ struct MeetingsView: View {
     private func eventActionControls(for event: UnifiedCalendarEvent) -> some View {
         // Re-evaluated every 20 seconds so the buttons appear as the event goes live.
         SwiftUI.TimelineView(.periodic(from: .now, by: 20)) { context in
-            let busy = appState.isMeetingRecording || appState.isMeetingStarting
+            let recording = recordingContext(for: event)
             let live = LiveCalendarEventActions.visibleActions(
                 start: event.startDate,
                 end: event.endDate,
                 now: context.date,
                 hasMeetingURL: event.meetingURL != nil,
-                isRecordingBusy: busy
+                recording: recording
             )
             if !live.isEmpty {
                 liveEventButtons(live, for: event)
-            } else if let meetingURL = event.meetingURL, !busy {
+            } else if let meetingURL = event.meetingURL, recording == .idle {
                 joinActionControl(for: event, meetingURL: meetingURL)
             }
         }
+    }
+
+    private func recordingContext(for event: UnifiedCalendarEvent) -> LiveRecordingContext {
+        let activeRow = appState.activeMeetingID.flatMap { id in appState.meetingRows.first { $0.id == id } }
+        let activeIsThisEvent = activeRow.map {
+            $0.calendarOccurrence?.identityKey == event.resolvedCalendarOccurrence.identityKey
+                || $0.calendarEventID == event.id
+        } ?? false
+        return LiveRecordingContext.make(
+            isRecording: appState.isMeetingRecording,
+            isStarting: appState.isMeetingStarting,
+            activeIsThisEvent: activeIsThisEvent
+        )
     }
 
     private func liveEventButtons(_ actions: [LiveCalendarEventAction], for event: UnifiedCalendarEvent) -> some View {
@@ -564,6 +577,22 @@ struct MeetingsView: View {
                         liveButtonLabel("Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
                     }
                     .buttonStyle(.plain)
+                case .switchAndJoin:
+                    Button {
+                        controller.switchRecording(to: event, join: true)
+                    } label: {
+                        liveButtonLabel("Switch & Join", symbol: MeetingJoinDefaultAction.joinAndRecord.symbolName, filled: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the recording that is still running, then joins and transcribes this meeting")
+                case .switchAndTranscribe:
+                    Button {
+                        controller.switchRecording(to: event, join: false)
+                    } label: {
+                        liveButtonLabel("Switch & Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the recording that is still running, then transcribes this meeting")
                 }
             }
         }

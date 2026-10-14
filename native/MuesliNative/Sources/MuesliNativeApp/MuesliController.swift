@@ -7298,12 +7298,13 @@ public final class MuesliController: NSObject {
         activeMeetingAudioWarning = nil
         syncAppState()
 
+        let resumeOrigin = MeetingResumePolicy.startOrigin(hasCalendarEvent: meeting.calendarEventID != nil)
         armMeetingAutoStop(
-            source: MeetingRecordingStartOrigin.manual.signalLossSource(
+            source: resumeOrigin.signalLossSource(
                 explicitSource: nil,
                 recentSource: recentMeetingAutoStopSource()
             ),
-            response: MeetingRecordingStartOrigin.manual.signalLossResponse
+            response: resumeOrigin.signalLossResponse
         )
 
         cancelDictationAudioSessionForMeetingRecordingIfNeeded()
@@ -7942,6 +7943,41 @@ public final class MuesliController: NSObject {
             presentation: presentation,
             startOrigin: .scheduledMeetingPrompt
         )
+    }
+
+    /// Stops the recording that is still running, waits for the capture to wind down (up to 15 seconds),
+    /// then starts the calendar event. Used by Coming Up when a live event would otherwise be blocked by
+    /// an earlier meeting's recording.
+    func switchRecording(to event: UnifiedCalendarEvent, join: Bool) {
+        stopMeetingRecording()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<60 where self.isMeetingRecording() || self.isStartingMeetingRecording {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard !self.isMeetingRecording(), !self.isStartingMeetingRecording else {
+                self.presentErrorAlert(
+                    title: "Could not start the next meeting",
+                    message: "The previous recording is still finishing. Try again in a moment."
+                )
+                return
+            }
+            if join, let meetingURL = event.meetingURL {
+                self.joinAndRecord(
+                    title: event.title,
+                    meetingURL: meetingURL,
+                    endDate: event.endDate,
+                    calendarOccurrence: event.resolvedCalendarOccurrence
+                )
+            } else {
+                self.recordOnly(
+                    title: event.title,
+                    meetingURL: event.meetingURL,
+                    endDate: event.endDate,
+                    calendarOccurrence: event.resolvedCalendarOccurrence
+                )
+            }
+        }
     }
 
     /// Open meeting URL and suppress detection for the event duration.
