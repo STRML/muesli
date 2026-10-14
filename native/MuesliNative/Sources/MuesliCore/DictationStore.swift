@@ -352,6 +352,7 @@ public final class DictationStore {
         try migrateInsightsCache(db: db)
         try MeetingChatSQL.migrate(db: db)
         try MeetingVideoStore.migrate(db: db)
+        try SpeakerIdentitySQL.migrate(db: db)
         try migrateWordsBeforeCodeSwitchCache(db: db)
         try migrateCotypist(db: db)
         try backfillQuillStatisticsIfNeeded(db: db)
@@ -2962,6 +2963,7 @@ public final class DictationStore {
             try deleteResumeSnapshot(meetingID: id, db: db)
             try deleteLiveTranscriptCheckpoints(meetingID: id, db: db)
             try deleteMeetingParticipants(meetingID: id, db: db)
+            try SpeakerIdentitySQL.deleteMeetingSpeakers(meetingID: id, db: db)
             let sql = """
             UPDATE meetings
             SET title = 'Deleted Meeting',
@@ -3124,6 +3126,7 @@ public final class DictationStore {
         try exec("DELETE FROM meeting_resume_snapshots", db: db)
         try exec("DELETE FROM meeting_transcript_checkpoints", db: db)
         try exec("DELETE FROM meeting_participants", db: db)
+        try SpeakerIdentitySQL.deleteMeetingSpeakers(meetingID: nil, db: db)
         try exec(
             """
             UPDATE meetings
