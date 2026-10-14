@@ -245,6 +245,9 @@ final class MeetingSession {
     var onSystemAudioHealthEpisode: ((MeetingSystemAudioHealthEvent) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var participantNamesProvider: (() async -> [String])?
+    /// Answers whether this meeting is private at the moment of the call. It is asked
+    /// before every outbound request because the flag can change during processing.
+    var isPrivateMeetingProvider: (() async -> Bool)?
     var liveTitleProvider: (() async -> String?)?
     /// Formatted notes of the predecessor meeting when this session records a
     /// follow-up; injected into the summary prompt for action-item carry-forward.
@@ -1008,7 +1011,8 @@ final class MeetingSession {
         } else if let autoTitle = await MeetingSummaryClient.generateTitle(
             transcript: rawTranscript,
             manualNotes: titleManualNotes,
-            config: config
+            config: config,
+            isPrivateMeeting: await isPrivateMeetingProvider?() ?? false
         ),
            !autoTitle.isEmpty {
             generatedTitle = autoTitle
@@ -1036,7 +1040,8 @@ final class MeetingSession {
                 manualNotesToRetain: manualNotes,
                 participantNames: participantNames,
                 visualContext: visualContext.isEmpty ? nil : visualContext,
-                previousMeetingNotes: previousMeetingNotes
+                previousMeetingNotes: previousMeetingNotes,
+                isPrivateMeeting: await isPrivateMeetingProvider?() ?? false
             )
         } catch {
             fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)

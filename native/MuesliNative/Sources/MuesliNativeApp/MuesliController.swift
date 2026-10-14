@@ -6109,6 +6109,17 @@ public final class MuesliController: NSObject {
         }
     }
 
+    /// Whether the meeting is private. A failed lookup counts as private, so a
+    /// database error can only withhold a summary, never send one.
+    func isMeetingPrivateFailingClosed(id: Int64) -> Bool {
+        do {
+            return try dictationStore.isMeetingPrivate(id: id)
+        } catch {
+            fputs("[muesli-native] private-meeting lookup failed, treating meeting \(id) as private: \(error.localizedDescription)\n", stderr)
+            return true
+        }
+    }
+
     func resummarize(meeting: MeetingRecord, summaryConfig: AppConfig? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         let templateSnapshot = meetingTemplateSnapshot(for: meeting)
         resummarize(meeting: meeting, using: templateSnapshot, summaryConfig: summaryConfig, completion: completion)
@@ -6170,7 +6181,8 @@ public final class MuesliController: NSObject {
                     existingNotes: self.notesContextForResummary(meeting),
                     manualNotesToRetain: meeting.manualNotes,
                     participantNames: participantNames,
-                    openRouterAPIKeyOverride: openRouterKey
+                    openRouterAPIKeyOverride: openRouterKey,
+                    isPrivateMeeting: self.isMeetingPrivateFailingClosed(id: meeting.id)
                 )
                 do {
                     try self.dictationStore.updateMeetingSummary(
@@ -6340,7 +6352,8 @@ public final class MuesliController: NSObject {
                         template: templateSnapshot,
                         existingNotes: self.notesContextForResummary(meeting),
                         manualNotesToRetain: meeting.manualNotes,
-                        participantNames: participantNames
+                        participantNames: participantNames,
+                        isPrivateMeeting: self.isMeetingPrivateFailingClosed(id: meeting.id)
                     )
                 } catch {
                     try Task.checkCancellation()
@@ -7909,6 +7922,9 @@ public final class MuesliController: NSObject {
                     guard let self else { return [] }
                     return await self.summaryParticipantNames(meetingID: meetingID)
                 }
+                meetingSession.isPrivateMeetingProvider = { [weak self] in
+                    self?.isMeetingPrivateFailingClosed(id: meetingID) ?? true
+                }
                 meetingSession.liveTitleProvider = { [weak self] in
                     await MainActor.run {
                         guard let self else { return nil }
@@ -8900,7 +8916,11 @@ public final class MuesliController: NSObject {
         if config.autoExportMarkdownEnabled {
             do {
                 if let record = try dictationStore.meeting(id: persistenceResult.meetingID) {
-                    meetingMarkdownAutoExporter.exportIfConfigured(meeting: record, config: config)
+                    meetingMarkdownAutoExporter.exportIfConfigured(
+                        meeting: record,
+                        config: config,
+                        isPrivateMeeting: isMeetingPrivateFailingClosed(id: record.id)
+                    )
                 } else {
                     meetingMarkdownAutoExporter.recordMeetingLookupFailure(
                         meetingID: persistenceResult.meetingID,
@@ -8967,7 +8987,8 @@ public final class MuesliController: NSObject {
                 existingNotes: nil,
                 manualNotesToRetain: manualNotes,
                 participantNames: participantNames,
-                visualContext: mergedVisualContext
+                visualContext: mergedVisualContext,
+                isPrivateMeeting: isMeetingPrivateFailingClosed(id: meetingID)
             )
         } catch {
             fputs("[muesli-native] resume summary regeneration failed: \(error.localizedDescription)\n", stderr)

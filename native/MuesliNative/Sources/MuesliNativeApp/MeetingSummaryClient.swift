@@ -7,9 +7,12 @@ enum MeetingSummaryError: LocalizedError {
     case backendFailed(backend: String, statusCode: Int?, message: String)
     case emptyResponse(backend: String)
     case requestFailed(backend: String, underlying: Error)
+    case privateMeetingBlocked(backend: String)
 
     var errorDescription: String? {
         switch self {
+        case let .privateMeetingBlocked(backend):
+            return "This meeting is private and \(backend) is not trusted for private meetings. \(PrivateMeetingPolicy.blockedNotice)"
         case let .notConfigured(backend):
             return "\(backend) is not configured for meeting summaries. Connect it in Settings and try again."
         case let .backendFailed(backend, statusCode, message):
@@ -71,7 +74,7 @@ enum MeetingSummaryRetryPolicy {
         }
 
         switch summaryError {
-        case .notConfigured:
+        case .notConfigured, .privateMeetingBlocked:
             return false
         case .requestFailed(let backend, let underlying):
             if isPermanentRequestFailure(underlying) {
@@ -96,7 +99,7 @@ enum MeetingSummaryRetryPolicy {
         guard let summaryError = error as? MeetingSummaryError else { return 0 }
 
         switch summaryError {
-        case .notConfigured:
+        case .notConfigured, .privateMeetingBlocked:
             return 0
         case .requestFailed(let backend, _),
              .emptyResponse(let backend),
@@ -219,11 +222,15 @@ enum MeetingSummaryClient {
         participantNames: [String] = [],
         visualContext: String? = nil,
         previousMeetingNotes: String? = nil,
-        openRouterAPIKeyOverride: String? = nil
+        openRouterAPIKeyOverride: String? = nil,
+        isPrivateMeeting: Bool = false
     ) async throws -> String {
         guard !hasNothingToSummarize(transcript: transcript, manualNotes: manualNotesToRetain,
             visualContext: visualContext, existingNotes: existingNotes, previousMeetingNotes: previousMeetingNotes)
         else { return emptyRecordingNotes }
+        guard PrivateMeetingPolicy.allowsContent(isPrivateMeeting: isPrivateMeeting, config: config) else {
+            throw MeetingSummaryError.privateMeetingBlocked(backend: PrivateMeetingPolicy.effectiveBackend(of: config))
+        }
         let isClaudeCode = config.meetingSummaryBackend.lowercased() == MeetingSummaryBackendOption.claudeCode.backend
         return try await withSummaryRetries(
             maxRetries: config.meetingSummaryRetryCount,
@@ -1544,13 +1551,15 @@ enum MeetingSummaryClient {
     static func generateTitle(
         transcript: String,
         config: AppConfig,
-        openRouterAPIKeyOverride: String? = nil
+        openRouterAPIKeyOverride: String? = nil,
+        isPrivateMeeting: Bool = false
     ) async -> String? {
         await generateTitle(
             transcript: transcript,
             manualNotes: nil,
             config: config,
-            openRouterAPIKeyOverride: openRouterAPIKeyOverride
+            openRouterAPIKeyOverride: openRouterAPIKeyOverride,
+            isPrivateMeeting: isPrivateMeeting
         )
     }
 
@@ -1558,9 +1567,13 @@ enum MeetingSummaryClient {
         transcript: String,
         manualNotes: String?,
         config: AppConfig,
-        openRouterAPIKeyOverride: String? = nil
+        openRouterAPIKeyOverride: String? = nil,
+        isPrivateMeeting: Bool = false
     ) async -> String? {
         guard !hasNothingToSummarize(transcript: transcript, manualNotes: manualNotes) else { return nil }
+        guard PrivateMeetingPolicy.allowsContent(isPrivateMeeting: isPrivateMeeting, config: config) else {
+            return nil
+        }
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
 
         let excerpt = titlePrompt(transcript: transcript, manualNotes: manualNotes)
