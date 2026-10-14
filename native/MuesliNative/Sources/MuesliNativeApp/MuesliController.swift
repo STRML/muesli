@@ -5827,6 +5827,13 @@ public final class MuesliController: NSObject {
         }
     }
 
+    /// Store URL and post-edit refresh for `MuesliController+SpeakerIdentity.swift`.
+    var speakerIdentityDatabaseURL: URL { dictationStore.resolvedDatabaseURL }
+    func speakerIdentityDidRewriteTranscript() {
+        scheduleICloudSyncAfterLocalChange()
+        syncAppState()
+    }
+
     /// Whether the meeting is private. A failed lookup counts as private, so a
     /// database error can only withhold a summary, never send one.
     func isMeetingPrivateFailingClosed(id: Int64) -> Bool {
@@ -7605,6 +7612,9 @@ public final class MuesliController: NSObject {
                 }
                 meetingSession.isPrivateMeetingProvider = { [weak self] in
                     self?.isMeetingPrivateFailingClosed(id: meetingID) ?? true
+                }
+                meetingSession.speakerNamesProvider = { [weak self] observations in
+                    await self?.resolveMeetingSpeakers(meetingID: meetingID, observations: observations) ?? [:]
                 }
                 meetingSession.liveTitleProvider = { [weak self] in
                     await MainActor.run {
