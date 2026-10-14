@@ -2085,6 +2085,23 @@ struct SettingsView: View {
                     .padding(.horizontal, MuesliTheme.spacing16)
             }
 
+            settingsSection("Folder Suggestions") {
+                settingsRow("Suggest folders for meetings") {
+                    settingsControl("auto_classify_meetings")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Auto-file confident matches") {
+                    settingsControl("auto_apply_folder_suggestions")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Unfiled meetings", controlWidth: meetingControlWidth) {
+                    actionButton(appState.isClassifyingUnfiledMeetings ? "Classifying…" : "Classify Unfiled Meetings") {
+                        controller.classifyUnfiledMeetings()
+                    }
+                }
+                settingsDescription("Suggestions appear in the Meetings Inbox. Muesli learns from where you file meetings: recurring series, attendees and titles. When nothing matches, your summary model may suggest a folder; private meetings are only sent to backends you trust. AI suggestions are never filed automatically.")
+            }
+
             settingsSection("Meeting Notifications") {
                 settingsRow("Scheduled meetings") {
                     settingsControl("meeting_reminders")

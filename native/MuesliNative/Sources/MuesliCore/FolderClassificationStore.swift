@@ -254,10 +254,20 @@ public struct FolderClassificationStore: Sendable {
                 "UPDATE meetings SET folder_id = ? WHERE id = ?",
                 [folderID.map { .integer($0) } ?? .null, .integer(meetingID)], db: db
             )
-            guard let snapshot = try snapshot(meetingID: meetingID, db: db) else { return }
-            let keys = FolderClassificationRules.memoryKeys(for: snapshot.evidence, selfEmails: try selfEmails(db: db))
-            try resolveSuggestions(meetingID: meetingID, movedTo: folderID, keys: keys, now: now, db: db)
-            try learn(meetingID: meetingID, folderID: folderID, keys: keys, now: now, db: db)
+            // The move must not depend on learning: learn all-or-nothing in a savepoint.
+            try MeetingChatSQL.execute("SAVEPOINT folder_learning", db: db)
+            do {
+                if let snapshot = try snapshot(meetingID: meetingID, db: db) {
+                    let keys = FolderClassificationRules.memoryKeys(for: snapshot.evidence, selfEmails: try selfEmails(db: db))
+                    try resolveSuggestions(meetingID: meetingID, movedTo: folderID, keys: keys, now: now, db: db)
+                    try learn(meetingID: meetingID, folderID: folderID, keys: keys, now: now, db: db)
+                }
+                try MeetingChatSQL.execute("RELEASE folder_learning", db: db)
+            } catch {
+                try MeetingChatSQL.execute("ROLLBACK TO folder_learning", db: db)
+                try MeetingChatSQL.execute("RELEASE folder_learning", db: db)
+                fputs("[folder-classify] learning skipped meeting=\(meetingID)\n", stderr)
+            }
         } }
     }
 

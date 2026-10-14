@@ -96,6 +96,40 @@ final class FolderClassificationRunner {
         }.value
     }
 
+    private var queuedMeetingIDs: [Int64] = []
+    private var drainTask: Task<Void, Never>?
+    /// Called on the main actor after each queued meeting is classified.
+    var onChange: (@MainActor () -> Void)?
+
+    /// Queues a just-finished meeting. A meeting that finishes while another recording
+    /// is running or starting waits in the queue until `drainQueue` runs without one.
+    @discardableResult
+    func enqueueCompleted(
+        meetingID: Int64,
+        config: AppConfig,
+        isRecording: @escaping @MainActor @Sendable () -> Bool
+    ) -> Task<Void, Never>? {
+        guard config.autoClassifyMeetings else { return nil }
+        if !queuedMeetingIDs.contains(meetingID) { queuedMeetingIDs.append(meetingID) }
+        return drainQueue(config: config, isRecording: isRecording)
+    }
+
+    @discardableResult
+    func drainQueue(config: AppConfig, isRecording: @escaping @MainActor @Sendable () -> Bool) -> Task<Void, Never>? {
+        if let drainTask { return drainTask }
+        guard !queuedMeetingIDs.isEmpty, !isRecording() else { return nil }
+        let task = Task { [weak self] in
+            while let self, !self.queuedMeetingIDs.isEmpty, !isRecording() {
+                let id = self.queuedMeetingIDs.removeFirst()
+                await self.classifyCompleted(meetingID: id, config: config, isRecording: isRecording)
+                self.onChange?()
+            }
+            self?.drainTask = nil
+        }
+        drainTask = task
+        return task
+    }
+
     /// Classifies every unfiled meeting in pages, newest first. Stops when cancelled or
     /// when a recording starts. Returns how many meetings were processed.
     @discardableResult

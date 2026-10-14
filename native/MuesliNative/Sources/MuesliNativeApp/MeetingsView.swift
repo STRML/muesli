@@ -239,6 +239,8 @@ struct MeetingsView: View {
                     backLabel: appState.meetingChatDocumentTarget != nil ? "Back to Chat" : "Back to Meetings"
                 )
                 .id(meeting.id)
+            } else if appState.isFolderInboxSelected {
+                FolderInboxView(appState: appState, controller: controller)
             } else {
                 browserView
             }

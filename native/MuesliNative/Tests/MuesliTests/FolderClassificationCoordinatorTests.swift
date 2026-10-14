@@ -198,6 +198,24 @@ struct FolderClassificationCoordinatorTests {
     }
 
     @MainActor
+    @Test("a meeting finished during another recording waits until recording stops")
+    func queuedUntilRecordingStops() async throws {
+        let (fixture, _) = try seededFixture()
+        let id = try fixture.meeting(series: "s1")
+        let runner = FolderClassificationRunner(classifier: classifier(fixture, spy: .init(reply: validReply)))
+        var changes = 0
+        runner.onChange = { changes += 1 }
+
+        #expect(runner.enqueueCompleted(meetingID: id, config: AppConfig(), isRecording: { true }) == nil)
+        #expect(try fixture.classification.suggestions(meetingID: id).isEmpty)
+
+        await runner.drainQueue(config: AppConfig(), isRecording: { false })?.value
+        #expect(try fixture.classification.suggestions(meetingID: id).map(\.state) == [.pending])
+        #expect(changes == 1)
+        #expect(runner.drainQueue(config: AppConfig(), isRecording: { false }) == nil)
+    }
+
+    @MainActor
     @Test("a cancelled batch stops")
     func batchCancels() async throws {
         let (fixture, _) = try seededFixture()
