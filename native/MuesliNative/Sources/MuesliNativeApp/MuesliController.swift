@@ -1451,6 +1451,8 @@ public final class MuesliController: NSObject {
         let order = config.folderOrder
         // Sort folders into a depth-first tree order so children appear beneath parents.
         appState.folders = Self.treeOrderedFolders(allFolders, order: order)
+        appState.privateMeetingIDs = (try? dictationStore.privateMeetingIDs()) ?? []
+        appState.directlyPrivateMeetingIDs = (try? dictationStore.directlyPrivateMeetingIDs()) ?? []
         appState.dictationStats = dictationStats()
         appState.filteredDictationStats = filteredDictationStats()
         appState.meetingStats = meetingStats()
@@ -6580,6 +6582,31 @@ public final class MuesliController: NSObject {
     func moveMeeting(id: Int64, toFolder folderID: Int64?) {
         try? dictationStore.moveMeeting(id: id, toFolder: folderID)
         syncAppState()
+    }
+
+    func setMeetingPrivate(id: Int64, isPrivate: Bool) {
+        do {
+            try dictationStore.setMeetingPrivate(id: id, isPrivate: isPrivate)
+        } catch {
+            presentErrorAlert(title: "Couldn't Update Privacy", message: error.localizedDescription)
+        }
+        syncAppState()
+    }
+
+    func setFolderPrivate(id: Int64, isPrivate: Bool) {
+        do {
+            try dictationStore.setFolderPrivate(id: id, isPrivate: isPrivate)
+        } catch {
+            presentErrorAlert(title: "Couldn't Update Privacy", message: error.localizedDescription)
+        }
+        syncAppState()
+    }
+
+    /// Lets the user choose which summary backends may receive private meetings.
+    func setBackendTrustedForPrivateMeetings(_ backend: String, trusted: Bool) {
+        updateConfig {
+            $0.privateTrustedBackends = PrivateMeetingPolicy.updatedTrust($0.privateTrustedBackends, backend: backend, trusted: trusted)
+        }
     }
 
     func loadMoreDictations() {
