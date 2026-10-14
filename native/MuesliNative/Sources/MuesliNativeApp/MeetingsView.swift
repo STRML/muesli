@@ -455,11 +455,7 @@ struct MeetingsView: View {
 
                                 Spacer()
 
-                                if let meetingURL = event.meetingURL,
-                                   !appState.isMeetingRecording,
-                                   !appState.isMeetingStarting {
-                                    joinActionControl(for: event, meetingURL: meetingURL)
-                                }
+                                eventActionControls(for: event)
 
                                 let plannedFolder = appState.config.plannedFolderID(
                                     for: event.resolvedCalendarOccurrence.identityKey,
@@ -519,6 +515,76 @@ struct MeetingsView: View {
     private func formatTimeRange(_ event: UnifiedCalendarEvent) -> String {
         let f = Self.timeFormatter
         return "\(f.string(from: event.startDate)) – \(f.string(from: event.endDate))"
+    }
+
+    /// Explicit buttons while an event is happening now (or about to), so a missed notification
+    /// never blocks starting; otherwise the compact join control for events with a link.
+    @ViewBuilder
+    private func eventActionControls(for event: UnifiedCalendarEvent) -> some View {
+        // Re-evaluated every 20 seconds so the buttons appear as the event goes live.
+        SwiftUI.TimelineView(.periodic(from: .now, by: 20)) { context in
+            let busy = appState.isMeetingRecording || appState.isMeetingStarting
+            let live = LiveCalendarEventActions.visibleActions(
+                start: event.startDate,
+                end: event.endDate,
+                now: context.date,
+                hasMeetingURL: event.meetingURL != nil,
+                isRecordingBusy: busy
+            )
+            if !live.isEmpty {
+                liveEventButtons(live, for: event)
+            } else if let meetingURL = event.meetingURL, !busy {
+                joinActionControl(for: event, meetingURL: meetingURL)
+            }
+        }
+    }
+
+    private func liveEventButtons(_ actions: [LiveCalendarEventAction], for event: UnifiedCalendarEvent) -> some View {
+        HStack(spacing: 6) {
+            ForEach(actions, id: \.self) { action in
+                switch action {
+                case .joinAndTranscribe:
+                    Button {
+                        if let meetingURL = event.meetingURL {
+                            performJoinAction(.joinAndRecord, for: event, meetingURL: meetingURL)
+                        }
+                    } label: {
+                        liveButtonLabel("Join & Transcribe", symbol: MeetingJoinDefaultAction.joinAndRecord.symbolName, filled: true)
+                    }
+                    .buttonStyle(.plain)
+                case .transcribe:
+                    Button {
+                        controller.recordOnly(
+                            title: event.title,
+                            meetingURL: event.meetingURL,
+                            endDate: event.endDate,
+                            calendarOccurrence: event.resolvedCalendarOccurrence
+                        )
+                    } label: {
+                        liveButtonLabel("Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func liveButtonLabel(_ title: String, symbol: String, filled: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 9))
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(filled ? Color.white : Self.joinActionGreen)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(filled ? Self.joinActionGreen : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Self.joinActionGreen, lineWidth: filled ? 0 : 1)
+        )
     }
 
     private static let joinActionGreen = Color(nsColor: NSColor(red: 0.20, green: 0.72, blue: 0.53, alpha: 1.0))
