@@ -353,6 +353,32 @@ struct SpeakerIdentityStoreTests {
         #expect(try count(store, "SELECT COUNT(*) FROM meeting_speakers") == 0)
     }
 
+    @Test("retranscription drops stale speaker rows so old centroids cannot be named onto new labels")
+    func retranscriptionDropsSpeakerRows() throws {
+        let store = try makeStore()
+        let id = try insertMeeting(store)
+        _ = try store.recordMeetingSpeakers(meetingID: id, observations: [observation("Speaker 1", unit(0))], renderNames: true)
+        _ = try store.assignSpeaker(meetingID: id, label: "Speaker 1", name: "Alex")
+        try store.updateMeetingTranscriptAndSummary(
+            id: id, rawTranscript: "[10:00:03] Speaker 1: redo", formattedNotes: "",
+            selectedTemplateID: "auto", selectedTemplateName: "Auto", selectedTemplateKind: .auto, selectedTemplatePrompt: ""
+        )
+        #expect(try store.meetingSpeakers(meetingID: id).isEmpty)
+        // Voiceprints already confirmed by the user stay valid.
+        #expect(try store.speakerProfiles().first?.voiceprintCount == 1)
+    }
+
+    @Test("speakers for a deleted or missing meeting are not recorded")
+    func deletedMeetingNotRecorded() throws {
+        let store = try makeStore()
+        let id = try insertMeeting(store)
+        try store.deleteMeeting(id: id)
+        let names = try store.recordMeetingSpeakers(meetingID: id, observations: [observation("Speaker 1", unit(0))], renderNames: true)
+        #expect(names.isEmpty)
+        _ = try store.recordMeetingSpeakers(meetingID: 999_999, observations: [observation("Speaker 1", unit(0))], renderNames: true)
+        #expect(try count(store, "SELECT COUNT(*) FROM meeting_speakers") == 0)
+    }
+
     // MARK: - Privacy
 
     @Test("sync records carry no speaker profile, voiceprint, or centroid data")

@@ -3940,6 +3940,8 @@ public final class DictationStore {
         guard sqlite3_changes(db) > 0 else {
             throw DictationStoreError.meetingNotFound(id: id)
         }
+        // Retranscription relabels speakers; old centroids no longer match the labels.
+        try SpeakerIdentitySQL.deleteMeetingSpeakers(meetingID: id, db: db)
     }
 
     public func updateMeetingTitle(id: Int64, title: String) throws {
