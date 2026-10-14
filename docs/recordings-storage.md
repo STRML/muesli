@@ -27,7 +27,7 @@ meeting at a time, until it is under budget. It skips a meeting that:
 A file is removed only if it is inside the recordings folder. A file shared with a protected meeting
 stays. Files are deleted, not moved to the Trash, because a trashed file keeps using the space.
 
-The meeting keeps its transcript and notes and shows that its audio is gone. Each removal is logged
+The meeting keeps its transcript and notes. Each removal is logged
 in the `recording_prune_log` table with the meeting id, path and size.
 
 Pruning runs at launch, after a meeting finishes, and when you change either setting. If Muesli
