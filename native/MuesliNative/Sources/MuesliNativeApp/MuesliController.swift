@@ -3315,6 +3315,22 @@ public final class MuesliController: NSObject {
         )
     }
 
+    /// Turning the labels on fetches the speaker model once, outside any meeting.
+    /// Meetings only ever read the local copy, so a failed download leaves the Live
+    /// tab on "Others" rather than touching the network mid-recording.
+    func setLiveSpeakerLabelsEnabled(_ enabled: Bool) {
+        updateConfig { $0.enableLiveSpeakerLabels = enabled }
+        guard enabled, !LiveSpeakerModelStore.isDownloaded() else { return }
+        Task.detached(priority: .utility) {
+            do {
+                try await LiveSpeakerModelStore.download()
+                fputs("[muesli-native] live speaker label model downloaded\n", stderr)
+            } catch {
+                fputs("[muesli-native] live speaker label model download failed: \(error)\n", stderr)
+            }
+        }
+    }
+
     func setPostProcessorEnabled(_ enabled: Bool) {
         guard !enabled || selectedPostProcessorBackend.isCompatible(with: selectedBackend) else {
             updateConfig { $0.enablePostProcessor = false }
@@ -7693,45 +7709,34 @@ public final class MuesliController: NSObject {
                         return self.liveMeetingTitle(id: meetingID)
                     }
                 }
-                meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker in
+                meetingSession.onChunkTranscribed = { [weak self, weak meetingSession] segments, speaker, displaySpeakers in
                     Task { @MainActor [weak self, weak meetingSession] in
                         guard let self else { return }
                         guard self.isCurrentLiveMeetingTranscriptSession(
                             ownerID: meetingID,
                             generation: transcriptGeneration
                         ) else { return }
-                        let liveTranscriptStart = meetingSession?.startTime ?? Date()
-                        let liveTranscriptCalendar = Calendar(identifier: .gregorian)
-                        let entries = segments.compactMap { segment -> LiveTranscriptCheckpointEntry? in
-                            let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !text.isEmpty else { return nil }
-                            let timestampDate = liveTranscriptStart.addingTimeInterval(segment.start)
-                            let components = liveTranscriptCalendar.dateComponents([.hour, .minute, .second], from: timestampDate)
-                            let timestamp = String(
-                                format: "%02d:%02d:%02d",
-                                components.hour ?? 0,
-                                components.minute ?? 0,
-                                components.second ?? 0
-                            )
-                            return LiveTranscriptCheckpointEntry(
-                                timestampLabel: timestamp,
-                                speaker: speaker,
-                                startSeconds: segment.start,
-                                endSeconds: segment.end,
-                                text: text
-                            )
-                        }
-                        guard !entries.isEmpty else { return }
+                        let transcript = LiveMeetingTranscriptLines.make(
+                            segments: segments,
+                            speaker: speaker,
+                            displaySpeakers: displaySpeakers,
+                            meetingStart: meetingSession?.startTime ?? Date()
+                        )
+                        guard !transcript.checkpointEntries.isEmpty else { return }
                         self.noteMeetingTranscriptActivity()
                         do {
-                            try self.dictationStore.appendLiveTranscriptCheckpoints(meetingID: meetingID, entries: entries)
+                            // Checkpoints keep the source label ("Others"): crash recovery has no
+                            // final diarization pass, so provisional Speaker N must not persist.
+                            try self.dictationStore.appendLiveTranscriptCheckpoints(
+                                meetingID: meetingID,
+                                entries: transcript.checkpointEntries
+                            )
                         } catch {
                             fputs("[muesli-native] failed to checkpoint live transcript for meeting \(meetingID): \(error)\n", stderr)
                         }
                         // Live view is arrival-order closed captions. Recovery reads checkpoints sorted
                         // by segment timestamps, so the durable fallback stays temporally ordered.
-                        let lines = entries.map { "[\($0.timestampLabel)] \($0.speaker): \($0.text)" }
-                        self.appState.liveMeetingTranscript += lines.joined(separator: "\n") + "\n"
+                        self.appState.liveMeetingTranscript += transcript.displayLines.joined(separator: "\n") + "\n"
                         self.indicator.updateMeetingTranscript(
                             transcript: self.appState.liveMeetingTranscript,
                             partialYou: self.appState.liveMeetingPartialYou,

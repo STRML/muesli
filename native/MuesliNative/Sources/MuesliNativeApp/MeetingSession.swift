@@ -231,7 +231,10 @@ final class MeetingSession {
     /// Formatted notes of the predecessor meeting when this session records a
     /// follow-up; injected into the summary prompt for action-item carry-forward.
     var previousMeetingNotes: String?
-    var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
+    /// Committed segments for a source ("You"/"Others"). `displaySpeakers`, when
+    /// present, holds one provisional label per segment for the Live tab only; the
+    /// durable checkpoint keeps `speaker`.
+    var onChunkTranscribed: (([SpeechSegment], String, [String]?) -> Void)?
     /// Display-only streaming partial for a source ("You"/"Others", tail text).
     /// Empty text clears the source's tail. Called on a background thread.
     var onPartialTranscript: ((String, String) -> Void)?
@@ -244,6 +247,9 @@ final class MeetingSession {
         var isShutDown = false
     }
     private let partialSessionsStorage = OSAllocatedUnfairLock(initialState: PartialSessionsStorage())
+    /// Provisional speaker labels for system audio. Created from the config
+    /// snapshot at start, so toggling the setting mid-meeting waits for the next one.
+    private let liveSpeakerSessionStorage = OSAllocatedUnfairLock<LiveSpeakerLabelSession?>(initialState: nil)
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
 
@@ -405,6 +411,10 @@ final class MeetingSession {
             systemChunkTimingTracker.start()
             try prepareRealtimeAudioPipeline(vadManager: vadManager)
             setupRetainedRecordingWriterIfNeeded()
+            // Created before the first system sample so its clock matches the chunk timing.
+            liveSpeakerSessionStorage.withLock {
+                $0 = Self.makeLiveSpeakerSession(config: config, factory: LiveSpeakerModelStore.loadEngine)
+            }
         }
         try await captureLifecycle.start()
         try Task.checkCancellation()
@@ -418,6 +428,7 @@ final class MeetingSession {
             // OCR screenshots are safe when using CoreAudio tap (no SCStream conflict)
             await screenContextCollector.startPeriodicCapture(useOCR: config.useCoreAudioTap)
         }
+        liveSpeakerSession()?.start()
         setupStreamingPartialsIfAvailable()
     }
 
@@ -475,6 +486,33 @@ final class MeetingSession {
                 fputs("[meeting-partials] \(backend.label) setup failed: \(error)\n", stderr)
             }
         }
+    }
+
+    /// Returns nil when live speaker labels are off for this meeting's config snapshot.
+    static func makeLiveSpeakerSession(
+        config: AppConfig,
+        factory: @escaping LiveSpeakerLabelSession.EngineFactory
+    ) -> LiveSpeakerLabelSession? {
+        guard config.enableLiveSpeakerLabels else { return nil }
+        return LiveSpeakerLabelSession(factory: factory)
+    }
+
+    /// Display labels for committed system segments, one per segment. nil when
+    /// no live session exists; a failed session answers "Others".
+    static func liveDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?
+    ) async -> [String]? {
+        guard let session else { return nil }
+        var labels: [String] = []
+        for segment in segments {
+            labels.append(await session.label(start: segment.start, end: segment.end))
+        }
+        return labels
+    }
+
+    private func liveSpeakerSession() -> LiveSpeakerLabelSession? {
+        liveSpeakerSessionStorage.withLock { $0 }
     }
 
     private func micPartialSession() -> MeetingStreamingPartialSession? {
@@ -631,6 +669,7 @@ final class MeetingSession {
         micRecoveryCoordinator.finishMeeting()
         stopSystemAudioWatchdog()
         stopPartialSessions()
+        liveSpeakerSession()?.stop()
         vadController?.stop()
         vadController = nil
         systemVadController?.stop()
@@ -687,6 +726,10 @@ final class MeetingSession {
         // reject samples in the stopping phase. Only now is the coordinator's episode
         // state final; close any open degradation episode as unrecovered.
         micRecoveryCoordinator.finishMeeting()
+        // Every system sample callback ran before the barrier above, so the labeler
+        // flushes its last partial window now. Chunks still committing keep their
+        // text either way; at worst their live label is "Others".
+        liveSpeakerSession()?.stop()
         // Cancel the watchdog before stopping the recorder so no late tick can
         // request a rebuild mid-teardown, then terminalize any open tap
         // episode.
@@ -1029,7 +1072,7 @@ final class MeetingSession {
                 guard self.micChunkCollector.retire(id: retireID, segments: resolvedSegments) else { return }
                 self.commitMicPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
-                self.onChunkTranscribed?(resolvedSegments, "You")
+                self.onChunkTranscribed?(resolvedSegments, "You", nil)
             }
         } else {
             task.cancel()
@@ -1114,7 +1157,11 @@ final class MeetingSession {
                 guard self.systemChunkCollector.retire(id: retireID, segments: resolvedSegments) else { return }
                 self.commitSystemPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
-                self.onChunkTranscribed?(resolvedSegments, "Others")
+                let displaySpeakers = await Self.liveDisplaySpeakers(
+                    for: resolvedSegments,
+                    using: self.liveSpeakerSession()
+                )
+                self.onChunkTranscribed?(resolvedSegments, "Others", displaySpeakers)
             }
         } else {
             task.cancel()
@@ -1220,6 +1267,7 @@ final class MeetingSession {
 
             let floatSamples = samples.map { Float($0) / 32767.0 }
             self.feedSystemPartialSession(floatSamples)
+            self.liveSpeakerSession()?.enqueue(floatSamples)
             self.neuralAec.feedSystemSamples(floatSamples)
             let cleanedFloat = self.neuralAec.processStreamingMic([])
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
