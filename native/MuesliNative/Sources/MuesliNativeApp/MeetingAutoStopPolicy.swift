@@ -92,6 +92,9 @@ struct MeetingAutoStopSource: Equatable {
     let suppressionID: String?
     let normalizedURL: String?
     let sourceBundleID: String?
+    /// The meeting platform when it is known (never `.unknown`). A source armed from a calendar
+    /// link knows its platform before it has seen any candidate.
+    let platform: MeetingCandidate.Platform?
     let hasObservedCandidate: Bool
 
     private init(
@@ -99,12 +102,14 @@ struct MeetingAutoStopSource: Equatable {
         suppressionID: String?,
         normalizedURL: String?,
         sourceBundleID: String?,
+        platform: MeetingCandidate.Platform?,
         hasObservedCandidate: Bool
     ) {
         self.candidateID = candidateID
         self.suppressionID = suppressionID
         self.normalizedURL = normalizedURL
         self.sourceBundleID = sourceBundleID
+        self.platform = platform
         self.hasObservedCandidate = hasObservedCandidate
     }
 
@@ -113,6 +118,7 @@ struct MeetingAutoStopSource: Equatable {
         self.suppressionID = candidate.suppressionID
         self.normalizedURL = candidate.url
         self.sourceBundleID = candidate.sourceBundleID
+        self.platform = Self.knownPlatform(candidate.platform)
         self.hasObservedCandidate = true
     }
 
@@ -124,7 +130,12 @@ struct MeetingAutoStopSource: Equatable {
         self.suppressionID = normalized.id
         self.normalizedURL = normalized.url
         self.sourceBundleID = nil
+        self.platform = Self.knownPlatform(normalized.platform)
         self.hasObservedCandidate = false
+    }
+
+    private static func knownPlatform(_ platform: MeetingCandidate.Platform) -> MeetingCandidate.Platform? {
+        platform == .unknown ? nil : platform
     }
 
     func refined(with candidate: MeetingCandidate) -> MeetingAutoStopSource {
@@ -136,6 +147,7 @@ struct MeetingAutoStopSource: Equatable {
             suppressionID: refinedSuppressionID,
             normalizedURL: normalizedURL ?? candidate.url,
             sourceBundleID: sourceBundleID ?? candidate.sourceBundleID,
+            platform: platform ?? Self.knownPlatform(candidate.platform),
             hasObservedCandidate: true
         )
     }
@@ -145,6 +157,12 @@ struct MeetingAutoStopTracker: Equatable {
     private(set) var source: MeetingAutoStopSource?
     private(set) var lastSeenAt: Date?
     private var observedBeforeRecordingStarted = false
+    private var platformBindingDeadline: Date?
+
+    /// How long after the recording starts a source armed from a calendar link may still bind to
+    /// the native app that hosts the call. After that, only the room URL or an identity that was
+    /// seen earlier can keep the recording tied to its call.
+    static let platformBindingWindow: TimeInterval = 15 * 60
 
     var isArmed: Bool {
         source != nil
@@ -154,12 +172,24 @@ struct MeetingAutoStopTracker: Equatable {
         self.source = source
         lastSeenAt = nil
         observedBeforeRecordingStarted = false
+        platformBindingDeadline = nil
     }
 
     mutating func disarm() {
         source = nil
         lastSeenAt = nil
         observedBeforeRecordingStarted = false
+        platformBindingDeadline = nil
+    }
+
+    /// Whether `candidate` is the call this recording follows, as of `now`.
+    func matches(_ candidate: MeetingCandidate?, now: Date) -> Bool {
+        guard let candidate, let source else { return false }
+        return MeetingAutoStopPolicy.matches(
+            candidate: candidate,
+            source: source,
+            allowsPlatformBinding: platformBindingDeadline.map { now <= $0 } ?? true
+        )
     }
 
     mutating func observeBeforeRecordingStarted(candidate: MeetingCandidate?) {
@@ -173,6 +203,7 @@ struct MeetingAutoStopTracker: Equatable {
     }
 
     mutating func markRecordingStarted(now: Date) {
+        platformBindingDeadline = now.addingTimeInterval(Self.platformBindingWindow)
         guard observedBeforeRecordingStarted, lastSeenAt == nil else { return }
         lastSeenAt = now
         observedBeforeRecordingStarted = false
@@ -187,8 +218,7 @@ struct MeetingAutoStopTracker: Equatable {
             return false
         }
 
-        if let candidate,
-           MeetingAutoStopPolicy.matches(candidate: candidate, source: currentSource) {
+        if let candidate, matches(candidate, now: now) {
             source = currentSource.refined(with: candidate)
             lastSeenAt = now
             return false
@@ -203,7 +233,11 @@ struct MeetingAutoStopTracker: Equatable {
 }
 
 enum MeetingAutoStopPolicy {
-    static func matches(candidate: MeetingCandidate, source: MeetingAutoStopSource) -> Bool {
+    static func matches(
+        candidate: MeetingCandidate,
+        source: MeetingAutoStopSource,
+        allowsPlatformBinding: Bool = true
+    ) -> Bool {
         // Missing room evidence permits a media fallback; conflicting room
         // evidence must never extend the original recording, even in one browser.
         if let room = source.normalizedURL, let candidateRoom = candidate.url,
@@ -213,13 +247,36 @@ enum MeetingAutoStopPolicy {
             || (source.normalizedURL != nil && candidate.url == source.normalizedURL) {
             return true
         }
+        if allowsPlatformBinding, bindsByPlatform(candidate: candidate, source: source) { return true }
         guard let sourceBundle = source.sourceBundleID,
               let candidateBundle = candidate.sourceBundleID,
               bundleIDsReferToSameApp(sourceBundle, candidateBundle) else { return false }
         // Native sources have no room identity. Browser sources need observed
         // media attribution when their room URL is temporarily unavailable.
         return source.normalizedURL == nil
+            || isNativeMeetingApp(sourceBundle)
             || (source.hasObservedCandidate && candidate.evidence.contains(.audioInputProcess))
+    }
+
+    /// A recording started from a calendar link knows the room URL but not which app hosts the
+    /// call. Native clients (Teams, Zoom, Webex, FaceTime, Slack) expose no room URL, so the
+    /// link can never match them. The first room-less candidate from a native client of the
+    /// link's own platform, backed by audio-process or foreground-app evidence, binds the source.
+    /// Another platform, a candidate with a room URL (it would have matched or conflicted above),
+    /// a browser, and a source that has already bound all stay out.
+    static func bindsByPlatform(candidate: MeetingCandidate, source: MeetingAutoStopSource) -> Bool {
+        guard !source.hasObservedCandidate,
+              source.sourceBundleID == nil,
+              let platform = source.platform,
+              candidate.platform == platform,
+              candidate.url == nil,
+              let bundleID = candidate.sourceBundleID,
+              isNativeMeetingApp(bundleID) else { return false }
+        return !candidate.evidence.isDisjoint(with: [.audioInputProcess, .dedicatedApp])
+    }
+
+    static func isNativeMeetingApp(_ bundleID: String) -> Bool {
+        MeetingCandidateResolver.dedicatedApps[bundleID] != nil
     }
 
     static func bundleIDsReferToSameApp(_ lhs: String, _ rhs: String) -> Bool {

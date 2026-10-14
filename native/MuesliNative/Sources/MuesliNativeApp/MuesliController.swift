@@ -9584,12 +9584,7 @@ public final class MuesliController: NSObject {
         }
 
         let now = Date()
-        let matchedSource = candidate.flatMap { candidate in
-            activeMeetingAutoStop.source.map { source in
-                MeetingAutoStopPolicy.matches(candidate: candidate, source: source)
-            }
-        } ?? false
-        if matchedSource {
+        if activeMeetingAutoStop.matches(candidate, now: now) {
             meetingSignalLossPromptState.markSourceRecovered()
             dismissMeetingSignalLossPromptIfVisible(for: activeMeetingID)
         }
