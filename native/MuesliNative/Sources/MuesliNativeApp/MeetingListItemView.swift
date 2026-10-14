@@ -5,6 +5,8 @@ struct MeetingListItemView: View {
     let record: MeetingRecord
     let isSelected: Bool
     let hasFollowUps: Bool
+    /// Changes when the system locale does, so the row redraws its formatted date without losing its @State.
+    let localeVersion: Int
     let folders: [MeetingFolder]
     let isPrivate: Bool
     private let folderByID: [Int64: MeetingFolder]
@@ -23,6 +25,7 @@ struct MeetingListItemView: View {
         record: MeetingRecord,
         isSelected: Bool,
         hasFollowUps: Bool,
+        localeVersion: Int = 0,
         folders: [MeetingFolder],
         isPrivate: Bool = false,
         onSelect: @escaping () -> Void,
@@ -33,6 +36,7 @@ struct MeetingListItemView: View {
         self.record = record
         self.isSelected = isSelected
         self.hasFollowUps = hasFollowUps
+        self.localeVersion = localeVersion
         self.folders = folders
         self.isPrivate = isPrivate
         self.folderByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
