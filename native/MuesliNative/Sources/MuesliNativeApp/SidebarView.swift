@@ -432,9 +432,20 @@ struct SidebarView: View {
                         icon: "tray.2",
                         label: "All Meetings",
                         count: appState.totalMeetingCount,
-                        isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == nil
+                        isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == nil && !appState.isFolderInboxSelected
                     ) {
                         controller.showMeetingsHome()
+                    }
+
+                    if !appState.folders.isEmpty {
+                        meetingFilterRow(
+                            icon: "tray.and.arrow.down",
+                            label: "Inbox",
+                            count: Set(appState.folderSuggestionRows.map(\.suggestion.meetingID)).count,
+                            isSelected: appState.selectedTab == .meetings && appState.isFolderInboxSelected
+                        ) {
+                            controller.showFolderInbox()
+                        }
                     }
 
                     ForEach(folderTree.visibleFolders) { folder in
