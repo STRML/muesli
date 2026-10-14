@@ -340,6 +340,7 @@ extension MuesliController {
         }
 
         toggle("meeting_hover_transcript", "Show meeting transcript on hover", \.showMeetingTranscriptOnIndicatorHover)
+        toggle("live_speaker_labels", "Live speaker labels", \.enableLiveSpeakerLabels, apply: setLiveSpeakerLabelsEnabled)
         toggle("auto_record_meetings", "Auto-record calendar meetings", \.autoRecordMeetings)
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
         toggle("auto_export_keep_in_sync", "Keep one note per meeting up to date", \.autoExportKeepInSync)
