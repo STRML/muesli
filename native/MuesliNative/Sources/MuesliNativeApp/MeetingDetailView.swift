@@ -87,6 +87,7 @@ struct MeetingDetailView: View {
     let backLabel: String
     @Environment(\.usesCompactQuickNotes) private var usesCompactQuickNotes
     @State private var isSummarizing = false
+    @State private var recordingPinned = false
     private var isRetranscribing: Bool {
         guard let id = meeting?.id else { return false }
         return appState.meetingRetranscriptions[id]?.isRunning == true
@@ -1302,6 +1303,14 @@ struct MeetingDetailView: View {
                     }
                 }
 
+                if meeting.savedRecordingPath != nil {
+                    Button {
+                        setRecordingPinned(!recordingPinned, meetingID: meeting.id)
+                    } label: {
+                        Label(recordingPinned ? "Allow Pruning" : "Keep Recording", systemImage: recordingPinned ? "pin.slash" : "pin")
+                    }
+                }
+
                 if controller.canDeleteMeeting(meeting) {
                     Button(role: .destructive) {
                         showDeleteConfirmation = true
@@ -1325,6 +1334,24 @@ struct MeetingDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("More actions")
+        .overlay(alignment: .topTrailing) {
+            if recordingPinned {
+                Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(MuesliTheme.textSecondary).allowsHitTesting(false)
+            }
+        }
+        .task(id: meeting.id) {
+            let service = controller.recordingRetentionService
+            let id = meeting.id
+            recordingPinned = await Task.detached { (try? service.isPinned(meetingID: id)) ?? false }.value
+        }
+    }
+
+    private func setRecordingPinned(_ pinned: Bool, meetingID: Int64) {
+        let service = controller.recordingRetentionService
+        Task {
+            let saved = await Task.detached { (try? service.setPinned(pinned, meetingID: meetingID)) != nil }.value
+            if saved { recordingPinned = pinned }
+        }
     }
 
     private func templateMenuItem(title: String, systemImage: String, isSelected: Bool) -> some View {

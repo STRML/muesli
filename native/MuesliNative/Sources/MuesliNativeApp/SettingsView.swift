@@ -2028,6 +2028,18 @@ struct SettingsView: View {
                 screenContextRow("Meeting context", includesScreenOCR: true)
             }
 
+            settingsSection("Recordings storage") {
+                settingsRow("Storage budget", controlWidth: meetingControlWidth) {
+                    settingsControl("recordings_budget")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Keep recordings at least", controlWidth: meetingControlWidth) {
+                    settingsControl("recordings_min_age")
+                }
+                RecordingsUsageText(controller: controller, budgetGB: appState.config.recordingsBudgetGB)
+                    .padding(.top, MuesliTheme.spacing8)
+            }
+
             meetingSummarySettingsSection
 
             privateMeetingsSettingsSection

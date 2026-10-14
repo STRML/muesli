@@ -274,6 +274,7 @@ public final class DictationStore {
             "ALTER TABLE meeting_participants ADD COLUMN is_suppressed INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE meetings ADD COLUMN visual_context TEXT",
             "ALTER TABLE meetings ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE meetings ADD COLUMN recording_pinned INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE meeting_folders ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0"
         ] {
             guard sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK else { continue }
@@ -356,6 +357,7 @@ public final class DictationStore {
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_sync_dirty ON meetings(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
         try migrateInsightsCache(db: db)
         try MeetingChatSQL.migrate(db: db)
+        try RecordingRetentionSchema.migrate(db: db)
         try migrateWordsBeforeCodeSwitchCache(db: db)
         try backfillQuillStatisticsIfNeeded(db: db)
         try repairLegacyMacOriginSources(db: db)
