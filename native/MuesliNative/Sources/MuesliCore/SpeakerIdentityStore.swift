@@ -206,6 +206,12 @@ extension DictationStore {
         try withChatDatabase { db in
             try SpeakerIdentitySQL.transaction(db: db) {
                 try SpeakerIdentitySQL.deleteMeetingSpeakers(meetingID: meetingID, db: db)
+                // A discard or delete can race with the end of processing; never leave a
+                // centroid behind for a meeting that is gone.
+                let live = try SpeakerIdentitySQL.rows(
+                    "SELECT 1 FROM meetings WHERE id = ? AND deleted_at IS NULL", [.integer(meetingID)], db: db
+                ) { _ in () }
+                guard !live.isEmpty else { return [:] }
                 let speakers = observations.filter { !SpeakerVoiceprintMatcher.reservedLabels.contains($0.label) }
                 let matches = SpeakerVoiceprintMatcher.match(
                     candidates: speakers.map { .init(label: $0.label, centroid: $0.centroid) },
