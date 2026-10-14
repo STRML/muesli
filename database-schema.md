@@ -50,6 +50,10 @@ erDiagram
     meetings ||--o{ meeting_participants : "has local people"
     meetings ||--o{ meeting_transcript_checkpoints : "has live checkpoints"
     meetings ||--o| meeting_resume_snapshots : "has resume safety snapshot"
+    meetings ||--o{ folder_suggestions : "has folder suggestions"
+    meeting_folders ||--o{ folder_suggestions : "is suggested"
+    meeting_folders ||--o{ classification_memory : "is learned for"
+    meetings ||--o| classification_learned : "is counted in memory"
 
     insights_tokens ||--o| insights_token_totals : "has all-time totals"
     insights_tokens ||--o{ insights_daily_tokens : "has daily totals"
@@ -142,6 +146,23 @@ Stores the local nested Meetings sidebar hierarchy.
 - Ordering: `sort_order`
 - Meetings reference folders through `meetings.folder_id`
 - Local-only; folder membership is not part of `SyncTextRecord`
+
+#### Folder auto-classification
+
+Three local-only tables back the suggest-and-confirm folder classifier
+(`FolderClassificationStore.swift`, rules in `FolderClassificationRules.swift`).
+All of them cascade when their folder or meeting is deleted, and none is synced.
+
+| Table | Purpose | Key |
+|---|---|---|
+| `folder_suggestions` | One suggested folder for an unfiled meeting: `source` (`series`, `email`, `title`, `llm`), `confidence` 0–1, human-readable `reason`, and `state` (`pending`, `accepted`, `rejected`, `dismissed`, `auto_applied`) | `id`; unique `(meeting_id, folder_id, source)`, so a dismissed suggestion is never re-created |
+| `classification_memory` | What the user's own filing taught: per `kind` (`series`, `email`, `title`) and normalized `key`, how many meetings were filed into `folder_id` (`confirmations`) and how many suggestions built on it were rejected (`contradictions`) | `(kind, key, folder_id)` |
+| `classification_learned` | Which folder a meeting is currently counted under in `classification_memory`, with the exact keys counted (`keys_json`). Makes learning idempotent and lets a later move take the count back | `meeting_id` |
+
+Keys are calendar series ids, lowercased attendee addresses without `mailto:`,
+and titles normalized by stripping meeting-app prefixes, dates, times and digits.
+Only user moves and accepted suggestions are learned. A policy auto-apply is
+stored as `auto_applied` and never counted as a confirmation.
 
 #### `cloud_sync_state`
 
