@@ -200,6 +200,17 @@ public final class DictationStore {
         """
         try exec(foldersSQL, db: db)
 
+        // Which vault file Muesli wrote for a meeting, so an update or a removal touches only that file.
+        // Deliberately no foreign key: the record must outlive the meeting row until the file is gone.
+        try exec("""
+        CREATE TABLE IF NOT EXISTS meeting_exports (
+            meeting_id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'exported',
+            updated_at REAL NOT NULL DEFAULT 0
+        );
+        """, db: db)
+
         if sqlite3_exec(db, "ALTER TABLE meetings ADD COLUMN folder_id INTEGER REFERENCES meeting_folders(id)", nil, nil, nil) != SQLITE_OK {
             // Column may already exist.
         }
@@ -4234,6 +4245,65 @@ public final class DictationStore {
             ids.insert(sqlite3_column_int64(statement, 0))
         }
         return ids
+    }
+
+    // MARK: - Vault export manifest
+
+    public func meetingExport(for meetingID: Int64) throws -> MeetingExportRecord? {
+        try meetingExports(where: "meeting_id = ?", binding: meetingID).first
+    }
+
+    public func meetingExportsPendingRemoval() throws -> [MeetingExportRecord] {
+        try meetingExports(where: "state = 'pending_removal'", binding: nil)
+    }
+
+    public func allMeetingExports() throws -> [MeetingExportRecord] {
+        try meetingExports(where: "1", binding: nil)
+    }
+
+    public func saveMeetingExport(meetingID: Int64, path: String, state: String) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        let sql = "INSERT OR REPLACE INTO meeting_exports (meeting_id, path, state, updated_at) VALUES (?, ?, ?, ?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, meetingID)
+        sqlite3_bind_text(statement, 2, (path as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (state as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+    }
+
+    public func clearMeetingExport(meetingID: Int64) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM meeting_exports WHERE meeting_id = ?", -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, meetingID)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+    }
+
+    private func meetingExports(where condition: String, binding: Int64?) throws -> [MeetingExportRecord] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        let sql = "SELECT meeting_id, path, state FROM meeting_exports WHERE \(condition) ORDER BY meeting_id"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        if let binding { sqlite3_bind_int64(statement, 1, binding) }
+        var rows: [MeetingExportRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(MeetingExportRecord(
+                meetingID: sqlite3_column_int64(statement, 0),
+                path: stringColumn(statement, index: 1),
+                state: stringColumn(statement, index: 2)
+            ))
+        }
+        return rows
     }
 
     /// Meetings flagged private themselves, without the ones private only through a folder.

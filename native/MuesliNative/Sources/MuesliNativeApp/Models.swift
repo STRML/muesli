@@ -2428,6 +2428,11 @@ struct AppConfig: Codable {
     /// Summary backend ids allowed to receive private meetings. Empty by default,
     /// so private meetings are never sent anywhere until the user opts a backend in.
     var privateTrustedBackends: [String] = []
+    /// Keep one vault note per meeting up to date (stable name, updated in place, removed when the
+    /// meeting is deleted or becomes private) instead of appending a new file per export.
+    var autoExportKeepInSync: Bool = false
+    /// With keep-in-sync, file each note under its meeting folder.
+    var autoExportByFolder: Bool = true
     var iCloudSyncEnabled: Bool = false
     var showIOSCompanionPrompt: Bool = true
     var contributionPromptNextWordCount: Int?
@@ -2596,6 +2601,8 @@ struct AppConfig: Codable {
         case autoExportMarkdownContent = "auto_export_markdown_content"
         case autoExportFileFormat = "auto_export_file_format"
         case privateTrustedBackends = "private_trusted_backends"
+        case autoExportKeepInSync = "auto_export_keep_in_sync"
+        case autoExportByFolder = "auto_export_by_folder"
         case iCloudSyncEnabled = "icloud_sync_enabled"
         case showIOSCompanionPrompt = "show_ios_companion_prompt"
         case contributionPromptNextWordCount = "contribution_prompt_next_word_count"
@@ -2888,6 +2895,8 @@ struct AppConfig: Codable {
         let decodedAutoExportFileFormat = (try? c.decode(String.self, forKey: .autoExportFileFormat)) ?? defaults.autoExportFileFormat
         autoExportFileFormat = MeetingAutoExportFileFormat(rawValue: decodedAutoExportFileFormat)?.rawValue ?? defaults.autoExportFileFormat
         privateTrustedBackends = (try? c.decode([String].self, forKey: .privateTrustedBackends)) ?? defaults.privateTrustedBackends
+        autoExportKeepInSync = (try? c.decode(Bool.self, forKey: .autoExportKeepInSync)) ?? defaults.autoExportKeepInSync
+        autoExportByFolder = (try? c.decode(Bool.self, forKey: .autoExportByFolder)) ?? defaults.autoExportByFolder
         contributionPromptNextWordCount = try? c.decode(Int.self, forKey: .contributionPromptNextWordCount)
         contributionPromptNextMeetingCount = try? c.decode(Int.self, forKey: .contributionPromptNextMeetingCount)
         contributionGitHubStarClicked = (try? c.decode(Bool.self, forKey: .contributionGitHubStarClicked)) ?? defaults.contributionGitHubStarClicked

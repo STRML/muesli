@@ -619,6 +619,19 @@ public struct MeetingParticipantDraft: Equatable, Sendable {
     }
 }
 
+/// The vault file Muesli wrote for a meeting. `state` is `exported` or `pending_removal`.
+public struct MeetingExportRecord: Equatable, Sendable {
+    public let meetingID: Int64
+    public let path: String
+    public let state: String
+
+    public init(meetingID: Int64, path: String, state: String) {
+        self.meetingID = meetingID
+        self.path = path
+        self.state = state
+    }
+}
+
 public struct MeetingFolder: Identifiable, Codable, Sendable {
     public let id: Int64
     public var name: String
