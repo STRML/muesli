@@ -261,7 +261,9 @@ public final class DictationStore {
             "ALTER TABLE meetings ADD COLUMN calendar_occurrence_start REAL",
             "ALTER TABLE meeting_participants ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
             "ALTER TABLE meeting_participants ADD COLUMN is_suppressed INTEGER NOT NULL DEFAULT 0",
-            "ALTER TABLE meetings ADD COLUMN visual_context TEXT"
+            "ALTER TABLE meetings ADD COLUMN visual_context TEXT",
+            "ALTER TABLE meetings ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE meeting_folders ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0"
         ] {
             guard sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK else { continue }
             // ADD COLUMN has no IF NOT EXISTS, so a duplicate column is the
@@ -875,7 +877,7 @@ public final class DictationStore {
     }
 
     private func listFoldersInternal(db: OpaquePointer?) throws -> [MeetingFolder] {
-        let sql = "SELECT id, name, parent_id, created_at FROM meeting_folders ORDER BY id ASC"
+        let sql = "SELECT id, name, parent_id, created_at, is_private FROM meeting_folders ORDER BY id ASC"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             throw lastError(db)
@@ -889,7 +891,8 @@ public final class DictationStore {
                 id: sqlite3_column_int64(statement, 0),
                 name: stringColumn(statement, index: 1),
                 parentID: parentID,
-                createdAt: stringColumn(statement, index: 3)
+                createdAt: stringColumn(statement, index: 3),
+                isPrivate: sqlite3_column_int(statement, 4) != 0
             ))
         }
         return rows
@@ -3735,6 +3738,96 @@ public final class DictationStore {
         sqlite3_bind_int64(statement, 2, id)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
+        }
+    }
+
+    // MARK: - Private meetings
+
+    /// Marks a folder private. Every meeting in it or in a subfolder becomes private.
+    public func setFolderPrivate(id: Int64, isPrivate: Bool) throws {
+        try setPrivateFlag(table: "meeting_folders", id: id, isPrivate: isPrivate)
+    }
+
+    /// Marks one meeting private regardless of the folder it sits in.
+    public func setMeetingPrivate(id: Int64, isPrivate: Bool) throws {
+        try setPrivateFlag(table: "meetings", id: id, isPrivate: isPrivate)
+    }
+
+    /// A meeting is private when it is flagged itself or sits under a flagged folder.
+    /// Unknown ids are not private. This is the only place that answers the question.
+    public func isMeetingPrivate(id: Int64) throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        WITH RECURSIVE ancestors(id) AS (
+            SELECT folder_id FROM meetings WHERE id = ?1 AND folder_id IS NOT NULL
+            UNION
+            SELECT f.parent_id FROM meeting_folders f
+            JOIN ancestors a ON f.id = a.id
+            WHERE f.parent_id IS NOT NULL
+        )
+        SELECT EXISTS(SELECT 1 FROM meetings WHERE id = ?1 AND is_private = 1)
+            OR EXISTS(SELECT 1 FROM meeting_folders WHERE is_private = 1 AND id IN (SELECT id FROM ancestors))
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, id)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw lastError(db)
+        }
+        return sqlite3_column_int(statement, 0) != 0
+    }
+
+    /// Every private meeting id, including meetings that are private only through a folder.
+    public func privateMeetingIDs() throws -> Set<Int64> {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        WITH RECURSIVE private_folders(id) AS (
+            SELECT id FROM meeting_folders WHERE is_private = 1
+            UNION
+            SELECT f.id FROM meeting_folders f
+            JOIN private_folders p ON f.parent_id = p.id
+        )
+        SELECT id FROM meetings
+        WHERE is_private = 1 OR folder_id IN (SELECT id FROM private_folders)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        var ids: Set<Int64> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            ids.insert(sqlite3_column_int64(statement, 0))
+        }
+        return ids
+    }
+
+    private func setPrivateFlag(table: String, id: Int64, isPrivate: Bool) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        // `table` is only ever one of two literals from the callers above.
+        let sql = "UPDATE \(table) SET is_private = ? WHERE id = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, isPrivate ? 1 : 0)
+        sqlite3_bind_int64(statement, 2, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+        guard sqlite3_changes(db) == 1 else {
+            throw NSError(
+                domain: "MuesliDB",
+                code: Int(SQLITE_NOTFOUND),
+                userInfo: [NSLocalizedDescriptionKey: "No row \(id) in \(table) to mark private"]
+            )
         }
     }
 
