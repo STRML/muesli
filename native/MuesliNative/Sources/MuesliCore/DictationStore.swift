@@ -4474,6 +4474,21 @@ public final class DictationStore {
         return records
     }
 
+    /// SQL that is true for a meeting that may leave the Mac through iCloud sync: it is not private,
+    /// or it is a deletion tombstone (which must still sync so a remote copy gets removed).
+    private static func syncableMeetingCondition(_ alias: String) -> String {
+        """
+        (\(alias).deleted_at IS NOT NULL OR \(alias).id NOT IN (
+            WITH RECURSIVE private_folders(id) AS (
+                SELECT id FROM meeting_folders WHERE is_private = 1
+                UNION
+                SELECT f.id FROM meeting_folders f JOIN private_folders p ON f.parent_id = p.id
+            )
+            SELECT id FROM meetings WHERE is_private = 1 OR folder_id IN (SELECT id FROM private_folders)
+        ))
+        """
+    }
+
     private func dirtyMeetingTextRecords(
         limit: Int,
         offset: Int,
@@ -4491,6 +4506,7 @@ public final class DictationStore {
         LEFT JOIN meetings AS predecessor ON predecessor.id = m.follow_up_to_id
         WHERE m.sync_dirty = 1 AND m.cloud_record_name IS NOT NULL
           AND m.meeting_status NOT IN (?, ?)
+          AND \(Self.syncableMeetingCondition("m"))
         ORDER BY m.updated_at DESC, m.id DESC
         LIMIT ?
         OFFSET ?
@@ -4595,6 +4611,7 @@ public final class DictationStore {
         FROM meetings AS m
         LEFT JOIN meetings AS predecessor ON predecessor.id = m.follow_up_to_id
         WHERE m.cloud_record_name IS NOT NULL
+          AND \(Self.syncableMeetingCondition("m"))
         ORDER BY m.updated_at DESC, m.id DESC
         LIMIT ?
         OFFSET ?
@@ -4631,10 +4648,11 @@ public final class DictationStore {
     private func hasDirtyMeetingTextRecords(db: OpaquePointer?) throws -> Bool {
         let sql = """
         SELECT 1
-        FROM meetings
-        WHERE sync_dirty = 1
-          AND cloud_record_name IS NOT NULL
-          AND meeting_status NOT IN (?, ?)
+        FROM meetings AS m
+        WHERE m.sync_dirty = 1
+          AND m.cloud_record_name IS NOT NULL
+          AND m.meeting_status NOT IN (?, ?)
+          AND \(Self.syncableMeetingCondition("m"))
         LIMIT 1
         """
         var statement: OpaquePointer?
