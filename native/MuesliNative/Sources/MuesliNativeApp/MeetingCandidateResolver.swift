@@ -195,7 +195,9 @@ enum MeetingURLNormalizer {
 
         if host.hasSuffix("zoom.us") {
             if let meetingID = zoomMeetingID(from: path) {
-                let identity = "\(host)/j/\(meetingID)"
+                // The numeric ID is the room. The invite host (us02web.zoom.us) and the web
+                // client host (app.zoom.us) differ, so the host is not part of the identity.
+                let identity = "zoom.us/j/\(meetingID)"
                 return NormalizedMeetingURL(id: "zoom:\(identity)", url: identity, platform: .zoom)
             }
             let identity = compactIdentity(host: host, path: compactPath)
@@ -238,11 +240,15 @@ enum MeetingURLNormalizer {
         }
     }
 
+    /// `/j/<id>` (invite), `/wc/<id>/join|start` and `/wc/join/<id>` (web client).
     private static func zoomMeetingID(from path: String) -> String? {
         let parts = path.split(separator: "/").map(String.init)
-        guard let joinIndex = parts.firstIndex(of: "j"),
-              parts.indices.contains(joinIndex + 1) else { return nil }
-        return parts[joinIndex + 1].isEmpty ? nil : parts[joinIndex + 1]
+        if let joinIndex = parts.firstIndex(of: "j"), parts.indices.contains(joinIndex + 1) {
+            return parts[joinIndex + 1].isEmpty ? nil : parts[joinIndex + 1]
+        }
+        guard let clientIndex = parts.firstIndex(of: "wc") else { return nil }
+        let rest = parts[(clientIndex + 1)...]
+        return rest.first { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
     }
 
     private static func compactIdentity(host: String, path: String) -> String {

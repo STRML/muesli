@@ -326,6 +326,52 @@ enum MeetingAutoStopPolicy {
         return source.platform == app.platform
     }
 
+    /// Adds what Control Center attributes to a browser or meeting app to the CoreAudio processes.
+    /// While a recording follows `source` the monitor runs no CoreAudio scan, so this is the only
+    /// audio evidence it has. A bound source takes attributions to its own app only.
+    static func livenessAudioProcesses(
+        _ coreAudioProcesses: [AudioProcessActivity],
+        sensorAttributions: SensorAttributionSnapshot,
+        runningProcessIDsByBundleID: [String: pid_t],
+        source: MeetingAutoStopSource?
+    ) -> [AudioProcessActivity] {
+        var processes = coreAudioProcesses
+        let existingBundleIDs = Set(coreAudioProcesses.map(\.bundleID))
+        let attributedBundleIDs = sensorAttributions.micBundleIDs
+            .union(sensorAttributions.cameraBundleIDs)
+            .sorted()
+
+        for attributedBundleID in attributedBundleIDs {
+            let bundleID: String
+            if let sourceBundleID = source?.sourceBundleID {
+                guard bundleIDsReferToSameApp(attributedBundleID, sourceBundleID) else { continue }
+                bundleID = sourceBundleID
+            } else {
+                bundleID = attributedBundleID
+            }
+
+            let appName = MeetingCandidateResolver.browserApps[bundleID]
+                ?? MeetingCandidateResolver.dedicatedApps[bundleID]?.name
+            guard let appName else { continue }
+            guard !existingBundleIDs.contains(where: { bundleIDsReferToSameApp($0, bundleID) }) else {
+                continue
+            }
+
+            processes.append(AudioProcessActivity(
+                pid: runningProcessIDsByBundleID[bundleID] ?? 0,
+                bundleID: bundleID,
+                appName: appName,
+                isRunningInput: true,
+                // Full-duplex was established during discovery. While tracking that source,
+                // a current attribution is sufficient liveness evidence without another HAL
+                // process enumeration.
+                isRunningOutput: source.map { attributionIsLiveness(bundleID: bundleID, source: $0) } ?? false
+            ))
+        }
+
+        return processes
+    }
+
     static func isNativeMeetingApp(_ bundleID: String) -> Bool {
         MeetingCandidateResolver.dedicatedApps[bundleID] != nil
     }

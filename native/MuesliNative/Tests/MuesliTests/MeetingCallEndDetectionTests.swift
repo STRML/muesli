@@ -229,6 +229,35 @@ struct MeetingCallEndDetectionTests {
         #expect(!MeetingAutoStopPolicy.matches(candidate: try #require(resolve(processes: [audio(zoom)])), source: source))
     }
 
+    // MARK: Web clients
+
+    @Test("a Zoom invite and the Zoom web client share one room identity")
+    func zoomWebClientSharesIdentity() throws {
+        let invite = try #require(MeetingURLNormalizer.normalize("https://us02web.zoom.us/j/81234567890?pwd=abcdef"))
+        let webClient = try #require(MeetingURLNormalizer.normalize("https://app.zoom.us/wc/81234567890/join?fromPWA=1&pwd=abcdef"))
+        let webJoin = try #require(MeetingURLNormalizer.normalize("https://app.zoom.us/wc/join/81234567890"))
+        let inMeeting = try #require(MeetingURLNormalizer.normalize("https://app.zoom.us/wc/81234567890/start"))
+        let otherRoom = try #require(MeetingURLNormalizer.normalize("https://app.zoom.us/wc/99999999999/join"))
+        #expect(invite.platform == .zoom)
+        #expect(Set([invite, webClient, webJoin, inMeeting].map(\.id)).count == 1)
+        #expect(otherRoom.id != invite.id)
+
+        // Pages that are not a meeting room keep a host and path identity.
+        let profile = try #require(MeetingURLNormalizer.normalize("https://zoom.us/profile"))
+        #expect(profile.url == "zoom.us/profile")
+    }
+
+    @Test("a recording armed from a Zoom invite follows the call in the Zoom web client")
+    func zoomWebClientMatchesInvite() throws {
+        let source = try urlSource("https://us02web.zoom.us/j/81234567890?pwd=abcdef")
+        let tab = try #require(MeetingURLNormalizer.normalize("https://app.zoom.us/wc/81234567890/join?fromPWA=1"))
+        let candidate = try #require(resolve(browserMeetings: [BrowserMeetingContext(
+            bundleID: "com.google.Chrome", appName: "Chrome", url: tab.url,
+            normalizedID: tab.id, platform: tab.platform, isFocused: true
+        )]))
+        #expect(MeetingAutoStopPolicy.matches(candidate: candidate, source: source))
+    }
+
     // MARK: Binding window
 
     @Test("a URL-armed source can bind during the first 15 minutes of the recording, not after")
@@ -354,6 +383,41 @@ struct MeetingCallEndDetectionTests {
         let bound = urlSource.refined(with: nativeCandidate)
         #expect(bound.sourceBundleID == Self.nativeCalls[0].bundleID)
         #expect(MeetingAutoStopPolicy.scopedBrowserMeetings(tabs, source: bound) == tabs)
+    }
+
+    @Test("a Control Center attribution alone, as the monitor sees it during a recording, binds a link-armed source")
+    func controlCenterAttributionBindsEndToEnd() throws {
+        let teams = Self.nativeCalls[0]
+        let source = try urlSource(teams.url)
+        // Source-liveness mode runs no CoreAudio scan: the only evidence is the attribution.
+        let processes = MeetingAutoStopPolicy.livenessAudioProcesses(
+            [],
+            sensorAttributions: SensorAttributionSnapshot(
+                micBundleIDs: [teams.bundleID, "com.muesli.app"], cameraBundleIDs: [], observedAt: now
+            ),
+            runningProcessIDsByBundleID: [teams.bundleID: 4321],
+            source: source
+        )
+        #expect(processes.map(\.bundleID) == [teams.bundleID])
+        let candidate = try #require(resolve(processes: processes))
+        #expect(candidate.platform == .teams)
+        #expect(candidate.sourcePID == 4321)
+        #expect(MeetingAutoStopPolicy.matches(candidate: candidate, source: source))
+
+        // Another platform's attribution yields no candidate that can bind.
+        let zoom = MeetingAutoStopPolicy.livenessAudioProcesses(
+            [],
+            sensorAttributions: SensorAttributionSnapshot(micBundleIDs: ["us.zoom.xos"], cameraBundleIDs: [], observedAt: now),
+            runningProcessIDsByBundleID: [:],
+            source: source
+        )
+        #expect(resolve(processes: zoom) == nil)
+
+        // A bound source follows only its own app; the discovery path (no source) takes any.
+        let bound = source.refined(with: candidate)
+        let chromeOnly = SensorAttributionSnapshot(micBundleIDs: ["com.google.Chrome"], cameraBundleIDs: [], observedAt: now)
+        #expect(MeetingAutoStopPolicy.livenessAudioProcesses([], sensorAttributions: chromeOnly, runningProcessIDsByBundleID: [:], source: bound).isEmpty)
+        #expect(MeetingAutoStopPolicy.livenessAudioProcesses([], sensorAttributions: chromeOnly, runningProcessIDsByBundleID: [:], source: nil).map(\.bundleID) == ["com.google.Chrome"])
     }
 
     @Test("Control Center attribution proves a call only for the source's own platform")
