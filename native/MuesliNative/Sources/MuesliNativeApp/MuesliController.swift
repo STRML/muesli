@@ -9867,7 +9867,10 @@ public final class MuesliController: NSObject {
         let events = appState.upcomingCalendarEvents.filter { !appState.hiddenCalendarEventIDs.contains($0.id) }
         let event = DetectedCallMatcher.event(for: candidate, in: events, now: now)
         let title = DetectedCallMatcher.title(for: candidate, event: event, now: now)
-        guard detectedCallCandidate?.id != candidate.id else { return (title, event) }
+        guard detectedCallCandidate?.id != candidate.id else {
+            refreshDetectedCallName(candidate, title: title, event: event, now: now)
+            return (title, event)
+        }
 
         detectedCallTask?.cancel()
         detectedCallCandidate = candidate
@@ -9892,6 +9895,25 @@ public final class MuesliController: NSObject {
         }
         refreshSidebarMeetingEntry(now: now)
         return (title, event)
+    }
+
+    /// The room URL or the calendar can arrive after the entry appears (the browser answers late), so
+    /// the name follows the latest read until recording starts.
+    private func refreshDetectedCallName(
+        _ candidate: MeetingCandidate, title: String, event: UnifiedCalendarEvent?, now: Date
+    ) {
+        guard let state = detectedCallState, state.title != title else { return }
+        detectedCallCandidate = candidate
+        detectedCallEvent = event
+        detectedCallState = DetectedCallState(
+            candidateID: state.candidateID,
+            title: title,
+            eventKey: event.map { SidebarMeetingEntryPolicy.eventKey(id: $0.id, startDate: $0.startDate) },
+            endsAt: event?.endDate,
+            recordsAt: state.recordsAt
+        )
+        fputs("[meeting-monitor] call_detected_entry_renamed title=\"\(title)\" calendar_match=\(event != nil)\n", stderr)
+        refreshSidebarMeetingEntry(now: now)
     }
 
     /// The countdown ended, or the user clicked the entry.
