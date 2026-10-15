@@ -598,8 +598,6 @@ public final class MuesliController: NSObject {
     private var activeMeetingAutoStop = MeetingAutoStopTracker()
     private var activeMeetingSignalLossResponse: MeetingSignalLossResponse = .none
     private var meetingSignalLossPromptState = MeetingSignalLossPromptState()
-    private let meetingAutoStopGracePeriod: TimeInterval = 20
-    private let meetingSignalLossTranscriptQuietPeriod: TimeInterval = 45
     private var meetingActivity: NSObjectProtocol?
     private var isStoppingMeetingRecording: Bool { meetingCapture?.session.capturePhase == .stopping }
     private var isPresentingMeetingTerminationConfirmation = false
@@ -9616,18 +9614,59 @@ public final class MuesliController: NSObject {
         }
 
         let now = Date()
+        let wasSeen = activeMeetingAutoStop.lastSeenAt != nil
+        let wasLost = activeMeetingAutoStop.hasLostSource
         if activeMeetingAutoStop.matches(candidate, now: now) {
-            meetingSignalLossPromptState.markSourceRecovered()
             dismissMeetingSignalLossPromptIfVisible(for: activeMeetingID)
         }
-        if activeMeetingAutoStop.observe(
+        let action = MeetingCallEndPolicy.step(
+            tracker: &activeMeetingAutoStop,
+            prompt: &meetingSignalLossPromptState,
+            response: activeMeetingSignalLossResponse,
             candidate: candidate,
-            now: now,
-            gracePeriod: meetingAutoStopGracePeriod
-        ) {
-            presentMeetingSignalLossPromptIfNeeded()
-        }
+            now: now
+        )
+        logCallEndTransition(wasSeen: wasSeen, wasLost: wasLost, now: now)
+        applySignalLossAction(action)
         syncMeetingCallEndedAlert()
+    }
+
+    /// Timestamped transitions of the call a recording follows, for reading a real call against
+    /// the scenarios in `docs/call-end-detection.md`.
+    private func logCallEndTransition(wasSeen: Bool, wasLost: Bool, now: Date) {
+        let isLost = activeMeetingAutoStop.hasLostSource
+        let platform = activeMeetingAutoStop.source?.platform?.displayName ?? "unknown"
+        let event: String?
+        if !wasSeen, activeMeetingAutoStop.lastSeenAt != nil {
+            event = "call_seen"
+        } else if !wasLost, isLost {
+            event = "call_lost"
+        } else if wasLost, !isLost {
+            event = "call_recovered"
+        } else {
+            event = nil
+        }
+        guard let event else { return }
+        fputs("[meeting-monitor] \(event) at=\(now.formatted(.iso8601)) platform=\(platform) meeting=\(activeMeetingID.map(String.init) ?? "nil")\n", stderr)
+    }
+
+    /// The call is over: stop the recording and say so. The notice is shown after the stop, which
+    /// closes any notification that is up.
+    private func stopRecordingForEndedCall() {
+        let platform = activeMeetingAutoStop.source?.platform?.displayName ?? "Meeting"
+        let title = activeMeetingID.flatMap { liveMeetingTitleCache[$0] }
+        fputs("[meeting-monitor] call_auto_end at=\(Date().formatted(.iso8601)) platform=\(platform) meeting=\(activeMeetingID.map(String.init) ?? "nil")\n", stderr)
+        stopMeetingRecording()
+        meetingNotification.show(
+            title: "\(platform) call ended",
+            subtitle: title.map { "Transcription stopped. \"\($0)\" is saved." } ?? "Transcription stopped.",
+            actionLabel: "Open Meeting",
+            dismissAfter: 30,
+            onStartRecording: { [weak self] in
+                self?.historyWindowController?.show()
+            },
+            onDismiss: nil
+        )
     }
 
     /// Mirrors the signal-loss state into `appState`, which drives the amber sidebar item.
@@ -9666,16 +9705,15 @@ public final class MuesliController: NSObject {
         }
     }
 
-    private func presentMeetingSignalLossPromptIfNeeded() {
-        guard activeMeetingSignalLossResponse != .none,
+    private func applySignalLossAction(_ action: MeetingSignalLossAction) {
+        guard action != .none,
               activeMeetingSession?.isRecording == true,
               !isStoppingMeetingRecording else { return }
-
-        let action = meetingSignalLossPromptState.evaluateSignalLoss(
-            now: Date(), transcriptQuietPeriod: meetingSignalLossTranscriptQuietPeriod
-        )
+        if action == .stopAndNotify {
+            stopRecordingForEndedCall()
+            return
+        }
         syncMeetingCallEndedAlert()
-        guard action != .none else { return }
         fputs("[meeting-monitor] signal_loss_alert action=\(action) meeting=\(activeMeetingID.map(String.init) ?? "nil")\n", stderr)
 
         let meetingID = activeMeetingID
@@ -12465,15 +12503,11 @@ public final class MuesliController: NSObject {
 
     private func showMeetingEndNotification(title: String) {
         guard isMeetingRecording() else { return }
-        // The call tracker may already know the call is over; say so instead of guessing from the clock.
-        let callEndedBy = activeMeetingAutoStop.hasLostSource
-            ? activeMeetingAutoStop.source?.platform?.displayName ?? "Meeting"
-            : nil
+        // Once the call tracker has lost the call, the call-ended stop owns this moment.
+        guard MeetingCallEndPolicy.showsScheduledEndPopup(tracker: activeMeetingAutoStop) else { return }
         meetingNotification.show(
-            title: callEndedBy.map { "\($0) call ended" } ?? "Scheduled time ended",
-            subtitle: callEndedBy == nil
-                ? "\(title) may still be ongoing. Stop when finished."
-                : "\(title). Stop transcribing?",
+            title: "Scheduled time ended",
+            subtitle: "\(title) may still be ongoing. Stop when finished.",
             actionLabel: "Stop Transcribing",
             dismissAfter: 45,
             onStartRecording: { [weak self] in

@@ -20,10 +20,8 @@ enum MeetingRecordingStartOrigin: Equatable {
         switch self {
         case .manual:
             return .none
-        case .detectedPrompt:
-            return .warnOnly
-        case .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
-            return .warnOnly
+        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
+            return .stopWithNotice
         }
     }
 
@@ -43,6 +41,8 @@ enum MeetingRecordingStartOrigin: Equatable {
 enum MeetingSignalLossResponse: Equatable {
     case none
     case warnOnly
+    /// The call is over: stop the recording and say so.
+    case stopWithNotice
 }
 
 /// What to do about a recording whose call signal is gone.
@@ -52,6 +52,8 @@ enum MeetingSignalLossAction: Equatable {
     case raiseAlertAndToast
     /// The alert is already up; show the toast again.
     case reofferToast
+    /// The call is over and the recording follows it: stop, then tell the user.
+    case stopAndNotify
 }
 
 /// The user-facing side of signal loss for one recording. The recording is never stopped from
@@ -61,6 +63,7 @@ struct MeetingSignalLossPromptState: Equatable {
     static let reofferInterval: TimeInterval = 5 * 60
 
     private var isAlertRaised = false
+    private var isStopIssued = false
     private(set) var isDismissedForRecording = false
     private var lastOfferedAt: Date?
     private(set) var lastTranscriptActivityAt: Date?
@@ -92,10 +95,20 @@ struct MeetingSignalLossPromptState: Equatable {
     }
 
     /// Call on every observation in which the source is gone past its grace period.
-    mutating func evaluateSignalLoss(now: Date, transcriptQuietPeriod: TimeInterval) -> MeetingSignalLossAction {
+    mutating func evaluateSignalLoss(
+        now: Date,
+        transcriptQuietPeriod: TimeInterval,
+        response: MeetingSignalLossResponse = .warnOnly
+    ) -> MeetingSignalLossAction {
         guard !isDismissedForRecording,
               !hasRecentTranscriptActivity(now: now, quietPeriod: transcriptQuietPeriod) else {
             return .none
+        }
+        if response == .stopWithNotice {
+            // The stop is decided once; the recording is gone after it.
+            guard !isStopIssued else { return .none }
+            isStopIssued = true
+            return .stopAndNotify
         }
         guard isAlertRaised, let lastOfferedAt else {
             isAlertRaised = true
@@ -276,6 +289,37 @@ struct MeetingAutoStopTracker: Equatable {
     }
 }
 
+/// One observation of a recording that follows a call, from candidate to decision. The controller
+/// owns the state and acts on the result; keeping the step pure lets scenarios replay a whole call.
+enum MeetingCallEndPolicy {
+    /// How long the call may be missing before it counts as over.
+    static let gracePeriod: TimeInterval = 20
+    /// How long remote speech must have been absent before the recording stops.
+    static let transcriptQuietPeriod: TimeInterval = 45
+
+    static func step(
+        tracker: inout MeetingAutoStopTracker,
+        prompt: inout MeetingSignalLossPromptState,
+        response: MeetingSignalLossResponse,
+        candidate: MeetingCandidate?,
+        now: Date
+    ) -> MeetingSignalLossAction {
+        guard tracker.isArmed else { return .none }
+        if tracker.matches(candidate, now: now) {
+            prompt.markSourceRecovered()
+        }
+        guard tracker.observe(candidate: candidate, now: now, gracePeriod: gracePeriod),
+              response != .none else { return .none }
+        return prompt.evaluateSignalLoss(now: now, transcriptQuietPeriod: transcriptQuietPeriod, response: response)
+    }
+
+    /// The scheduled-end popup is for a call that may still be going. Once the tracker has lost the
+    /// call, the call-ended notice owns the moment.
+    static func showsScheduledEndPopup(tracker: MeetingAutoStopTracker) -> Bool {
+        !tracker.hasLostSource
+    }
+}
+
 enum MeetingAutoStopPolicy {
     static func matches(
         candidate: MeetingCandidate,
@@ -317,6 +361,18 @@ enum MeetingAutoStopPolicy {
               let bundleID = candidate.sourceBundleID,
               isNativeMeetingApp(bundleID) else { return false }
         return !candidate.evidence.isDisjoint(with: [.audioInputProcess, .dedicatedApp])
+    }
+
+    /// The candidate a recording that follows `source` may treat as its call, or nil. Discovery
+    /// accepts a focused meeting tab on its own (it is how a prompt appears); liveness needs media
+    /// too, because the tab stays on the post-call page after the call ends.
+    static func followedCandidate(_ candidate: MeetingCandidate?, source: MeetingAutoStopSource) -> MeetingCandidate? {
+        guard let candidate,
+              matches(candidate: candidate, source: source),
+              !candidate.evidence.isDisjoint(with: [.micActive, .cameraActive, .audioInputProcess]) else {
+            return nil
+        }
+        return candidate
     }
 
     /// While a recording is armed from a link and has not bound to anything, a browser tab in some

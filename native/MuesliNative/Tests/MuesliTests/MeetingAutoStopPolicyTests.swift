@@ -68,7 +68,7 @@ struct MeetingAutoStopPolicyTests {
         #expect(MeetingAutoStopSource(candidate: candidate()).hasObservedCandidate)
     }
 
-    @Test("source-backed origins warn without stopping recording", arguments: [
+    @Test("source-backed origins stop with a notice; a manual recording never stops", arguments: [
         MeetingRecordingStartOrigin.manual, .detectedPrompt, .calendarAutoRecord,
         .scheduledMeetingPrompt, .joinAndRecord
     ])
@@ -76,7 +76,7 @@ struct MeetingAutoStopPolicyTests {
         let explicit = MeetingAutoStopSource(candidate: candidate())
         let recent = MeetingAutoStopSource(candidate: candidate(id: "recent", url: nil))
         let tracksSource = origin != .manual
-        let expectedSignalLoss: MeetingSignalLossResponse = tracksSource ? .warnOnly : .none
+        let expectedSignalLoss: MeetingSignalLossResponse = tracksSource ? .stopWithNotice : .none
         #expect(origin.tracksMeetingSource == tracksSource)
         #expect(origin.signalLossResponse == expectedSignalLoss)
         #expect(origin.signalLossSource(explicitSource: explicit, recentSource: recent) == (tracksSource ? explicit : nil))

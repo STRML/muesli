@@ -17,11 +17,11 @@ struct MeetingResumePolicyTests {
         }
     }
 
-    @Test("a resumed calendar meeting keeps the call-ended warning; a hand-made note does not")
+    @Test("a resumed calendar meeting stops with the call; a hand-made note does not")
     func resumeStartOrigin() {
         #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true) == .scheduledMeetingPrompt)
         #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: false) == .manual)
-        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true).signalLossResponse == .warnOnly)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true).signalLossResponse == .stopWithNotice)
         #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: false).signalLossResponse == .none)
     }
 

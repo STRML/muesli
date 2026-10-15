@@ -829,8 +829,7 @@ private actor MeetingDetectionService {
         guard case .sourceLiveness(_, let source) = monitoringMode else {
             return candidate
         }
-        guard let candidate else { return nil }
-        return MeetingAutoStopPolicy.matches(candidate: candidate, source: source) ? candidate : nil
+        return MeetingAutoStopPolicy.followedCandidate(candidate, source: source)
     }
 
     private func debounceDelay(for trigger: MeetingDetectionTrigger) -> TimeInterval {
