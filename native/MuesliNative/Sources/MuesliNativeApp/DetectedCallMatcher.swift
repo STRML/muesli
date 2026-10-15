@@ -3,7 +3,7 @@ import Foundation
 /// Ties a detected call to the calendar event it belongs to and names the meeting.
 enum DetectedCallMatcher {
     /// An event counts as the call from this long before it starts until it has ended.
-    static let earlyJoinWindow: TimeInterval = 10 * 60
+    static let earlyJoinWindow: TimeInterval = 15 * 60
     /// A call that runs past the scheduled end still belongs to the event for this long.
     static let lateJoinWindow: TimeInterval = 10 * 60
 
