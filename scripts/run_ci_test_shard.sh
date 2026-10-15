@@ -80,6 +80,7 @@ case "${shard}" in
       CustomLLMModelCatalogTests
       CustomLLMModelListControllerTests
       SummaryBackendLockTests
+      LiveTranscriptFollowStateTests
     )
     ;;
   dictation-transcription)
