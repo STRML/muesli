@@ -64,7 +64,7 @@ struct MeetingCallEndScenarioTests {
         )
     }
 
-    /// The seconds a stop may land in: the later of grace and quiet period after the last signal.
+    /// The seconds a stop may land in: the later of the grace and quiet periods after the last signal.
     private func expectStop(_ timeline: CallEndTimeline, between range: ClosedRange<Int>, sourceLocation: SourceLocation = #_sourceLocation) {
         #expect(timeline.seconds(of: .stopAndNotify).count == 1, "exactly one stop", sourceLocation: sourceLocation)
         let at = timeline.seconds(of: .stopAndNotify).first ?? -1
@@ -79,8 +79,8 @@ struct MeetingCallEndScenarioTests {
         let timeline = await Run.run(source: try source(call), seconds: 200) {
             $0 < 60 ? inCall(call, remote: $0 % 5 == 0) : afterCall(call)
         }
-        // Last remote speech at 55 s, so the 45 s quiet period ends at 100 s.
-        expectStop(timeline, between: 99...102)
+        // Last remote speech at 55 s, so the 20 s quiet period ends at 75 s.
+        expectStop(timeline, between: 74...77)
     }
 
     @Test("E1 a calendar guess from the running app does not keep a finished call alive")
@@ -93,7 +93,7 @@ struct MeetingCallEndScenarioTests {
             $0 < 60 ? inCall(zoom, remote: $0 % 5 == 0)
                 : afterCall(zoom, calendar: calendar, selfAudioActive: false)
         }
-        expectStop(timeline, between: 99...102)
+        expectStop(timeline, between: 74...77)
     }
 
     // MARK: E2, E3 browser calls
@@ -103,7 +103,7 @@ struct MeetingCallEndScenarioTests {
         let timeline = await Run.run(source: try meetSource(meetRoomA), seconds: 200) {
             try! meetFrame(meetRoomA, live: $0 < 60, tabOpen: $0 < 60, remote: $0 < 60 && $0 % 5 == 0)
         }
-        expectStop(timeline, between: 99...102)
+        expectStop(timeline, between: 74...77)
     }
 
     @Test("E3 a browser call ends and the tab stays open on the post-call page")
@@ -111,7 +111,7 @@ struct MeetingCallEndScenarioTests {
         let timeline = await Run.run(source: try meetSource(meetRoomA), seconds: 200) {
             try! meetFrame(meetRoomA, live: $0 < 60, tabOpen: true, remote: $0 < 60 && $0 % 5 == 0)
         }
-        expectStop(timeline, between: 99...102)
+        expectStop(timeline, between: 74...77)
     }
 
     // MARK: E4, E5, E7, E8 the call is still going
@@ -154,8 +154,8 @@ struct MeetingCallEndScenarioTests {
             }
             return afterCall(zoom)
         }
-        // Last remote speech at 195 s, so the stop lands at 240 s.
-        expectStop(timeline, between: 239...242)
+        // Last remote speech at 195 s, so the stop lands at 215 s.
+        expectStop(timeline, between: 214...217)
     }
 
     // MARK: E6 own voice after the call
@@ -166,7 +166,7 @@ struct MeetingCallEndScenarioTests {
         let timeline = await Run.run(source: try source(zoom), seconds: 300) {
             $0 < 60 ? inCall(zoom, remote: $0 % 5 == 0) : afterCall(zoom, own: $0 % 3 == 0)
         }
-        expectStop(timeline, between: 99...102)
+        expectStop(timeline, between: 74...77)
     }
 
     // MARK: E9, E10 recordings that never stop by themselves
@@ -201,7 +201,7 @@ struct MeetingCallEndScenarioTests {
         let timeline = await Run.run(source: try meetSource(meetRoomA), seconds: 250) {
             $0 < 60 ? try! meetFrame(meetRoomA, remote: $0 % 5 == 0) : try! meetFrame(meetRoomB, remote: false)
         }
-        expectStop(timeline, between: 99...102)
+        expectStop(timeline, between: 74...77)
     }
 
     // MARK: E13, E16, E17 what the user and the controller do

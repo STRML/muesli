@@ -293,9 +293,9 @@ struct MeetingAutoStopTracker: Equatable {
 /// owns the state and acts on the result; keeping the step pure lets scenarios replay a whole call.
 enum MeetingCallEndPolicy {
     /// How long the call may be missing before it counts as over.
-    static let gracePeriod: TimeInterval = 20
+    static let gracePeriod: TimeInterval = 10
     /// How long remote speech must have been absent before the recording stops.
-    static let transcriptQuietPeriod: TimeInterval = 45
+    static let transcriptQuietPeriod: TimeInterval = 20
 
     static func step(
         tracker: inout MeetingAutoStopTracker,
