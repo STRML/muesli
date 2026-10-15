@@ -217,6 +217,7 @@ case "${shard}" in
       PrivateMeetingExportTests
       PrivateMeetingPolicyTests
       PrivateMeetingsStoreTests
+      MeetingTitleLayoutTests
     )
     ;;
   *)
