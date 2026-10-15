@@ -344,6 +344,7 @@ extension MuesliController {
         toggle("auto_record_meetings", "Auto-record calendar meetings", \.autoRecordMeetings)
         toggle("auto_join_meetings", "Auto-join meetings at start", \.autoJoinMeetingsAtStart)
         toggle("auto_record_detected_calls", "Auto-record detected calls", \.autoRecordDetectedCalls)
+        toggle("read_call_participants", "Read participant names from calls", \.readCallParticipants)
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
         toggle("auto_export_keep_in_sync", "Keep one note per meeting up to date", \.autoExportKeepInSync)
         toggle("auto_export_by_folder", "File notes by meeting folder", \.autoExportByFolder)

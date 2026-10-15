@@ -477,6 +477,9 @@ public final class MuesliController: NSObject {
     private var onboardingModelPreparationTask: Task<Void, Never>?
     private var openRouterSummaryCatalogTask: Task<Void, Never>?
     private var customLLMModelsTask: Task<Void, Never>?
+    /// Samples the call page for who is on it while a browser call is recorded (docs/call-roster.md).
+    var callRosterTask: Task<Void, Never>?
+    var callRosterTracker = CallRosterTracker()
     /// How the Settings picker lists models. A seam for tests.
     var customLLMModelsFetch: @Sendable (AppConfig) async throws -> [String] = { try await CustomLLMModelCatalog.fetch(config: $0) }
     private var openRouterTranscriptionCatalogTask: Task<Void, Never>?
@@ -9590,6 +9593,7 @@ public final class MuesliController: NSObject {
         meetingSignalLossPromptState.resetForRecording()
         syncMeetingCallEndedAlert()
         syncMeetingDetectionMonitor()
+        startCallRosterSampling(source: source)
     }
 
     private func recentMeetingAutoStopSource() -> MeetingAutoStopSource? {
@@ -9616,6 +9620,7 @@ public final class MuesliController: NSObject {
     }
 
     private func disarmMeetingAutoStop() {
+        stopCallRosterSampling()
         activeMeetingAutoStop.disarm()
         activeMeetingSignalLossResponse = .none
         meetingSignalLossPromptState.resetForRecording()

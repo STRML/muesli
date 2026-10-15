@@ -1834,6 +1834,8 @@ struct AppConfig: Codable {
     var autoJoinMeetingsAtStart: Bool = false
     /// Start transcribing by itself a few seconds after a call is detected. On by default.
     var autoRecordDetectedCalls: Bool = true
+    /// Read the names on a browser call's page while recording, to list who attended and name speakers.
+    var readCallParticipants: Bool = true
     var upcomingMeetingsHourCount: Int?
     var upcomingMeetingsWindow: UpcomingMeetingsWindow {
         .resolve(dayCount: upcomingMeetingsDayCount, hourCount: upcomingMeetingsHourCount)
@@ -2027,6 +2029,7 @@ struct AppConfig: Codable {
         case autoRecordMeetings = "auto_record_meetings"
         case autoJoinMeetingsAtStart = "auto_join_meetings_at_start"
         case autoRecordDetectedCalls = "auto_record_detected_calls"
+        case readCallParticipants = "read_call_participants"
         case upcomingMeetingsHourCount = "upcoming_meetings_hour_count"
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
@@ -2212,6 +2215,7 @@ struct AppConfig: Codable {
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
         autoJoinMeetingsAtStart = (try? c.decode(Bool.self, forKey: .autoJoinMeetingsAtStart)) ?? defaults.autoJoinMeetingsAtStart
         autoRecordDetectedCalls = (try? c.decode(Bool.self, forKey: .autoRecordDetectedCalls)) ?? defaults.autoRecordDetectedCalls
+        readCallParticipants = (try? c.decode(Bool.self, forKey: .readCallParticipants)) ?? defaults.readCallParticipants
         let decodedHours = try? c.decode(Int.self, forKey: .upcomingMeetingsHourCount)
         upcomingMeetingsHourCount = [6, 12].contains(decodedHours ?? 0) ? decodedHours : nil
         if c.contains(.upcomingMeetingsDayCount) {

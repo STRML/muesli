@@ -21,11 +21,34 @@ extension MuesliController {
                 )
             }.value
             fputs("[speakers] meeting \(meetingID): \(observations.count) speakers, \(names.count) recognized\n", stderr)
-            return names
+            return await nameFromCallRoster(meetingID: meetingID, observations: observations, recognized: names, renderNames: renderNames)
         } catch {
             fputs("[speakers] meeting \(meetingID): could not record speakers\n", stderr)
             return [:]
         }
+    }
+
+    /// When one speaker and one name from the call are left unmatched, they are the same person.
+    /// Any other count stays "Speaker N": the Speakers popover offers the call's names instead.
+    private func nameFromCallRoster(
+        meetingID: Int64,
+        observations: [MeetingSpeakerObservation],
+        recognized: [String: String],
+        renderNames: Bool
+    ) async -> [String: String] {
+        guard renderNames, let assignment = CallRosterNaming.assignment(
+            unnamedLabels: observations.map(\.label).filter { recognized[$0] == nil },
+            rosterNames: callRosterNames,
+            namedAlready: Set(recognized.values.map(CallRosterParser.normalized)),
+            selfNames: Self.callRosterSelfNames
+        ) else { return recognized }
+        guard let result = try? await onSpeakerStore({
+            try $0.assignSpeaker(meetingID: meetingID, label: assignment.label, name: assignment.name)
+        }) else { return recognized }
+        fputs("[speakers] meeting \(meetingID): 1 speaker named from the call roster\n", stderr)
+        var resolved = recognized
+        resolved[assignment.label] = result.profileName
+        return resolved
     }
 
     func meetingSpeakers(meetingID: Int64) async throws -> [MeetingSpeaker] {

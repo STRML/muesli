@@ -2253,6 +2253,13 @@ struct SettingsView: View {
 
                 Divider().background(MuesliTheme.surfaceBorder)
 
+                settingsRow("Read participant names from calls") {
+                    settingsControl("read_call_participants")
+                }
+                settingsDescription("While recording a call in your browser, read the names shown on the call page to list who attended and to name speakers. Only the call's own tab is read, and only while it is in front.")
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
                 settingsRow("Auto-join at start") {
                     settingsControl("auto_join_meetings")
                 }

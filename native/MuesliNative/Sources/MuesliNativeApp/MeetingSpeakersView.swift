@@ -10,6 +10,8 @@ struct MeetingSpeakersView: View {
 
     @State private var speakers: [MeetingSpeaker] = []
     @State private var profiles: [SpeakerProfileSummary] = []
+    /// The meeting's participants: the invitees and the people read from the call.
+    @State private var participantNames: [String] = []
     @State private var isPopoverPresented = false
     @State private var isPeopleSheetPresented = false
     @State private var errorMessage: String?
@@ -39,6 +41,10 @@ struct MeetingSpeakersView: View {
             if let id = notification.object as? Int64, id != meetingID { return }
             Task { await reload() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .meetingParticipantsDidChange)) { notification in
+            if let id = notification.object as? Int64, id != meetingID { return }
+            Task { await reload() }
+        }
         .alert("Couldn't Name Speaker", isPresented: errorBinding) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
@@ -63,6 +69,7 @@ struct MeetingSpeakersView: View {
                 MeetingSpeakerRow(
                     speaker: speaker,
                     profiles: profiles,
+                    participantNames: participantNames,
                     onAssign: { name in await assign(speaker, name: name) },
                     onForget: { await forget(speaker) },
                     onDelete: { await deletePerson(speaker) }
@@ -87,8 +94,10 @@ struct MeetingSpeakersView: View {
         do {
             let loadedSpeakers = try await controller.meetingSpeakers(meetingID: meetingID)
             let loadedProfiles = try await controller.speakerProfiles()
+            let loadedParticipants = ((try? await controller.meetingParticipants(meetingID: meetingID)) ?? []).map(\.displayName)
             if loadedSpeakers != speakers { speakers = loadedSpeakers }
             if loadedProfiles != profiles { profiles = loadedProfiles }
+            if loadedParticipants != participantNames { participantNames = loadedParticipants }
         } catch {
             fputs("[speakers] failed to load meeting speakers\n", stderr)
         }
@@ -127,6 +136,7 @@ struct MeetingSpeakersView: View {
 private struct MeetingSpeakerRow: View {
     let speaker: MeetingSpeaker
     let profiles: [SpeakerProfileSummary]
+    let participantNames: [String]
     let onAssign: (String) async -> Void
     let onForget: () async -> Void
     let onDelete: () async -> Void
@@ -152,7 +162,7 @@ private struct MeetingSpeakerRow: View {
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(submit)
                     .accessibilityIdentifier("meeting.speakers.nameField")
-                if !profiles.isEmpty { existingProfilesMenu }
+                if !profiles.isEmpty || !participantNames.isEmpty { existingProfilesMenu }
                 Button("Save", action: submit)
                     .disabled(draftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -187,15 +197,26 @@ private struct MeetingSpeakerRow: View {
 
     private var existingProfilesMenu: some View {
         Menu {
-            ForEach(profiles) { profile in
-                Button(profile.name) { Task { await onAssign(profile.name) } }
+            if !participantNames.isEmpty {
+                Section("In this meeting") {
+                    ForEach(participantNames, id: \.self) { name in
+                        Button(name) { Task { await onAssign(name) } }
+                    }
+                }
+            }
+            if !profiles.isEmpty {
+                Section("People you've named") {
+                    ForEach(profiles) { profile in
+                        Button(profile.name) { Task { await onAssign(profile.name) } }
+                    }
+                }
             }
         } label: {
             Image(systemName: "person.crop.circle")
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Pick an existing person")
+        .help("Pick someone from this meeting or a person you have named")
     }
 
     private func submit() {
