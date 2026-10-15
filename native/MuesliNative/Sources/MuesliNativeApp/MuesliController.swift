@@ -479,7 +479,7 @@ public final class MuesliController: NSObject {
     private var customLLMModelsTask: Task<Void, Never>?
     /// Samples the call page for who is on it while a browser call is recorded (docs/call-roster.md).
     var callRosterTask: Task<Void, Never>?
-    var callRosterTracker = CallRosterTracker()
+    var callRosterBook = CallRosterBook()
     /// How the Settings picker lists models. A seam for tests.
     var customLLMModelsFetch: @Sendable (AppConfig) async throws -> [String] = { try await CustomLLMModelCatalog.fetch(config: $0) }
     private var openRouterTranscriptionCatalogTask: Task<Void, Never>?

@@ -38,7 +38,7 @@ extension MuesliController {
     ) async -> [String: String] {
         guard renderNames, let assignment = CallRosterNaming.assignment(
             unnamedLabels: observations.map(\.label).filter { recognized[$0] == nil },
-            rosterNames: callRosterNames,
+            rosterNames: callRosterNames(for: meetingID),
             namedAlready: Set(recognized.values.map(CallRosterParser.normalized)),
             selfNames: Self.callRosterSelfNames
         ) else { return recognized }

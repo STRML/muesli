@@ -13,7 +13,6 @@ extension MuesliController {
         stopCallRosterSampling()
         guard config.readCallParticipants, let source, source.platform == .googleMeet,
               let room = source.normalizedURL else { return }
-        callRosterTracker = CallRosterTracker()
         let preferredBundleID = source.sourceBundleID
         callRosterTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.firstRosterPassDelay)
@@ -29,8 +28,8 @@ extension MuesliController {
         callRosterTask = nil
     }
 
-    /// Every name seen on the call so far, for naming speakers when the meeting ends.
-    var callRosterNames: [String] { callRosterTracker.seenNames }
+    /// Every name seen on that meeting's call, for naming its speakers when it ends. Never another meeting's.
+    func callRosterNames(for meetingID: Int64) -> [String] { callRosterBook.names(for: meetingID) }
 
     /// The names that stand for the user: they are on the call but are not someone else.
     static var callRosterSelfNames: Set<String> { [NSFullUserName(), NSUserName()] }
@@ -51,7 +50,7 @@ extension MuesliController {
 
         let existing = ((try? await meetingParticipants(meetingID: meetingID)) ?? []).map(\.displayName)
         let roster = CallRosterParser.names(from: nodes, selfNames: Self.callRosterSelfNames, knownNames: existing)
-        let added = callRosterTracker.newNames(roster: roster, existing: existing)
+        let added = callRosterBook.newNames(meetingID: meetingID, roster: roster, existing: existing)
         guard !added.isEmpty else { return }
         for name in added {
             let draft = MeetingParticipantDraft(
@@ -61,7 +60,7 @@ extension MuesliController {
             try? await attachMeetingParticipant(meetingID: meetingID, participant: draft)
         }
         // Counts only: names stay out of the log.
-        fputs("[call-roster] meeting \(meetingID): \(added.count) new on the call, \(callRosterTracker.seenNames.count) seen\n", stderr)
+        fputs("[call-roster] meeting \(meetingID): \(added.count) new on the call, \(callRosterBook.names(for: meetingID).count) seen\n", stderr)
         NotificationCenter.default.post(name: .meetingParticipantsDidChange, object: meetingID)
     }
 

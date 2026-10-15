@@ -26,6 +26,17 @@ struct CallRosterTrackerTests {
         #expect(tracker.newNames(roster: ["Quentin Machu"], existing: []).isEmpty)
     }
 
+    @Test("R16: names read in one meeting never reach another")
+    func rosterIsPerMeeting() {
+        var book = CallRosterBook()
+        #expect(book.newNames(meetingID: 1, roster: ["Quentin Machu"], existing: []) == ["Quentin Machu"])
+        #expect(book.names(for: 1) == ["Quentin Machu"])
+        #expect(book.names(for: 2).isEmpty)
+        // The next meeting starts from nothing, so the same person is new to it.
+        #expect(book.newNames(meetingID: 2, roster: ["Quentin Machu"], existing: []) == ["Quentin Machu"])
+        #expect(book.names(for: 1).isEmpty)
+    }
+
     @Test("the roster so far keeps every name seen, in order")
     func remembersTheRoster() {
         var tracker = CallRosterTracker()
