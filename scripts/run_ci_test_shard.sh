@@ -81,6 +81,7 @@ case "${shard}" in
       CustomLLMModelListControllerTests
       SummaryBackendLockTests
       LiveTranscriptFollowStateTests
+      RecordingIndicatorIconTests
     )
     ;;
   dictation-transcription)
@@ -219,6 +220,9 @@ case "${shard}" in
       PrivateMeetingPolicyTests
       PrivateMeetingsStoreTests
       MeetingTitleLayoutTests
+      CallRosterParserTests
+      CallRosterNamingTests
+      CallRosterTrackerTests
     )
     ;;
   *)
