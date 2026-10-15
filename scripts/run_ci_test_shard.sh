@@ -82,6 +82,7 @@ case "${shard}" in
       SummaryBackendLockTests
       LiveTranscriptFollowStateTests
       RecordingIndicatorIconTests
+      NarrowLayoutTests
     )
     ;;
   dictation-transcription)

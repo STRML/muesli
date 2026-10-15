@@ -116,6 +116,22 @@ struct UISnapshotTests {
         try render(FolderInboxView(appState: f.controller.appState, controller: f.controller), width: 900, height: 420, name: "03-inbox")
     }
 
+    /// The widest a view asks to be when it is offered `width`. A page that asks for more than it
+    /// is offered is wider than its window, and clips on both sides.
+    private func demandedWidth<V: View>(of view: V, offered width: CGFloat) -> CGFloat {
+        NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 800)).width
+    }
+
+    @Test("meeting list and inbox stay inside a narrow pane")
+    func narrowPane() throws {
+        let f = try makeFixture()
+        f.controller.appState.selectedTab = .meetings
+        try render(MeetingsView(appState: f.controller.appState, controller: f.controller), width: 240, height: 800, name: "06-meetings-list-narrow")
+        try render(FolderInboxView(appState: f.controller.appState, controller: f.controller), width: 240, height: 800, name: "07-inbox-narrow")
+        #expect(demandedWidth(of: MeetingsView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+        #expect(demandedWidth(of: FolderInboxView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+    }
+
     @Test("settings: private meetings, auto export and folder suggestions")
     func settings() throws {
         let f = try makeFixture()

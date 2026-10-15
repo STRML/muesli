@@ -50,18 +50,11 @@ struct FolderInboxView: View {
     }
 
     private var header: some View {
-        HStack(spacing: MuesliTheme.spacing12) {
-            Text("Suggested folders for unfiled meetings. Accepting teaches Muesli where similar meetings belong.")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textTertiary)
-            Spacer(minLength: MuesliTheme.spacing12)
-            if appState.isClassifyingUnfiledMeetings {
-                ProgressView().controlSize(.small)
-                Button("Stop") { controller.cancelClassifyUnfiledMeetings() }
-            } else {
-                Button("Classify Unfiled Meetings") { controller.classifyUnfiledMeetings() }
-            }
-        }
+        FolderInboxHeader(
+            isClassifying: appState.isClassifyingUnfiledMeetings,
+            onClassify: { controller.classifyUnfiledMeetings() },
+            onStop: { controller.cancelClassifyUnfiledMeetings() }
+        )
     }
 
     private func meetingCard(_ rows: [FolderSuggestionInboxRow]) -> some View {
@@ -95,31 +88,15 @@ struct FolderInboxView: View {
     }
 
     private func suggestionRow(_ suggestion: FolderSuggestion) -> some View {
-        HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-            Image(systemName: suggestion.source == .llm ? "sparkles" : "folder")
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(folderPaths[suggestion.folderID] ?? "Folder")
-                    .font(MuesliTheme.callout())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                Text(suggestion.reason)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textTertiary)
-            }
-            Spacer(minLength: MuesliTheme.spacing8)
-            Button("Accept") { controller.acceptFolderSuggestion(suggestion) }
-                .buttonStyle(.borderedProminent)
-            Menu("Choose Another Folder") {
-                ForEach(appState.folders) { folder in
-                    Button(folderPaths[folder.id] ?? folder.name) {
-                        controller.moveMeeting(id: suggestion.meetingID, toFolder: folder.id)
-                    }
-                }
-            }
-            .fixedSize()
-            Button("Dismiss") { controller.dismissFolderSuggestion(suggestion) }
-        }
+        FolderSuggestionRowView(
+            iconName: suggestion.source == .llm ? "sparkles" : "folder",
+            folderName: folderPaths[suggestion.folderID] ?? "Folder",
+            reason: suggestion.reason,
+            folders: appState.folders.map { (id: $0.id, name: folderPaths[$0.id] ?? $0.name) },
+            onAccept: { controller.acceptFolderSuggestion(suggestion) },
+            onChooseFolder: { controller.moveMeeting(id: suggestion.meetingID, toFolder: $0) },
+            onDismiss: { controller.dismissFolderSuggestion(suggestion) }
+        )
     }
 
     private var emptyState: some View {
@@ -148,5 +125,104 @@ struct FolderInboxView: View {
     private static func displayDate(_ iso: String) -> String {
         guard let date = ISO8601DateFormatter().date(from: iso) else { return iso }
         return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+
+/// The Inbox intro and its Classify button: side by side when they fit, stacked when they do not.
+struct FolderInboxHeader: View {
+    let isClassifying: Bool
+    let onClassify: () -> Void
+    let onStop: () -> Void
+
+    private var intro: some View {
+        Text("Suggested folders for unfiled meetings. Accepting teaches Muesli where similar meetings belong.")
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textTertiary)
+    }
+
+    private func controls(fixed: Bool) -> some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            if isClassifying {
+                ProgressView().controlSize(.small)
+                Button("Stop", action: onStop)
+            } else {
+                Button("Classify Unfiled Meetings", action: onClassify)
+            }
+        }
+        // Beside the intro the button keeps its size; stacked under it, it may shrink to the pane.
+        .fixedSize(horizontal: fixed, vertical: true)
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                intro
+                Spacer(minLength: MuesliTheme.spacing12)
+                controls(fixed: true)
+            }
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                intro.frame(maxWidth: .infinity, alignment: .leading)
+                controls(fixed: false)
+            }
+        }
+    }
+}
+
+/// One suggestion: the folder and why, with Accept, another folder, and Dismiss. One row when it
+/// fits; otherwise the actions wrap under the text.
+struct FolderSuggestionRowView: View {
+    let iconName: String
+    let folderName: String
+    let reason: String
+    let folders: [(id: Int64, name: String)]
+    let onAccept: () -> Void
+    let onChooseFolder: (Int64) -> Void
+    let onDismiss: () -> Void
+
+    private var summary: some View {
+        HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+            Image(systemName: iconName)
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(folderName)
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                Text(reason)
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+            }
+        }
+    }
+
+    private var actions: some View {
+        WrappingHStack(spacing: MuesliTheme.spacing8, lineSpacing: MuesliTheme.spacing8) {
+            Button("Accept", action: onAccept)
+                .buttonStyle(.borderedProminent)
+                .fixedSize()
+            Menu("Another Folder") {
+                ForEach(folders, id: \.id) { folder in
+                    Button(folder.name) { onChooseFolder(folder.id) }
+                }
+            }
+            .fixedSize()
+            Button("Dismiss", action: onDismiss)
+                .fixedSize()
+        }
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                summary
+                Spacer(minLength: MuesliTheme.spacing8)
+                actions
+            }
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                summary.frame(maxWidth: .infinity, alignment: .leading)
+                actions
+            }
+        }
     }
 }
