@@ -107,4 +107,44 @@ struct SidebarMeetingEntryTests {
         #expect(counting.statusLabel(now: now.addingTimeInterval(1)) == "Call detected, recording in 4 s")
         #expect(waiting.statusLabel(now: now) == "Call detected")
     }
+
+    // MARK: auto-join due
+
+    private func due(
+        _ events: [UnifiedCalendarEvent], hidden: Set<String> = [], keys: Set<String> = [],
+        all: Bool = false, handled: Set<String> = []
+    ) -> [String] {
+        SidebarMeetingEntryPolicy.dueAutoJoins(
+            events: events, hiddenEventIDs: hidden, autoJoinEventKeys: keys, autoJoinAllMeetings: all,
+            handledEventKeys: handled, now: now
+        ).map(\.id)
+    }
+
+    @Test("an auto-join is due from the start until the grace period ends")
+    func dueWindow() {
+        #expect(due([event("a", startsIn: 0)], all: true) == ["a"])
+        #expect(due([event("a", startsIn: -119)], all: true) == ["a"])
+        #expect(due([event("a", startsIn: -121)], all: true).isEmpty)
+        #expect(due([event("a", startsIn: 1)], all: true).isEmpty)
+    }
+
+    @Test("it is due only when joining is on for the event, and only once")
+    func dueNeedsOptIn() {
+        let e = event("a", startsIn: -10)
+        let key = SidebarMeetingEntryPolicy.eventKey(id: "a", startDate: e.startDate)
+        #expect(due([e]).isEmpty)
+        #expect(due([e], keys: [key]) == ["a"])
+        #expect(due([e], all: true, handled: [key]).isEmpty)
+    }
+
+    @Test("a hidden, all-day or finished event is never due")
+    func dueSkips() {
+        #expect(due([event("a", startsIn: -10)], hidden: ["a"], all: true).isEmpty)
+        #expect(due([event("b", startsIn: -10, allDay: true)], all: true).isEmpty)
+        let finished = UnifiedCalendarEvent(
+            id: "c", title: "Short", startDate: now.addingTimeInterval(-60), endDate: now.addingTimeInterval(-1),
+            isAllDay: false, source: .eventKit
+        )
+        #expect(due([finished], all: true).isEmpty)
+    }
 }

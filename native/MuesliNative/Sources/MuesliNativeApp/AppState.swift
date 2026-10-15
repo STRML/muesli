@@ -210,6 +210,8 @@ final class AppState {
     var activeMeetingID: Int64?
     /// The call the active recording followed has gone away. Drives the sidebar's "Call ended?" item.
     var isMeetingCallEnded: Bool = false
+    /// The next calendar event or the detected call, shown above Timeline while nothing is recording.
+    var sidebarMeetingEntry: SidebarMeetingEntry?
     var isMeetingStarting: Bool = false
     var meetingStartStatus: String?
     var liveMeetingTranscript: String = ""

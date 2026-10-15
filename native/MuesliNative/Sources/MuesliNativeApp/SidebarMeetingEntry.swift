@@ -56,6 +56,33 @@ enum SidebarMeetingEntryPolicy {
     /// A detected call starts transcribing by itself after this long.
     static let detectedCallCountdown: TimeInterval = 5
 
+    /// A start timer can be suspended (menu bar apps nap), so an auto-join still fires for a meeting
+    /// that started up to this long ago.
+    static let autoJoinGrace: TimeInterval = 120
+
+    /// Events whose auto-join is due now: started within the grace period, still running, joining
+    /// switched on for them, and not handled before.
+    static func dueAutoJoins(
+        events: [UnifiedCalendarEvent],
+        hiddenEventIDs: Set<String>,
+        autoJoinEventKeys: Set<String>,
+        autoJoinAllMeetings: Bool,
+        handledEventKeys: Set<String>,
+        now: Date
+    ) -> [UnifiedCalendarEvent] {
+        events
+            .filter { event in
+                let key = eventKey(id: event.id, startDate: event.startDate)
+                return !event.isAllDay && !hiddenEventIDs.contains(event.id)
+                    && event.startDate <= now
+                    && now.timeIntervalSince(event.startDate) <= autoJoinGrace
+                    && event.endDate > now
+                    && (autoJoinAllMeetings || autoJoinEventKeys.contains(key))
+                    && !handledEventKeys.contains(key)
+            }
+            .sorted { $0.startDate < $1.startDate }
+    }
+
     static func eventKey(id: String, startDate: Date) -> String {
         "\(id)|\(Int(startDate.timeIntervalSince1970))"
     }

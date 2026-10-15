@@ -591,6 +591,14 @@ public final class MuesliController: NSObject {
     private var meetingStartStatus: String?
     private var isShowingCalendarNotification = false
     private var presentedMeetingCandidate: MeetingCandidate?
+    private var detectedCallState: DetectedCallState?
+    private var detectedCallCandidate: MeetingCandidate?
+    private var detectedCallEvent: UnifiedCalendarEvent?
+    private var detectedCallTask: Task<Void, Never>?
+    private var sidebarEntryTimer: Timer?
+    /// Events the user switched auto-join on for, from the sidebar. Not saved: it is a choice for one meeting.
+    private var autoJoinEventKeys = Set<String>()
+    private var autoJoinedEventKeys = Set<String>()
     private var meetingEndTimer: Timer?
     private var activeMeetingCalendarEndDate: Date?
     private var latestMeetingActivityCandidate: MeetingCandidate?
@@ -1473,6 +1481,7 @@ public final class MuesliController: NSObject {
         appState.dictationStats = dictationStats()
         appState.filteredDictationStats = filteredDictationStats()
         appState.meetingStats = meetingStats()
+        refreshSidebarMeetingEntry()
         refreshContributionMilestonePrompt(
             totalWords: appState.dictationStats.totalWords,
             totalMeetings: appState.meetingStats.totalMeetings
@@ -3921,6 +3930,7 @@ public final class MuesliController: NSObject {
         }
 
         appState.upcomingCalendarEvents = ekEvents
+        refreshSidebarMeetingEntry()
 
         // Prune hidden IDs only when the widest supported window still cannot see the event.
         let sourceHints = config.hiddenCalendarEventSourceHints
@@ -4111,8 +4121,11 @@ public final class MuesliController: NSObject {
     }
 
     private func checkUpcomingCalendarNotifications() {
+        refreshSidebarMeetingEntry()
         guard !isMeetingRecording(),
               !isStartingMeetingRecording else { return }
+        // A joined meeting replaces auto-record for that event, so a meeting is not started twice.
+        if runDueAutoJoins() { return }
 
         let now = Date()
         let leadTime = config.scheduledMeetingNotificationLeadTime.seconds
@@ -9493,6 +9506,7 @@ public final class MuesliController: NSObject {
     }
 
     private func dismissPresentedMeetingDetection() {
+        clearDetectedCall()
         guard let candidate = presentedMeetingCandidate else { return }
         presentedMeetingCandidate = nil
         meetingMonitor.markPromptClosed(candidate)
@@ -9752,6 +9766,166 @@ public final class MuesliController: NSObject {
         )
     }
 
+    // MARK: Sidebar meeting entry
+
+    private func refreshSidebarMeetingEntry(now: Date = Date()) {
+        let busy = isMeetingRecording() || isStartingMeetingRecording
+        if busy, detectedCallState != nil { clearDetectedCall() }
+        let entry = SidebarMeetingEntryPolicy.entry(
+            events: appState.upcomingCalendarEvents,
+            hiddenEventIDs: appState.hiddenCalendarEventIDs,
+            detectedCall: detectedCallState,
+            isRecordingOrStarting: busy,
+            autoJoinEventKeys: autoJoinEventKeys,
+            autoJoinAllMeetings: config.autoJoinMeetingsAtStart,
+            now: now
+        )
+        if appState.sidebarMeetingEntry != entry {
+            appState.sidebarMeetingEntry = entry
+        }
+        scheduleSidebarEntryTimer(for: entry)
+    }
+
+    /// Wakes the entry at the event's start: it hands over to auto-join and drops off the sidebar.
+    private func scheduleSidebarEntryTimer(for entry: SidebarMeetingEntry?) {
+        sidebarEntryTimer?.invalidate()
+        sidebarEntryTimer = nil
+        guard case .upcoming(let upcoming)? = entry else { return }
+        let delay = max(0.1, upcoming.startsAt.timeIntervalSinceNow + 0.5)
+        sidebarEntryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.runDueAutoJoins()
+                self.refreshSidebarMeetingEntry()
+            }
+        }
+    }
+
+    /// Joins the meeting whose auto-join is due. Returns whether one started.
+    @discardableResult
+    private func runDueAutoJoins(now: Date = Date()) -> Bool {
+        guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
+        let due = SidebarMeetingEntryPolicy.dueAutoJoins(
+            events: appState.upcomingCalendarEvents,
+            hiddenEventIDs: appState.hiddenCalendarEventIDs,
+            autoJoinEventKeys: autoJoinEventKeys,
+            autoJoinAllMeetings: config.autoJoinMeetingsAtStart,
+            handledEventKeys: autoJoinedEventKeys,
+            now: now
+        )
+        guard let event = due.first else { return false }
+        autoJoinedEventKeys.insert(SidebarMeetingEntryPolicy.eventKey(id: event.id, startDate: event.startDate))
+        joinOrRecord(event, presentation: .backgroundPill)
+        return true
+    }
+
+    private func joinOrRecord(_ event: UnifiedCalendarEvent, presentation: MeetingStartPresentation) {
+        if let meetingURL = event.meetingURL {
+            joinAndRecord(
+                title: event.title, meetingURL: meetingURL, endDate: event.endDate,
+                calendarOccurrence: event.resolvedCalendarOccurrence, presentation: presentation
+            )
+        } else {
+            startMeetingRecordingFromEntryPoint(
+                title: event.title, calendarOccurrence: event.resolvedCalendarOccurrence, endDate: event.endDate,
+                presentation: presentation, startOrigin: .scheduledMeetingPrompt
+            )
+        }
+    }
+
+    /// The sidebar's Join & Record (or Record) button.
+    func joinUpcomingMeetingNow(eventKey: String) {
+        guard let event = appState.upcomingCalendarEvents.first(where: {
+            SidebarMeetingEntryPolicy.eventKey(id: $0.id, startDate: $0.startDate) == eventKey
+        }) else { return }
+        autoJoinedEventKeys.insert(eventKey)
+        joinOrRecord(event, presentation: .foregroundNotes)
+    }
+
+    /// The sidebar's "Auto-join at start" button, for one meeting.
+    func toggleAutoJoin(eventKey: String) {
+        if autoJoinEventKeys.contains(eventKey) {
+            autoJoinEventKeys.remove(eventKey)
+        } else {
+            autoJoinEventKeys.insert(eventKey)
+        }
+        refreshSidebarMeetingEntry()
+    }
+
+    /// Matches the call to its calendar event, names the meeting and puts the call in the sidebar. With
+    /// auto-record on, transcription starts when the countdown ends.
+    private func beginDetectedCall(_ candidate: MeetingCandidate, now: Date = Date()) -> (title: String, event: UnifiedCalendarEvent?) {
+        let events = appState.upcomingCalendarEvents.filter { !appState.hiddenCalendarEventIDs.contains($0.id) }
+        let event = DetectedCallMatcher.event(for: candidate, in: events, now: now)
+        let title = DetectedCallMatcher.title(for: candidate, event: event, now: now)
+        guard detectedCallCandidate?.id != candidate.id else { return (title, event) }
+
+        detectedCallTask?.cancel()
+        detectedCallCandidate = candidate
+        detectedCallEvent = event
+        let recordsAt = config.autoRecordDetectedCalls
+            ? now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
+            : nil
+        detectedCallState = DetectedCallState(
+            candidateID: candidate.id,
+            title: title,
+            eventKey: event.map { SidebarMeetingEntryPolicy.eventKey(id: $0.id, startDate: $0.startDate) },
+            endsAt: event?.endDate,
+            recordsAt: recordsAt
+        )
+        fputs("[meeting-monitor] call_detected_entry title=\"\(title)\" calendar_match=\(event != nil) auto_record=\(recordsAt != nil) at=\(now.formatted(.iso8601))\n", stderr)
+        if recordsAt != nil {
+            detectedCallTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(SidebarMeetingEntryPolicy.detectedCallCountdown))
+                guard !Task.isCancelled else { return }
+                self?.startDetectedCallNow()
+            }
+        }
+        refreshSidebarMeetingEntry(now: now)
+        return (title, event)
+    }
+
+    /// The countdown ended, or the user clicked the entry.
+    func startDetectedCallNow() {
+        guard let candidate = detectedCallCandidate, let state = detectedCallState else { return }
+        let started = startMeetingRecordingFromEntryPoint(
+            title: state.title,
+            calendarOccurrence: detectedCallEvent?.resolvedCalendarOccurrence,
+            endDate: detectedCallEvent?.endDate,
+            autoStopSource: MeetingAutoStopSource(candidate: candidate),
+            presentation: .backgroundPill,
+            startOrigin: .detectedPrompt
+        )
+        guard started else {
+            meetingMonitor.refreshState()
+            return
+        }
+        meetingMonitor.markRecordingStarted(candidate)
+        presentedMeetingCandidate = nil
+        if meetingNotification.currentPromptID == candidate.id { meetingNotification.close() }
+        clearDetectedCall()
+        showPendingMeetingCompletionNotificationIfPossible()
+    }
+
+    /// The entry's Cancel: this call is not recorded, and the monitor will not offer it again.
+    func cancelDetectedCall() {
+        guard let candidate = detectedCallCandidate else { return }
+        clearDetectedCall()
+        presentedMeetingCandidate = nil
+        meetingMonitor.markPromptUserDismissed(candidate)
+        meetingMonitor.refreshState()
+    }
+
+    private func clearDetectedCall() {
+        guard detectedCallState != nil || detectedCallCandidate != nil else { return }
+        detectedCallTask?.cancel()
+        detectedCallTask = nil
+        detectedCallState = nil
+        detectedCallCandidate = nil
+        detectedCallEvent = nil
+        refreshSidebarMeetingEntry()
+    }
+
     private func presentMeetingDetection(_ candidate: MeetingCandidate) {
         guard config.showMeetingDetectionNotification,
               !isShowingCalendarNotification,
@@ -9763,8 +9937,13 @@ public final class MuesliController: NSObject {
             return
         }
 
-        let title = candidate.subtitle
+        let (title, matchedEvent) = beginDetectedCall(candidate)
         presentedMeetingCandidate = candidate
+        // The sidebar entry and its countdown stand in for the toast.
+        if config.autoRecordDetectedCalls {
+            meetingMonitor.markPromptShown(candidate)
+            return
+        }
         let preferredScreen = meetingSourceWindowLocator.screen(for: candidate)
         let didShow = meetingNotification.show(
             promptID: candidate.id,
@@ -9779,13 +9958,15 @@ public final class MuesliController: NSObject {
                     : nil
                 if self.startMeetingRecordingFromEntryPoint(
                     title: title,
-                    calendarOccurrence: calendarEvent?.calendarOccurrence,
+                    calendarOccurrence: matchedEvent?.resolvedCalendarOccurrence ?? calendarEvent?.calendarOccurrence,
+                    endDate: matchedEvent?.endDate,
                     autoStopSource: MeetingAutoStopSource(candidate: candidate),
                     presentation: .backgroundPill,
                     startOrigin: .detectedPrompt
                 ) {
                     self.meetingMonitor.markRecordingStarted(candidate)
                     self.presentedMeetingCandidate = nil
+                    self.clearDetectedCall()
                     self.showPendingMeetingCompletionNotificationIfPossible()
                 } else {
                     self.meetingMonitor.refreshState()
