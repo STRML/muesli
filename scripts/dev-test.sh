@@ -258,8 +258,14 @@ fi
 env "${BUILD_ENV[@]}" "$ROOT/scripts/build_native_app.sh" debug
 
 echo ""
-echo "Launching $DEV_APP_NAME..."
-open "$DEV_APP"
+if [[ "${MUESLI_DEV_NO_LAUNCH:-0}" == "1" ]]; then
+  # An unsigned build must not run: macOS ties permission grants to the signing identity, so
+  # launching it asks for every permission again. dev-test-local.sh signs it first.
+  echo "Not launching $DEV_APP_NAME (MUESLI_DEV_NO_LAUNCH=1)."
+else
+  echo "Launching $DEV_APP_NAME..."
+  open "$DEV_APP"
+fi
 
 echo ""
 echo "=== Dev Test Ready ==="
