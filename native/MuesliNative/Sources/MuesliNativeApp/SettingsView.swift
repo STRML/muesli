@@ -1903,8 +1903,6 @@ struct SettingsView: View {
         }
     }
 
-    private static let customLLMManualEntryLabel = "Enter a model id…"
-
     /// The endpoint's own model list when it has one, with manual entry as the way out for servers that
     /// do not list models or a model that is not on the list.
     @ViewBuilder
@@ -1913,24 +1911,19 @@ struct SettingsView: View {
         let isLoading = appState.customLLMModelsState == .loading
         HStack(spacing: 6) {
             if !models.isEmpty, !customLLMManualModelEntry {
-                // A saved model the endpoint no longer lists stays visible instead of vanishing.
-                let isListed = models.contains(model)
-                let shown = model.isEmpty ? "Choose a model…" : model
-                let options = (isListed ? [] : [shown]) + models + [Self.customLLMManualEntryLabel]
-                FixedWidthPopUp(
-                    selection: shown,
-                    options: options,
-                    disabledOptions: isListed ? [] : [shown],
-                    onChange: { choice in
-                        if choice == Self.customLLMManualEntryLabel {
-                            customLLMManualModelEntry = true
-                        } else {
-                            onModelChange(choice)
-                        }
-                    }
-                )
-                .frame(height: 24)
-                .accessibilityLabel("Custom LLM model")
+                // The shared control keeps a saved model the endpoint no longer lists visible.
+                MuesliSettingControl(controller: controller, id: "summary_custom_llm_model")
+                Button {
+                    customLLMManualModelEntry = true
+                } label: {
+                    Image(systemName: "character.cursor.ibeam")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("Type a model id")
+                .accessibilityLabel("Type a model id")
             } else {
                 settingsModelTextField(
                     currentModel: model,
