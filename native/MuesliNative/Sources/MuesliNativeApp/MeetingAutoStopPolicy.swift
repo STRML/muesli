@@ -187,6 +187,8 @@ struct MeetingAutoStopSource: Equatable {
 struct MeetingAutoStopTracker: Equatable {
     private(set) var source: MeetingAutoStopSource?
     private(set) var lastSeenAt: Date?
+    /// Whether the latest observation found the call. Nil until the first one.
+    private var lastObservationMatched: Bool?
     private var observedBeforeRecordingStarted = false
     private var platformBindingDeadline: Date?
 
@@ -199,9 +201,17 @@ struct MeetingAutoStopTracker: Equatable {
         source != nil
     }
 
+    /// The call was seen during this recording and the latest observation no longer finds it.
+    /// Unlike the signal-loss alert this does not wait out the grace period: it only words the
+    /// scheduled-end popup, which has no use for a delay.
+    var hasLostSource: Bool {
+        source != nil && lastSeenAt != nil && lastObservationMatched == false
+    }
+
     mutating func arm(source: MeetingAutoStopSource?) {
         self.source = source
         lastSeenAt = nil
+        lastObservationMatched = nil
         observedBeforeRecordingStarted = false
         platformBindingDeadline = nil
     }
@@ -209,6 +219,7 @@ struct MeetingAutoStopTracker: Equatable {
     mutating func disarm() {
         source = nil
         lastSeenAt = nil
+        lastObservationMatched = nil
         observedBeforeRecordingStarted = false
         platformBindingDeadline = nil
     }
@@ -252,8 +263,10 @@ struct MeetingAutoStopTracker: Equatable {
         if let candidate, matches(candidate, now: now) {
             source = currentSource.refined(with: candidate)
             lastSeenAt = now
+            lastObservationMatched = true
             return false
         }
+        lastObservationMatched = false
 
         guard let lastSeenAt else {
             return false

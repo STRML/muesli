@@ -12465,9 +12465,15 @@ public final class MuesliController: NSObject {
 
     private func showMeetingEndNotification(title: String) {
         guard isMeetingRecording() else { return }
+        // The call tracker may already know the call is over; say so instead of guessing from the clock.
+        let callEndedBy = activeMeetingAutoStop.hasLostSource
+            ? activeMeetingAutoStop.source?.platform?.displayName ?? "Meeting"
+            : nil
         meetingNotification.show(
-            title: "Scheduled time ended",
-            subtitle: "\(title) may still be ongoing. Stop when finished.",
+            title: callEndedBy.map { "\($0) call ended" } ?? "Scheduled time ended",
+            subtitle: callEndedBy == nil
+                ? "\(title) may still be ongoing. Stop when finished."
+                : "\(title). Stop transcribing?",
             actionLabel: "Stop Transcribing",
             dismissAfter: 45,
             onStartRecording: { [weak self] in

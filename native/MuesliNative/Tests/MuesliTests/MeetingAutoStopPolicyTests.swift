@@ -143,4 +143,26 @@ struct MeetingAutoStopPolicyTests {
         let shouldStop10 = tracker.observe(candidate: nil, now: now.addingTimeInterval(31), gracePeriod: 20)
         #expect(shouldStop10)
     }
+
+    @Test("a seen call that is no longer found counts as lost at once, and returns when it is found again")
+    func lostSourceDoesNotWaitForGrace() {
+        var tracker = MeetingAutoStopTracker()
+        tracker.arm(source: MeetingAutoStopSource(candidate: candidate()))
+        #expect(!tracker.hasLostSource)
+        _ = tracker.observe(candidate: candidate(), now: now, gracePeriod: 20)
+        #expect(!tracker.hasLostSource)
+        _ = tracker.observe(candidate: nil, now: now.addingTimeInterval(1), gracePeriod: 20)
+        #expect(tracker.hasLostSource)
+        _ = tracker.observe(candidate: candidate(), now: now.addingTimeInterval(2), gracePeriod: 20)
+        #expect(!tracker.hasLostSource)
+    }
+
+    @Test("a call that was never seen is not reported lost")
+    func unseenSourceIsNotLost() throws {
+        var tracker = MeetingAutoStopTracker()
+        let url = try #require(URL(string: "https://\(room)"))
+        tracker.arm(source: MeetingAutoStopSource(meetingURL: url))
+        _ = tracker.observe(candidate: nil, now: now, gracePeriod: 20)
+        #expect(!tracker.hasLostSource)
+    }
 }
