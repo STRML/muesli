@@ -8,8 +8,10 @@ final class CalendarMenuMeetingPayload: NSObject {
     let calendarOccurrence: CalendarOccurrenceReference
     let endDate: Date
     let autoStopSource: MeetingAutoStopSource?
+    let meetingURL: URL?
 
     init(event: UnifiedCalendarEvent) {
+        self.meetingURL = event.meetingURL
         self.event = event
         self.title = event.title
         self.calendarOccurrence = event.resolvedCalendarOccurrence
@@ -431,6 +433,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let record = actionItem(title: "Record Meeting", action: #selector(MuesliController.startMeetingFromCalendarMenuItem(_:)))
             record.representedObject = payload
             actions.addItem(record)
+            if payload.meetingURL != nil {
+                let join = actionItem(title: "Record and Join", action: #selector(MuesliController.joinAndRecordFromCalendarMenuItem(_:)))
+                join.representedObject = payload
+                join.toolTip = "Open the meeting link and start transcribing."
+                actions.addItem(join)
+            }
             let hide = actionItem(title: "Hide from muesli", action: #selector(MuesliController.hideCalendarEventFromMenuItem(_:)))
             hide.representedObject = payload
             hide.toolTip = "Hide this occurrence from Coming Up and reminders. The calendar event is not deleted."

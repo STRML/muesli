@@ -7246,6 +7246,18 @@ public final class MuesliController: NSObject {
         hideCalendarEvent(payload.event)
     }
 
+    /// "Record and Join" in the menu bar: the same path as Join & Transcribe in Coming Up.
+    @objc func joinAndRecordFromCalendarMenuItem(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? CalendarMenuMeetingPayload,
+              let meetingURL = payload.meetingURL else { return }
+        joinAndRecord(
+            title: payload.title,
+            meetingURL: meetingURL,
+            endDate: payload.endDate,
+            calendarOccurrence: payload.calendarOccurrence
+        )
+    }
+
     @objc func startMeetingFromCalendarMenuItem(_ sender: NSMenuItem) {
         if let payload = sender.representedObject as? CalendarMenuMeetingPayload {
             startMeetingRecordingFromEntryPoint(
