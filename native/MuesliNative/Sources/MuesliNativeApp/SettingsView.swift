@@ -2248,8 +2248,22 @@ struct SettingsView: View {
 
                 if appState.config.showMeetingDetectionNotification {
                     Divider().background(MuesliTheme.surfaceBorder)
+
+                    settingsRow("Auto-record detected calls") {
+                        settingsControl("auto_record_detected_calls")
+                    }
+                    settingsDescription("Start transcribing 5 seconds after a call is detected. Cancel it from the sidebar entry. The meeting is named after the matching calendar event.")
+
+                    Divider().background(MuesliTheme.surfaceBorder)
                     mutedMeetingDetectionAppsControl
                 }
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                settingsRow("Auto-join at start") {
+                    settingsControl("auto_join_meetings")
+                }
+                settingsDescription("Open the meeting link and start transcribing when a calendar meeting starts. You can also turn this on for one meeting from the sidebar.")
             }
 
             settingsSection("Calendars") {

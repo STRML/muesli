@@ -1830,6 +1830,10 @@ struct AppConfig: Codable {
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
     var autoRecordMeetings: Bool = false
+    /// Open the meeting link and start transcribing when a calendar meeting starts. Off by default.
+    var autoJoinMeetingsAtStart: Bool = false
+    /// Start transcribing by itself a few seconds after a call is detected. On by default.
+    var autoRecordDetectedCalls: Bool = true
     var upcomingMeetingsHourCount: Int?
     var upcomingMeetingsWindow: UpcomingMeetingsWindow {
         .resolve(dayCount: upcomingMeetingsDayCount, hourCount: upcomingMeetingsHourCount)
@@ -2021,6 +2025,8 @@ struct AppConfig: Codable {
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
         case autoRecordMeetings = "auto_record_meetings"
+        case autoJoinMeetingsAtStart = "auto_join_meetings_at_start"
+        case autoRecordDetectedCalls = "auto_record_detected_calls"
         case upcomingMeetingsHourCount = "upcoming_meetings_hour_count"
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
@@ -2204,6 +2210,8 @@ struct AppConfig: Codable {
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
+        autoJoinMeetingsAtStart = (try? c.decode(Bool.self, forKey: .autoJoinMeetingsAtStart)) ?? defaults.autoJoinMeetingsAtStart
+        autoRecordDetectedCalls = (try? c.decode(Bool.self, forKey: .autoRecordDetectedCalls)) ?? defaults.autoRecordDetectedCalls
         let decodedHours = try? c.decode(Int.self, forKey: .upcomingMeetingsHourCount)
         upcomingMeetingsHourCount = [6, 12].contains(decodedHours ?? 0) ? decodedHours : nil
         if c.contains(.upcomingMeetingsDayCount) {
