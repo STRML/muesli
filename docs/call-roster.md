@@ -37,5 +37,6 @@ Each row is a test in `CallRosterParserTests`, `CallRosterNamingTests` or `CallR
 | R13 | Exactly one unnamed speaker and one unmatched roster name | The speaker is named | The unmatched name belongs to a silent attendee | Named, and the user can change it |
 | R14 | A speaker already matched by voiceprint | Never overwritten | A recognized voice is renamed | Unchanged |
 | R15 | The read takes longer than its budget | The pass is dropped | Evaluation of the call stalls | Nothing |
+| R16 | A meeting follows a Meet call, then the next one is recorded (Zoom, or another Meet) | The roster is keyed by meeting, so the next meeting starts empty | A speaker in the later meeting is named from the earlier call | Nothing carried over |
 
 Calls in native apps (Zoom, Teams) are not read yet. Their window trees differ, and the parser takes plain text nodes, so a reader for them needs no change here.
