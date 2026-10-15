@@ -105,7 +105,9 @@ done
 case "$LANE" in
   "")
     DEV_APP_NAME="MuesliDev"
-    DEV_BUNDLE_ID="com.muesli.dev"
+    # com.muesli.dev belongs to upstream's Apple team; set MUESLI_DEV_BUNDLE_ID to an id your own
+    # team can register (needed for iCloud, see scripts/dev-sign-cloud.sh).
+    DEV_BUNDLE_ID="${MUESLI_DEV_BUNDLE_ID:-com.muesli.dev}"
     ;;
   A|a|B|b|C|c)
     LANE_UPPER="$(printf '%s' "$LANE" | tr '[:lower:]' '[:upper:]')"
@@ -150,6 +152,10 @@ BUILD_ENV=(
 )
 if [[ -n "$LANE" ]]; then
   BUILD_ENV+=(MUESLI_EXECUTABLE_NAME="$DEV_APP_NAME")
+fi
+# Build without any telemetry (an unconfigured build sends nothing).
+if [[ "${MUESLI_DISABLE_TELEMETRY:-0}" == "1" ]]; then
+  BUILD_ENV+=(MUESLI_TELEMETRYDECK_APP_ID="" MUESLI_TELEMETRY_CHANNEL="")
 fi
 
 use_local_only_entitlements() {
@@ -252,8 +258,14 @@ fi
 env "${BUILD_ENV[@]}" "$ROOT/scripts/build_native_app.sh" debug
 
 echo ""
-echo "Launching $DEV_APP_NAME..."
-open "$DEV_APP"
+if [[ "${MUESLI_DEV_NO_LAUNCH:-0}" == "1" ]]; then
+  # An unsigned build must not run: macOS ties permission grants to the signing identity, so
+  # launching it asks for every permission again. dev-test-local.sh signs it first.
+  echo "Not launching $DEV_APP_NAME (MUESLI_DEV_NO_LAUNCH=1)."
+else
+  echo "Launching $DEV_APP_NAME..."
+  open "$DEV_APP"
+fi
 
 echo ""
 echo "=== Dev Test Ready ==="

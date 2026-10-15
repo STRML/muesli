@@ -13,6 +13,13 @@ enum MeetingResumePolicy {
         status == .completed
     }
 
+    /// A resumed meeting that began from a calendar event keeps the call-ended warning that a
+    /// scheduled start has. Treating every resume as a manual start meant it never warned when the
+    /// call ended, so a resumed recording could run on through the next meeting.
+    static func startOrigin(hasCalendarEvent: Bool) -> MeetingRecordingStartOrigin {
+        hasCalendarEvent ? .scheduledMeetingPrompt : .manual
+    }
+
     /// Separator inserted between the prior transcript and the newly recorded one
     /// when a meeting is resumed (Approach A — concatenate, see the PRD).
     static let resumeSeparator = "\n\n— Resumed —\n\n"

@@ -136,6 +136,7 @@ struct SettingsView: View {
     }
 
     @State private var chatGPTSignInError: String?
+    @State private var customLLMManualModelEntry = false
     @State private var isSigningInChatGPT = false
     @State private var openRouterSignInError: String?
     @State private var isSigningInOpenRouter = false
@@ -1168,6 +1169,14 @@ struct SettingsView: View {
             .id(FeatureTourTarget.liveCaptionsSetting.rawValue)
             .featureTourTarget(.liveCaptionsSetting)
             Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow(
+                "Live speaker labels",
+                description: "Labels other voices Speaker 1, 2 while recording. The final transcript is unchanged. Downloads a model on first use.",
+                controlWidth: meetingControlWidth
+            ) {
+                settingsControl("live_speaker_labels")
+            }
+            Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Final transcript", controlWidth: meetingControlWidth) {
                 if usesUnifiedMeetingTranscript {
                     Text("\(appState.config.resolvedMeetingLiveCaptionBackend.label) (same model)")
@@ -1584,6 +1593,23 @@ struct SettingsView: View {
         }
     }
 
+    /// Private meetings are never sent to a summary or chat backend unless it is switched on here.
+    private var privateMeetingsSettingsSection: some View {
+        settingsSection("Private Meetings") {
+            Text("Mark a meeting or folder private with the lock. Private meetings are kept out of summaries, titles, Ask Meetings, and auto-export unless the backend below is allowed. Turn on only services you trust with private content, such as your own server.")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, MuesliTheme.spacing8)
+            ForEach(Array(MeetingSummaryBackendOption.all.enumerated()), id: \.element.backend) { index, option in
+                if index > 0 { Divider().background(MuesliTheme.surfaceBorder) }
+                settingsRow("Allow on \(option.label)", controlWidth: meetingControlWidth) {
+                    settingsControl("private_trust_\(option.backend)")
+                }
+            }
+        }
+    }
+
     private var meetingSummarySettingsSection: some View {
         settingsSection("Meeting Summaries") {
             settingsRow(
@@ -1863,12 +1889,65 @@ struct SettingsView: View {
         }
         Divider().background(MuesliTheme.surfaceBorder)
         settingsRow("Model", controlWidth: meetingControlWidth) {
-            settingsModelTextField(
-                currentModel: model,
-                placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
-                    ? "claude-3-5-sonnet-20241022"
-                    : "custom-model-id"
-            ) { val in onModelChange(val) }
+            customLLMModelControl(model: model, onModelChange: onModelChange)
+        }
+        // Lists the endpoint's models once the user stops editing the connection settings.
+        .task(id: CustomLLMModelCatalog.fingerprint(appState.config)) {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            controller.loadCustomLLMModels()
+        }
+        if case .failed(let message) = appState.customLLMModelsState {
+            settingsDescription("Could not list models: \(message). Type a model id instead.")
+                .lineLimit(2)
+        }
+    }
+
+    /// The endpoint's own model list when it has one, with manual entry as the way out for servers that
+    /// do not list models or a model that is not on the list.
+    @ViewBuilder
+    private func customLLMModelControl(model: String, onModelChange: @escaping (String) -> Void) -> some View {
+        let models = appState.customLLMModels
+        let isLoading = appState.customLLMModelsState == .loading
+        HStack(spacing: 6) {
+            if !models.isEmpty, !customLLMManualModelEntry {
+                // The shared control keeps a saved model the endpoint no longer lists visible.
+                MuesliSettingControl(controller: controller, id: "summary_custom_llm_model")
+                Button {
+                    customLLMManualModelEntry = true
+                } label: {
+                    Image(systemName: "character.cursor.ibeam")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("Type a model id")
+                .accessibilityLabel("Type a model id")
+            } else {
+                settingsModelTextField(
+                    currentModel: model,
+                    placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
+                        ? "claude-3-5-sonnet-20241022"
+                        : "custom-model-id"
+                ) { val in onModelChange(val) }
+            }
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Button {
+                    customLLMManualModelEntry = false
+                    controller.loadCustomLLMModels(force: true)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("List the models this endpoint serves")
+                .accessibilityLabel("Refresh model list")
+            }
         }
     }
 
@@ -2011,7 +2090,21 @@ struct SettingsView: View {
                 screenContextRow("Meeting context", includesScreenOCR: true)
             }
 
+            settingsSection("Recordings storage") {
+                settingsRow("Storage budget", controlWidth: meetingControlWidth) {
+                    settingsControl("recordings_budget")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Keep recordings at least", controlWidth: meetingControlWidth) {
+                    settingsControl("recordings_min_age")
+                }
+                RecordingsUsageText(controller: controller, budgetGB: appState.config.recordingsBudgetGB)
+                    .padding(.top, MuesliTheme.spacing8)
+            }
+
             meetingSummarySettingsSection
+
+            privateMeetingsSettingsSection
 
             settingsSection("Meeting Notes") {
                 settingsRow("Default template", controlWidth: meetingControlWidth) {
@@ -2078,11 +2171,43 @@ struct SettingsView: View {
                     settingsRow("File format") {
                         settingsControl("export_format")
                     }
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    settingsRow("Keep notes up to date") {
+                        settingsControl("auto_export_keep_in_sync")
+                    }
+                    if appState.config.autoExportKeepInSync {
+                        Divider().background(MuesliTheme.surfaceBorder)
+                        settingsRow("File by meeting folder") {
+                            settingsControl("auto_export_by_folder")
+                        }
+                        Text("One Markdown note per meeting, named with its id and updated in place. It is moved when you rename or refile the meeting, and removed when you delete the meeting or mark it private. Notes are written as Markdown with Obsidian frontmatter; PDF is not used in this mode.")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, MuesliTheme.spacing8)
+                    }
                 }
                 Text("Automatically saves each completed meeting to the chosen folder in the selected format.")
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .padding(.horizontal, MuesliTheme.spacing16)
+            }
+
+            settingsSection("Folder Suggestions") {
+                settingsRow("Suggest folders for meetings") {
+                    settingsControl("auto_classify_meetings")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Auto-file confident matches") {
+                    settingsControl("auto_apply_folder_suggestions")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsRow("Unfiled meetings", controlWidth: meetingControlWidth) {
+                    actionButton(appState.isClassifyingUnfiledMeetings ? "Classifying…" : "Classify Unfiled Meetings") {
+                        controller.classifyUnfiledMeetings()
+                    }
+                }
+                settingsDescription("Suggestions appear in the Meetings Inbox. Muesli learns from where you file meetings: recurring series, attendees and titles. When nothing matches, your summary model may suggest a folder; private meetings are only sent to backends you trust. AI suggestions are never filed automatically.")
             }
 
             settingsSection("Meeting Notifications") {
@@ -2116,8 +2241,29 @@ struct SettingsView: View {
 
                 if appState.config.showMeetingDetectionNotification {
                     Divider().background(MuesliTheme.surfaceBorder)
+
+                    settingsRow("Auto-record detected calls") {
+                        settingsControl("auto_record_detected_calls")
+                    }
+                    settingsDescription("Start transcribing 5 seconds after a call is detected. Cancel it from the sidebar entry. The meeting is named after the matching calendar event.")
+
+                    Divider().background(MuesliTheme.surfaceBorder)
                     mutedMeetingDetectionAppsControl
                 }
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                settingsRow("Read participant names from calls") {
+                    settingsControl("read_call_participants")
+                }
+                settingsDescription("While recording a call in your browser, read the names shown on the call page to list who attended and to name speakers. Only the call's own tab is read, and only while it is in front.")
+
+                Divider().background(MuesliTheme.surfaceBorder)
+
+                settingsRow("Auto-join at start") {
+                    settingsControl("auto_join_meetings")
+                }
+                settingsDescription("Open the meeting link and start transcribing when a calendar meeting starts. You can also turn this on for one meeting from the sidebar.")
             }
 
             settingsSection("Calendars") {

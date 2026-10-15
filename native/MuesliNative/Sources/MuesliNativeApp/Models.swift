@@ -1765,6 +1765,32 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
     }
 }
 
+extension AppConfig {
+    /// Reverts any change to the summary backend while `lockedSummaryBackend` is set.
+    mutating func enforceSummaryBackendLock() {
+        let locked = lockedSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
+    }
+
+    /// Remembers (or, with nil, clears) the folder picked for an upcoming meeting, and drops
+    /// choices for meetings that started more than a week ago.
+    mutating func planFolder(_ folderID: Int64?, for occurrenceKey: String, startTime: Date, now: Date = Date()) {
+        plannedCalendarFolders = plannedCalendarFolders.filter { $0.value.startTime > now.addingTimeInterval(-7 * 86_400) }
+        plannedCalendarFolders[occurrenceKey] = folderID.map { PlannedCalendarFolder(folderID: $0, startTime: startTime) }
+    }
+
+    /// The remembered folder, or nil when none was picked or the folder no longer exists.
+    func plannedFolderID(for occurrenceKey: String, existingFolderIDs: Set<Int64>) -> Int64? {
+        guard let id = plannedCalendarFolders[occurrenceKey]?.folderID, existingFolderIDs.contains(id) else { return nil }
+        return id
+    }
+}
+
+struct PlannedCalendarFolder: Codable, Equatable {
+    var folderID: Int64
+    var startTime: Date
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var enablePushToTalk: Bool = true
@@ -1797,10 +1823,19 @@ struct AppConfig: Codable {
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
+    /// Disk budget for saved meeting audio in GB. 0 means unlimited: never prune.
+    var recordingsBudgetGB: Int = 0
+    var recordingsMinimumAgeDays: Int = 7
     var defaultMeetingTemplateID: String = MeetingTemplates.autoID
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
     var autoRecordMeetings: Bool = false
+    /// Open the meeting link and start transcribing when a calendar meeting starts. Off by default.
+    var autoJoinMeetingsAtStart: Bool = false
+    /// Start transcribing by itself a few seconds after a call is detected. On by default.
+    var autoRecordDetectedCalls: Bool = true
+    /// Read the names on a browser call's page while recording, to list who attended and name speakers.
+    var readCallParticipants: Bool = true
     var upcomingMeetingsHourCount: Int?
     var upcomingMeetingsWindow: UpcomingMeetingsWindow {
         .resolve(dayCount: upcomingMeetingsDayCount, hourCount: upcomingMeetingsHourCount)
@@ -1912,6 +1947,9 @@ struct AppConfig: Codable {
     var useCoreAudioTap: Bool = true
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
+    /// Labels system audio as Speaker 1, 2, ... in the Live tab while recording.
+    /// Provisional: the Stop-time diarization pass stays the source of truth.
+    var enableLiveSpeakerLabels: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.
@@ -1923,6 +1961,24 @@ struct AppConfig: Codable {
     var autoExportMarkdownFolderPath: String = ""
     var autoExportMarkdownContent: String = MeetingExportContent.notes.rawValue
     var autoExportFileFormat: String = MeetingAutoExportFileFormat.markdown.rawValue
+    /// Summary backend ids allowed to receive private meetings. Empty by default,
+    /// so private meetings are never sent anywhere until the user opts a backend in.
+    var privateTrustedBackends: [String] = []
+    /// When non-empty, `meetingSummaryBackend` is pinned to this id. Onboarding, ChatGPT sign-in or any
+    /// other writer that sets a different backend is reverted, so text can only go where you chose.
+    var lockedSummaryBackend: String = ""
+    /// Folder picked on an upcoming calendar event, keyed by the occurrence's identity key. The
+    /// meeting is only created when a note or recording starts, and it then lands in this folder.
+    var plannedCalendarFolders: [String: PlannedCalendarFolder] = [:]
+    /// Keep one vault note per meeting up to date (stable name, updated in place, removed when the
+    /// meeting is deleted or becomes private) instead of appending a new file per export.
+    var autoExportKeepInSync: Bool = false
+    /// With keep-in-sync, file each note under its meeting folder.
+    var autoExportByFolder: Bool = true
+    /// Generate folder suggestions for unfiled meetings after they finish.
+    var autoClassifyMeetings: Bool = true
+    /// File a meeting automatically when a learned rule is decisive. LLM suggestions are never applied.
+    var autoApplyFolderSuggestions: Bool = false
     var iCloudSyncEnabled: Bool = false
     var showIOSCompanionPrompt: Bool = true
     var contributionPromptNextWordCount: Int?
@@ -1965,10 +2021,15 @@ struct AppConfig: Codable {
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
+        case recordingsBudgetGB = "recordings_budget_gb"
+        case recordingsMinimumAgeDays = "recordings_minimum_age_days"
         case defaultMeetingTemplateID = "default_meeting_template_id"
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
         case autoRecordMeetings = "auto_record_meetings"
+        case autoJoinMeetingsAtStart = "auto_join_meetings_at_start"
+        case autoRecordDetectedCalls = "auto_record_detected_calls"
+        case readCallParticipants = "read_call_participants"
         case upcomingMeetingsHourCount = "upcoming_meetings_hour_count"
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
@@ -2065,6 +2126,7 @@ struct AppConfig: Codable {
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
+        case enableLiveSpeakerLabels = "enable_live_speaker_labels"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
         case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
@@ -2074,6 +2136,13 @@ struct AppConfig: Codable {
         case autoExportMarkdownFolderPath = "auto_export_markdown_folder_path"
         case autoExportMarkdownContent = "auto_export_markdown_content"
         case autoExportFileFormat = "auto_export_file_format"
+        case privateTrustedBackends = "private_trusted_backends"
+        case lockedSummaryBackend = "locked_summary_backend"
+        case plannedCalendarFolders = "planned_calendar_folders"
+        case autoExportKeepInSync = "auto_export_keep_in_sync"
+        case autoExportByFolder = "auto_export_by_folder"
+        case autoClassifyMeetings = "auto_classify_meetings"
+        case autoApplyFolderSuggestions = "auto_apply_folder_suggestions"
         case iCloudSyncEnabled = "icloud_sync_enabled"
         case showIOSCompanionPrompt = "show_ios_companion_prompt"
         case contributionPromptNextWordCount = "contribution_prompt_next_word_count"
@@ -2137,10 +2206,16 @@ struct AppConfig: Codable {
             meetingTranscriptionBackend = migrated.backend; meetingTranscriptionModel = migrated.model
         }
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
+        // A corrupt budget must never start deleting audio: anything outside 0...100_000 means "unlimited".
+        recordingsBudgetGB = (try? c.decode(Int.self, forKey: .recordingsBudgetGB)).flatMap { (0...100_000).contains($0) ? $0 : nil } ?? defaults.recordingsBudgetGB
+        recordingsMinimumAgeDays = (try? c.decode(Int.self, forKey: .recordingsMinimumAgeDays)).flatMap { (1...3_650).contains($0) ? $0 : nil } ?? defaults.recordingsMinimumAgeDays
         defaultMeetingTemplateID = (try? c.decode(String.self, forKey: .defaultMeetingTemplateID)) ?? defaults.defaultMeetingTemplateID
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
+        autoJoinMeetingsAtStart = (try? c.decode(Bool.self, forKey: .autoJoinMeetingsAtStart)) ?? defaults.autoJoinMeetingsAtStart
+        autoRecordDetectedCalls = (try? c.decode(Bool.self, forKey: .autoRecordDetectedCalls)) ?? defaults.autoRecordDetectedCalls
+        readCallParticipants = (try? c.decode(Bool.self, forKey: .readCallParticipants)) ?? defaults.readCallParticipants
         let decodedHours = try? c.decode(Int.self, forKey: .upcomingMeetingsHourCount)
         upcomingMeetingsHourCount = [6, 12].contains(decodedHours ?? 0) ? decodedHours : nil
         if c.contains(.upcomingMeetingsDayCount) {
@@ -2331,6 +2406,7 @@ struct AppConfig: Codable {
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
         enableLiveStreamingPartials = (try? c.decode(Bool.self, forKey: .enableLiveStreamingPartials)) ?? defaults.enableLiveStreamingPartials
+        enableLiveSpeakerLabels = (try? c.decode(Bool.self, forKey: .enableLiveSpeakerLabels)) ?? defaults.enableLiveSpeakerLabels
         meetingLiveCaptionBackend = MeetingLiveCaptionBackend
             .resolved(try? c.decode(String.self, forKey: .meetingLiveCaptionBackend))
             .rawValue
@@ -2344,6 +2420,13 @@ struct AppConfig: Codable {
         autoExportMarkdownContent = MeetingExportContent(rawValue: decodedAutoExportMarkdownContent)?.rawValue ?? defaults.autoExportMarkdownContent
         let decodedAutoExportFileFormat = (try? c.decode(String.self, forKey: .autoExportFileFormat)) ?? defaults.autoExportFileFormat
         autoExportFileFormat = MeetingAutoExportFileFormat(rawValue: decodedAutoExportFileFormat)?.rawValue ?? defaults.autoExportFileFormat
+        privateTrustedBackends = (try? c.decode([String].self, forKey: .privateTrustedBackends)) ?? defaults.privateTrustedBackends
+        lockedSummaryBackend = (try? c.decode(String.self, forKey: .lockedSummaryBackend)) ?? defaults.lockedSummaryBackend
+        plannedCalendarFolders = (try? c.decode([String: PlannedCalendarFolder].self, forKey: .plannedCalendarFolders)) ?? defaults.plannedCalendarFolders
+        autoExportKeepInSync = (try? c.decode(Bool.self, forKey: .autoExportKeepInSync)) ?? defaults.autoExportKeepInSync
+        autoExportByFolder = (try? c.decode(Bool.self, forKey: .autoExportByFolder)) ?? defaults.autoExportByFolder
+        autoClassifyMeetings = (try? c.decode(Bool.self, forKey: .autoClassifyMeetings)) ?? defaults.autoClassifyMeetings
+        autoApplyFolderSuggestions = (try? c.decode(Bool.self, forKey: .autoApplyFolderSuggestions)) ?? defaults.autoApplyFolderSuggestions
         contributionPromptNextWordCount = try? c.decode(Int.self, forKey: .contributionPromptNextWordCount)
         contributionPromptNextMeetingCount = try? c.decode(Int.self, forKey: .contributionPromptNextMeetingCount)
         contributionGitHubStarClicked = (try? c.decode(Bool.self, forKey: .contributionGitHubStarClicked)) ?? defaults.contributionGitHubStarClicked

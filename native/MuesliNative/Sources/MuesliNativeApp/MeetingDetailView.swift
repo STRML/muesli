@@ -87,6 +87,7 @@ struct MeetingDetailView: View {
     let backLabel: String
     @Environment(\.usesCompactQuickNotes) private var usesCompactQuickNotes
     @State private var isSummarizing = false
+    @State private var recordingPinned = false
     private var isRetranscribing: Bool {
         guard let id = meeting?.id else { return false }
         return appState.meetingRetranscriptions[id]?.isRunning == true
@@ -396,6 +397,7 @@ struct MeetingDetailView: View {
                 } else {
                     MeetingParticipantsView(meetingID: meeting.id, controller: controller)
                         .frame(maxWidth: 150)
+                    MeetingSpeakersView(meetingID: meeting.id, controller: controller)
                 }
                 Spacer(minLength: 0)
                 detailModePicker(for: meeting)
@@ -559,6 +561,7 @@ struct MeetingDetailView: View {
                 meetingID: meeting.id,
                 controller: controller
             )
+            MeetingSpeakersView(meetingID: meeting.id, controller: controller)
         }
     }
 
@@ -785,11 +788,35 @@ struct MeetingDetailView: View {
             && !appState.isMeetingRecording
     }
 
+    /// A lock that shows whether the meeting is private and toggles the meeting's own flag.
+    /// A meeting that is private only through its folder cannot be unlocked from here.
+    @ViewBuilder
+    private func privateToggle(for meeting: MeetingRecord) -> some View {
+        let isPrivate = appState.privateMeetingIDs.contains(meeting.id)
+        let isDirect = appState.directlyPrivateMeetingIDs.contains(meeting.id)
+        let inheritedOnly = isPrivate && !isDirect
+        Button {
+            controller.setMeetingPrivate(id: meeting.id, isPrivate: !isDirect)
+        } label: {
+            Image(systemName: isPrivate ? "lock.fill" : "lock.open")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isPrivate ? MuesliTheme.accent : MuesliTheme.textSecondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(inheritedOnly)
+        .help(inheritedOnly
+            ? "Private because its folder is private. Remove the mark from the folder to change this."
+            : (isPrivate ? "Private meeting. Click to remove the mark." : "Mark this meeting private"))
+        .accessibilityLabel(isPrivate ? "Private meeting" : "Mark meeting private")
+        .accessibilityIdentifier("meeting.private.toggle")
+    }
+
     @ViewBuilder
     private func compactHeaderActions(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
             recordingRecoveryHeaderAction(for: meeting)
             resumeChooserIfAvailable(for: meeting)
+            privateToggle(for: meeting)
             exportMenu(for: meeting)
 
             if isSummarizing {
@@ -1278,6 +1305,14 @@ struct MeetingDetailView: View {
                     }
                 }
 
+                if meeting.savedRecordingPath != nil {
+                    Button {
+                        setRecordingPinned(!recordingPinned, meetingID: meeting.id)
+                    } label: {
+                        Label(recordingPinned ? "Allow Pruning" : "Keep Recording", systemImage: recordingPinned ? "pin.slash" : "pin")
+                    }
+                }
+
                 if controller.canDeleteMeeting(meeting) {
                     Button(role: .destructive) {
                         showDeleteConfirmation = true
@@ -1301,6 +1336,24 @@ struct MeetingDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("More actions")
+        .overlay(alignment: .topTrailing) {
+            if recordingPinned {
+                Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(MuesliTheme.textSecondary).allowsHitTesting(false)
+            }
+        }
+        .task(id: meeting.id) {
+            let service = controller.recordingRetentionService
+            let id = meeting.id
+            recordingPinned = await Task.detached { (try? service.isPinned(meetingID: id)) ?? false }.value
+        }
+    }
+
+    private func setRecordingPinned(_ pinned: Bool, meetingID: Int64) {
+        let service = controller.recordingRetentionService
+        Task {
+            let saved = await Task.detached { (try? service.setPinned(pinned, meetingID: meetingID)) != nil }.value
+            if saved { recordingPinned = pinned }
+        }
     }
 
     private func templateMenuItem(title: String, systemImage: String, isSelected: Bool) -> some View {
@@ -2064,7 +2117,7 @@ private extension View {
     }
 }
 
-private struct MarqueeTitleTextField: View {
+struct MarqueeTitleTextField: View {
     @Binding var text: String
     var titleSize: CGFloat = 30
     let onSubmit: () -> Void
@@ -2080,35 +2133,40 @@ private struct MarqueeTitleTextField: View {
     private var titleFont: Font { .system(size: titleSize, weight: .bold) }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            TextField("Meeting Title", text: $text)
-                .font(titleFont)
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .textFieldStyle(.plain)
-                .lineLimit(1)
-                .opacity(shouldShowMarquee ? 0 : 1)
-                .focused($isTitleFocused)
-                .onSubmit(onSubmit)
-                .onChange(of: text) { _, _ in
-                    onTextChange()
-                    restartMarqueeIfNeeded()
-                }
-                .onChange(of: isTitleFocused) { _, _ in
-                    restartMarqueeIfNeeded()
-                }
+        // The row's size comes from the clear base. The full-width marquee text lives in an
+        // overlay: inside the row it made a title wider than the pane widen the whole page.
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .overlay(alignment: .leading) {
+                ZStack(alignment: .leading) {
+                    TextField("Meeting Title", text: $text)
+                        .font(titleFont)
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1)
+                        .opacity(shouldShowMarquee ? 0 : 1)
+                        .focused($isTitleFocused)
+                        .onSubmit(onSubmit)
+                        .onChange(of: text) { _, _ in
+                            onTextChange()
+                            restartMarqueeIfNeeded()
+                        }
+                        .onChange(of: isTitleFocused) { _, _ in
+                            restartMarqueeIfNeeded()
+                        }
 
-            Text(text.isEmpty ? "Meeting Title" : text)
-                .font(titleFont)
-                .fontWeight(.bold)
-                .foregroundStyle(MuesliTheme.textPrimary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .offset(x: marqueeOffset)
-                .opacity(shouldShowMarquee ? 1 : 0)
-                .allowsHitTesting(false)
-        }
-        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-        .clipped()
+                    Text(text.isEmpty ? "Meeting Title" : text)
+                        .font(titleFont)
+                        .fontWeight(.bold)
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .offset(x: marqueeOffset)
+                        .opacity(shouldShowMarquee ? 1 : 0)
+                        .allowsHitTesting(false)
+                }
+            }
+            .clipped()
         .contentShape(Rectangle())
         .background(
             GeometryReader { proxy in

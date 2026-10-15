@@ -8,8 +8,10 @@ final class CalendarMenuMeetingPayload: NSObject {
     let calendarOccurrence: CalendarOccurrenceReference
     let endDate: Date
     let autoStopSource: MeetingAutoStopSource?
+    let meetingURL: URL?
 
     init(event: UnifiedCalendarEvent) {
+        self.meetingURL = event.meetingURL
         self.event = event
         self.title = event.title
         self.calendarOccurrence = event.resolvedCalendarOccurrence
@@ -35,11 +37,29 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         build()
     }
 
-    func setStatus(_ text: String) {}
+    /// Dictation changes state without a menu rebuild, so the recording dot follows it here.
+    func setStatus(_ text: String) {
+        applyIcon()
+    }
 
     func refresh() {
         rebuildMenu()
         updateMenuBarTitle()
+        applyIcon()
+    }
+
+    /// The menu bar mark, with a red dot while a meeting or dictation is recording, and the same dot
+    /// on the Dock icon.
+    private func applyIcon() {
+        guard let button = statusItem.button else { return }
+        let recording = controller.isRecordingIndicatorActive
+        let base = MenuBarIconRenderer.make(choice: controller.config.menuBarIcon)
+        if recording, let base {
+            button.image = MenuBarIconRenderer.withRecordingDot(base)
+        } else {
+            button.image = base
+        }
+        DockRecordingIndicator.update(isRecording: recording)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -52,13 +72,16 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     func refreshIcon() {
-        statusItem.button?.image = MenuBarIconRenderer.make(choice: controller.config.menuBarIcon)
+        applyIcon()
         updateMenuBarTitle()
     }
 
     func updateMenuBarTitle() {
         let detail: String?
-        if let countdownOverride {
+        if controller.appState.isMeetingCallEnded {
+            // Visible even with the main window closed; the menu below has Stop.
+            detail = "Call ended?"
+        } else if let countdownOverride {
             detail = countdownOverride
         } else if controller.config.showNextMeetingInMenuBar {
             let now = Date()
@@ -92,10 +115,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     private func build() {
         if let button = statusItem.button {
-            button.image = MenuBarIconRenderer.make(choice: controller.config.menuBarIcon)
             button.imageScaling = .scaleProportionallyDown
             button.toolTip = AppIdentity.displayName
         }
+        applyIcon()
         rebuildMenu()
         updateMenuBarTitle()
         statusItem.menu = menu
@@ -307,6 +330,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let record = actionItem(title: "Record Meeting", action: #selector(MuesliController.startMeetingFromCalendarMenuItem(_:)))
             record.representedObject = payload
             actions.addItem(record)
+            if payload.meetingURL != nil {
+                let join = actionItem(title: "Record and Join", action: #selector(MuesliController.joinAndRecordFromCalendarMenuItem(_:)))
+                join.representedObject = payload
+                join.toolTip = "Open the meeting link and start transcribing."
+                actions.addItem(join)
+            }
             let hide = actionItem(title: "Hide from Muesli", action: #selector(MuesliController.hideCalendarEventFromMenuItem(_:)))
             hide.representedObject = payload
             hide.toolTip = "Hide this occurrence from Coming Up and reminders. The calendar event is not deleted."

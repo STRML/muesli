@@ -139,12 +139,284 @@ struct SidebarView: View {
         }
     }
 
+    private var activeRecordingItem: ActiveRecordingSidebarItem? {
+        ActiveRecordingSidebarItem.make(
+            activeMeetingID: appState.activeMeetingID,
+            isPaused: appState.isMeetingRecordingPaused,
+            isCallEnded: appState.isMeetingCallEnded,
+            titleFor: { id in appState.meetingRows.first(where: { $0.id == id })?.title }
+        )
+    }
+
+    private func isShowingMeeting(_ item: ActiveRecordingSidebarItem) -> Bool {
+        appState.selectedMeetingID == item.meetingID
+            && (appState.selectedTab == .meetings || appState.selectedTab == .timeline)
+            && appState.meetingsNavigationState == .document(item.meetingID)
+    }
+
+    private func openActiveRecording(_ item: ActiveRecordingSidebarItem) {
+        guard !isShowingMeeting(item) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            controller.showMeetingDocument(id: item.meetingID)
+        }
+    }
+
+    private func collapsedRecordingItem(_ item: ActiveRecordingSidebarItem) -> some View {
+        Button {
+            openActiveRecording(item)
+        } label: {
+            RecordingPulseDot(isPulsing: item.isPulsing, color: recordingAccent(for: item))
+                .frame(width: 40, height: 36)
+                .background(isShowingMeeting(item) ? MuesliTheme.surfacePrimary : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .help(item.helpText)
+        .accessibilityLabel(item.accessibilityLabel)
+        .contextMenu { callEndedMenu(for: item) }
+    }
+
+    private func recordingAccent(for item: ActiveRecordingSidebarItem) -> Color {
+        item.isCallEnded ? MuesliTheme.attention : MuesliTheme.recording
+    }
+
+    @ViewBuilder
+    private func callEndedMenu(for item: ActiveRecordingSidebarItem) -> some View {
+        if item.isCallEnded {
+            Button("Stop Transcribing") { controller.stopMeetingRecording() }
+            Button("Keep Recording, Stop Asking") { controller.dismissMeetingCallEndedAlert() }
+        }
+    }
+
+    private func activeRecordingRow(_ item: ActiveRecordingSidebarItem) -> some View {
+        let isSelected = isShowingMeeting(item)
+        let accent = recordingAccent(for: item)
+        return HStack(spacing: MuesliTheme.spacing4) {
+            Button {
+                openActiveRecording(item)
+            } label: {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    RecordingPulseDot(isPulsing: item.isPulsing, color: accent)
+                        .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.statusLabel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(accent)
+                        Text(item.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(isSelected ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
+                }
+                // The padding sits inside the button so the whole row stays clickable.
+                .padding(.leading, sidebarRowHorizontalPadding)
+                .padding(.vertical, MuesliTheme.spacing8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(item.helpText)
+            .accessibilityLabel(item.accessibilityLabel)
+
+            if let stopLabel = item.stopActionLabel {
+                callEndedActions(stopLabel: stopLabel, accent: accent)
+            }
+        }
+        .padding(.trailing, sidebarRowHorizontalPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .fill(isSelected ? MuesliTheme.surfaceSelected : accent.opacity(item.isCallEnded ? 0.18 : 0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                .stroke(accent.opacity(item.isCallEnded ? 0.7 : 0), lineWidth: 1)
+        )
+        .padding(.horizontal, sidebarRowOuterPadding)
+        .contextMenu { callEndedMenu(for: item) }
+    }
+
+    private func callEndedActions(stopLabel: String, accent: Color) -> some View {
+        HStack(spacing: MuesliTheme.spacing4) {
+            Button(stopLabel) { controller.stopMeetingRecording() }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.black.opacity(0.88))
+                .padding(.horizontal, MuesliTheme.spacing8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(accent))
+                .help("Stop transcribing this meeting")
+            Button {
+                controller.dismissMeetingCallEndedAlert()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Keep recording and stop asking")
+            .accessibilityLabel("Dismiss call ended alert")
+        }
+    }
+
+    // MARK: Meeting entry (upcoming event or detected call)
+
+    private func meetingEntryRow(_ entry: SidebarMeetingEntry) -> some View {
+        let accent = entryAccent(entry)
+        return VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                entryIcon(entry, accent: accent)
+                    .frame(width: sidebarIconColumnWidth, height: sidebarIconColumnWidth, alignment: .center)
+                VStack(alignment: .leading, spacing: 1) {
+                    SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(entryStatus(entry, now: context.date))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(accent)
+                            .monospacedDigit()
+                    }
+                    Text(entryTitle(entry))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textPrimary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+            }
+            entryActions(entry, accent: accent)
+        }
+        .padding(.horizontal, sidebarRowHorizontalPadding)
+        .padding(.vertical, MuesliTheme.spacing8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).fill(accent.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).stroke(accent.opacity(0.35), lineWidth: 1))
+        .padding(.horizontal, sidebarRowOuterPadding)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func entryAccent(_ entry: SidebarMeetingEntry) -> Color {
+        switch entry {
+        case .upcoming: MuesliTheme.accent
+        case .callDetected: MuesliTheme.attention
+        }
+    }
+
+    @ViewBuilder
+    private func entryIcon(_ entry: SidebarMeetingEntry, accent: Color) -> some View {
+        switch entry {
+        case .upcoming:
+            Image(systemName: "calendar")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(accent)
+        case .callDetected:
+            RecordingPulseDot(isPulsing: true, color: accent)
+        }
+    }
+
+    private func entryStatus(_ entry: SidebarMeetingEntry, now: Date) -> String {
+        switch entry {
+        case .upcoming(let upcoming): upcoming.countdownLabel(now: now)
+        case .callDetected(let call): call.statusLabel(now: now)
+        }
+    }
+
+    private func entryTitle(_ entry: SidebarMeetingEntry) -> String {
+        switch entry {
+        case .upcoming(let upcoming): upcoming.title
+        case .callDetected(let call): call.title
+        }
+    }
+
+    @ViewBuilder
+    private func entryActions(_ entry: SidebarMeetingEntry, accent: Color) -> some View {
+        switch entry {
+        case .upcoming(let upcoming):
+            HStack(spacing: MuesliTheme.spacing8) {
+                entryCapsuleButton(upcoming.joinActionLabel, accent: accent) {
+                    controller.joinUpcomingMeetingNow(eventKey: upcoming.eventKey)
+                }
+                .help(upcoming.meetingURL == nil ? "Start transcribing this meeting" : "Open the meeting link and start transcribing")
+                Button {
+                    controller.toggleAutoJoin(eventKey: upcoming.eventKey)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: upcoming.autoJoinsAtStart ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Auto-join at start")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(upcoming.autoJoinsAtStart ? accent : MuesliTheme.textSecondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Join and transcribe automatically when this meeting starts")
+                .accessibilityLabel("Auto-join at start")
+                .accessibilityValue(upcoming.autoJoinsAtStart ? "On" : "Off")
+                Spacer(minLength: 0)
+            }
+        case .callDetected(let call):
+            HStack(spacing: MuesliTheme.spacing8) {
+                entryCapsuleButton(call.recordsAt == nil ? "Record" : "Record now", accent: accent) {
+                    controller.startDetectedCallNow()
+                }
+                Button(call.recordsAt == nil ? "Dismiss" : "Cancel") {
+                    controller.cancelDetectedCall()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .help("Do not record this call")
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func entryCapsuleButton(_ title: String, accent: Color, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Color.black.opacity(0.88))
+            .padding(.horizontal, MuesliTheme.spacing8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(accent))
+    }
+
+    private func collapsedMeetingEntry(_ entry: SidebarMeetingEntry) -> some View {
+        let accent = entryAccent(entry)
+        return Button {
+            switch entry {
+            case .upcoming(let upcoming): controller.joinUpcomingMeetingNow(eventKey: upcoming.eventKey)
+            case .callDetected: controller.startDetectedCallNow()
+            }
+        } label: {
+            entryIcon(entry, accent: accent)
+                .frame(width: 40, height: 36)
+                .background(accent.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .help("\(entryStatus(entry, now: Date())): \(entryTitle(entry))")
+        .accessibilityLabel("\(entryStatus(entry, now: Date())): \(entryTitle(entry))")
+        .contextMenu {
+            if case .callDetected = entry {
+                Button("Cancel Recording This Call") { controller.cancelDetectedCall() }
+            }
+        }
+    }
+
     private var collapsedSidebar: some View {
         VStack(spacing: MuesliTheme.spacing8) {
             sidebarToggleButton
                 .padding(.top, MuesliTheme.spacing16)
                 .padding(.bottom, MuesliTheme.spacing12)
 
+            if let recording = activeRecordingItem {
+                collapsedRecordingItem(recording)
+            } else if let entry = appState.sidebarMeetingEntry {
+                collapsedMeetingEntry(entry)
+            }
             collapsedItem(tab: .timeline, icon: "clock", label: "Timeline")
             collapsedItem(tab: .dictations, icon: "waveform", label: "Dictations")
             collapsedItem(tab: .meetings, icon: "person.2", label: "Meetings")
@@ -214,6 +486,11 @@ struct SidebarView: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: MuesliTheme.spacing4) {
+                        if let recording = activeRecordingItem {
+                            activeRecordingRow(recording)
+                        } else if let entry = appState.sidebarMeetingEntry {
+                            meetingEntryRow(entry)
+                        }
                         sidebarItem(tab: .timeline, icon: "clock", label: "Timeline")
                         sidebarItem(tab: .dictations, icon: "waveform", label: "Dictations")
                         meetingsSection
@@ -432,9 +709,20 @@ struct SidebarView: View {
                         icon: "tray.2",
                         label: "All Meetings",
                         count: appState.totalMeetingCount,
-                        isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == nil
+                        isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == nil && !appState.isFolderInboxSelected
                     ) {
                         controller.showMeetingsHome()
+                    }
+
+                    if !appState.folders.isEmpty {
+                        meetingFilterRow(
+                            icon: "tray.and.arrow.down",
+                            label: "Inbox",
+                            count: Set(appState.folderSuggestionRows.map(\.suggestion.meetingID)).count,
+                            isSelected: appState.selectedTab == .meetings && appState.isFolderInboxSelected
+                        ) {
+                            controller.showFolderInbox()
+                        }
                     }
 
                     ForEach(folderTree.visibleFolders) { folder in
@@ -447,7 +735,7 @@ struct SidebarView: View {
                                 .id(folder.id)
                         } else {
                             meetingFilterRow(
-                                icon: "folder",
+                                icon: folder.isPrivate ? "lock.fill" : "folder",
                                 label: folder.name,
                                 count: appState.meetingCountsByFolder[folder.id] ?? 0,
                                 isSelected: appState.selectedTab == .meetings && appState.selectedFolderID == folder.id,
@@ -481,6 +769,9 @@ struct SidebarView: View {
                                     Button("Move to Top Level") {
                                         controller.moveFolder(id: folder.id, toParent: nil)
                                     }
+                                }
+                                Button(folder.isPrivate ? "Remove Private Mark" : "Mark Folder Private") {
+                                    controller.setFolderPrivate(id: folder.id, isPrivate: !folder.isPrivate)
                                 }
                                 Divider()
                                 Button("Delete", role: .destructive) {

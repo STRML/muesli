@@ -150,6 +150,13 @@ enum OpenRouterModelCatalogLoadState: Equatable {
     case failed(String)
 }
 
+enum CustomLLMModelCatalogLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -163,7 +170,14 @@ final class AppState {
     var selectedMeetingID: Int64?
     var selectedMeetingRecord: MeetingRecord?
     var folders: [MeetingFolder] = []
+    /// Meetings that are private, directly or through a folder, and the subset flagged on the meeting itself.
+    var privateMeetingIDs: Set<Int64> = []
+    var directlyPrivateMeetingIDs: Set<Int64> = []
     var selectedFolderID: Int64?  // nil = "All Meetings"
+    // Folder suggestions Inbox (FolderClassification*.swift).
+    var folderSuggestionRows: [FolderSuggestionInboxRow] = []
+    var isFolderInboxSelected = false
+    var isClassifyingUnfiledMeetings = false
     var meetingsNavigationState: MeetingsNavigationState = .browser
     var meetingDetailReturnDestination: MeetingDetailReturnDestination = .meetings
     var meetingNotesFocusRequest = 0
@@ -192,6 +206,12 @@ final class AppState {
     // Live status
     var isMeetingRecording: Bool = false
     var isMeetingRecordingPaused: Bool = false
+    /// The meeting currently being recorded, nil while stopping or idle. Drives the sidebar's recording item.
+    var activeMeetingID: Int64?
+    /// The call the active recording followed has gone away. Drives the sidebar's "Call ended?" item.
+    var isMeetingCallEnded: Bool = false
+    /// The next calendar event or the detected call, shown above Timeline while nothing is recording.
+    var sidebarMeetingEntry: SidebarMeetingEntry?
     var isMeetingStarting: Bool = false
     var meetingStartStatus: String?
     var liveMeetingTranscript: String = ""
@@ -212,6 +232,11 @@ final class AppState {
     var hasStoredOpenRouterCredential: Bool = false
     var openRouterSummaryModels: [SummaryModelPreset] = []
     var openRouterSummaryCatalogState: OpenRouterModelCatalogLoadState = .idle
+    /// Models the Custom LLM endpoint reports, for the Settings picker. `customLLMModelsFingerprint`
+    /// names the connection they were listed for, so a stale answer is never shown for a new endpoint.
+    var customLLMModels: [String] = []
+    var customLLMModelsState: CustomLLMModelCatalogLoadState = .idle
+    var customLLMModelsFingerprint = ""
     var openRouterTranscriptionModels: [SummaryModelPreset] = []
     var openRouterTranscriptionCatalogState: OpenRouterModelCatalogLoadState = .idle
     var upcomingCalendarEvents: [UnifiedCalendarEvent] = []

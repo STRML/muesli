@@ -14,7 +14,8 @@ enum TranscriptFormatter {
         systemSegments: [SpeechSegment],
         diarizationSegments: [TimedSpeakerSegment]?,
         meetingStart: Date,
-        conservativeSpeakerAttribution: Bool = false
+        conservativeSpeakerAttribution: Bool = false,
+        speakerNames: [String: String] = [:]
     ) -> String {
         // The formatter is intentionally source-agnostic: upstream capture decides
         // which mic/system segments are valid, then this layer only labels/merges.
@@ -23,15 +24,8 @@ enum TranscriptFormatter {
 
         let taggedSystem: [TaggedSegment]
         if let diarizationSegments, !diarizationSegments.isEmpty {
-            // Build speaker label map: raw ID → "Speaker 1", "Speaker 2", etc. in first-appearance order
-            var speakerLabelMap: [String: String] = [:]
-            var nextSpeakerNumber = 1
-            for seg in diarizationSegments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
-                if speakerLabelMap[seg.speakerId] == nil {
-                    speakerLabelMap[seg.speakerId] = "Speaker \(nextSpeakerNumber)"
-                    nextSpeakerNumber += 1
-                }
-            }
+            // "Speaker N" labels, replaced by a recognized person's name when one matched.
+            let speakerLabelMap = speakerLabels(for: diarizationSegments).mapValues { speakerNames[$0] ?? $0 }
 
             taggedSystem = systemSegments.map { segment in
                 let speaker = conservativeSpeakerAttribution
@@ -58,6 +52,17 @@ enum TranscriptFormatter {
             let text = taggedSegment.segment.text.trimmingCharacters(in: .whitespaces)
             return "[\(formatter.string(from: timestamp))] \(taggedSegment.speaker): \(text)"
         }.joined(separator: "\n")
+    }
+
+    /// Raw diarizer speaker ID -> "Speaker 1", "Speaker 2", ... in first-appearance order.
+    /// The speaker identity pipeline keys `meeting_speakers.label` on the same mapping.
+    static func speakerLabels(for diarizationSegments: [TimedSpeakerSegment]) -> [String: String] {
+        var labels: [String: String] = [:]
+        for seg in diarizationSegments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds })
+        where labels[seg.speakerId] == nil {
+            labels[seg.speakerId] = "Speaker \(labels.count + 1)"
+        }
+        return labels
     }
 
     /// Merge consecutive segments from the same speaker into single entries,

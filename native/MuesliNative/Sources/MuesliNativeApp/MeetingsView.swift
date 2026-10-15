@@ -90,16 +90,17 @@ enum MeetingBrowserLogic {
             }
         }
 
-        let sorted = filtered.sorted { lhs, rhs in
-            let lhsDate = parseDate(lhs.startTime) ?? .distantPast
-            let rhsDate = parseDate(rhs.startTime) ?? .distantPast
+        // Parse each start time once. Parsing inside the comparator costs
+        // O(n log n) ISO8601 parses, which is seconds of CPU for a few hundred rows.
+        let dated = filtered.map { ($0, parseDate($0.startTime) ?? Date.distantPast) }
+        let sorted = dated.sorted { lhs, rhs in
             switch sort {
             case .newestFirst:
-                return lhsDate > rhsDate
+                return lhs.1 > rhs.1
             case .oldestFirst:
-                return lhsDate < rhsDate
+                return lhs.1 < rhs.1
             }
-        }
+        }.map(\.0)
 
         return MeetingBrowserPresentation(
             meetings: sorted,
@@ -134,9 +135,20 @@ enum MeetingBrowserLogic {
         return date >= threshold
     }
 
+    // Start times repeat on every render of the list, the timeline and the filter
+    // menu, and each uncached parse is an ICU call. Only strings with an explicit
+    // UTC offset are cached: a local-time string means a different instant when the
+    // system time zone changes. Failed parses are not cached.
+    private static let parsedDates = NSCache<NSString, NSDate>()
+
     static func parseDate(_ raw: String) -> Date? {
-        isoParsers.lazy.compactMap { $0.date(from: raw) }.first
-            ?? localParsers.lazy.compactMap { $0.date(from: raw) }.first
+        let key = raw as NSString
+        if let cached = parsedDates.object(forKey: key) { return cached as Date }
+        if let parsed = isoParsers.lazy.compactMap({ $0.date(from: raw) }).first {
+            parsedDates.setObject(parsed as NSDate, forKey: key)
+            return parsed
+        }
+        return localParsers.lazy.compactMap { $0.date(from: raw) }.first
     }
 
     static func formatStartTime(
@@ -147,12 +159,39 @@ enum MeetingBrowserLogic {
         guard let date = parseDate(raw) else {
             return formatStartTimeFallback(raw)
         }
+        return startTimeFormatter(locale: locale, timeZone: timeZone).string(from: date)
+    }
+
+    // DateFormatter construction loads ICU symbol tables, which dominated list
+    // rendering when every row built its own. One formatter per locale and zone.
+    private static let startTimeFormatterLock = NSLock()
+    nonisolated(unsafe) private static var startTimeFormatters: [String: DateFormatter] = [:]
+
+    // The 12/24-hour preference can change without changing the locale identifier,
+    // so the identifier key alone would keep serving a stale clock format.
+    private static let localeChangeObserver: NSObjectProtocol = NotificationCenter.default.addObserver(
+        forName: NSLocale.currentLocaleDidChangeNotification,
+        object: nil,
+        queue: nil
+    ) { _ in
+        startTimeFormatterLock.lock()
+        startTimeFormatters.removeAll()
+        startTimeFormatterLock.unlock()
+    }
+
+    private static func startTimeFormatter(locale: Locale, timeZone: TimeZone) -> DateFormatter {
+        _ = localeChangeObserver
+        let key = "\(locale.identifier)|\(timeZone.identifier)"
+        startTimeFormatterLock.lock()
+        defer { startTimeFormatterLock.unlock() }
+        if let cached = startTimeFormatters[key] { return cached }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
         formatter.dateStyle = .medium
         formatter.timeStyle = .medium
-        return formatter.string(from: date)
+        startTimeFormatters[key] = formatter
+        return formatter
     }
 
     private static func formatStartTimeFallback(_ raw: String) -> String {
@@ -195,6 +234,8 @@ struct MeetingsView: View {
     let controller: MuesliController
     @State private var selectedFilter: MeetingBrowserFilter = .all
     @State private var selectedSort: MeetingBrowserSort = .newestFirst
+    // Bumped when the system locale changes so cached start-time labels redraw.
+    @State private var localeChangeVersion = 0
 
     private var scopedMeetings: [MeetingRecord] {
         appState.meetingRows
@@ -239,6 +280,8 @@ struct MeetingsView: View {
                     backLabel: appState.meetingChatDocumentTarget != nil ? "Back to Chat" : "Back to Meetings"
                 )
                 .id(meeting.id)
+            } else if appState.isFolderInboxSelected {
+                FolderInboxView(appState: appState, controller: controller)
             } else {
                 browserView
             }
@@ -296,7 +339,9 @@ struct MeetingsView: View {
                                 record: meeting,
                                 isSelected: appState.selectedMeetingID == meeting.id,
                                 hasFollowUps: presentation.meetingIDsWithFollowUps.contains(meeting.id),
+                                localeVersion: localeChangeVersion,
                                 folders: appState.folders,
+                                isPrivate: appState.privateMeetingIDs.contains(meeting.id),
                                 onSelect: { controller.showMeetingDocument(id: meeting.id) },
                                 onMove: { folderID in
                                     controller.moveMeeting(id: meeting.id, toFolder: folderID)
@@ -317,6 +362,9 @@ struct MeetingsView: View {
             .padding(.top, MuesliTheme.pageTop)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSLocale.currentLocaleDidChangeNotification)) { _ in
+            localeChangeVersion &+= 1
         }
         .onDrop(of: ["public.file-url"], isTargeted: nil) { providers in
             guard let provider = providers.first else { return false }
@@ -452,24 +500,24 @@ struct MeetingsView: View {
 
                                 Spacer()
 
-                                if let meetingURL = event.meetingURL,
-                                   !appState.isMeetingRecording,
-                                   !appState.isMeetingStarting {
-                                    joinActionControl(for: event, meetingURL: meetingURL)
-                                }
+                                eventActionControls(for: event)
 
+                                let plannedFolder = appState.config.plannedFolderID(
+                                    for: event.resolvedCalendarOccurrence.identityKey,
+                                    existingFolderIDs: Set(appState.folders.map(\.id))
+                                ).flatMap { id in appState.folders.first { $0.id == id } }
                                 Menu {
                                     Button("All Meetings") {
-                                        controller.createMeetingFromCalendarEvent(event, folderID: nil)
+                                        controller.planFolder(nil, for: event)
                                     }
                                     Divider()
                                     ForEach(appState.folders) { folder in
                                         Button(folder.name) {
-                                            controller.createMeetingFromCalendarEvent(event, folderID: folder.id)
+                                            controller.planFolder(folder.id, for: event)
                                         }
                                     }
                                 } label: {
-                                    Text("Add to folder")
+                                    Text(plannedFolder?.name ?? "Add to folder")
                                         .font(.system(size: 10, weight: .medium))
                                         .foregroundStyle(MuesliTheme.textSecondary)
                                         .padding(.horizontal, 8)
@@ -512,6 +560,105 @@ struct MeetingsView: View {
     private func formatTimeRange(_ event: UnifiedCalendarEvent) -> String {
         let f = Self.timeFormatter
         return "\(f.string(from: event.startDate)) – \(f.string(from: event.endDate))"
+    }
+
+    /// Explicit buttons while an event is happening now (or about to), so a missed notification
+    /// never blocks starting; otherwise the compact join control for events with a link.
+    @ViewBuilder
+    private func eventActionControls(for event: UnifiedCalendarEvent) -> some View {
+        // Re-evaluated every 20 seconds so the buttons appear as the event goes live.
+        SwiftUI.TimelineView(.periodic(from: .now, by: 20)) { context in
+            let recording = recordingContext(for: event)
+            let live = LiveCalendarEventActions.visibleActions(
+                start: event.startDate,
+                end: event.endDate,
+                now: context.date,
+                hasMeetingURL: event.meetingURL != nil,
+                recording: recording
+            )
+            if !live.isEmpty {
+                liveEventButtons(live, for: event)
+            } else if let meetingURL = event.meetingURL, recording == .idle {
+                joinActionControl(for: event, meetingURL: meetingURL)
+            }
+        }
+    }
+
+    private func recordingContext(for event: UnifiedCalendarEvent) -> LiveRecordingContext {
+        let activeRow = appState.activeMeetingID.flatMap { id in appState.meetingRows.first { $0.id == id } }
+        let activeIsThisEvent = activeRow.map {
+            $0.calendarOccurrence?.identityKey == event.resolvedCalendarOccurrence.identityKey
+                || $0.calendarEventID == event.id
+        } ?? false
+        return LiveRecordingContext.make(
+            isRecording: appState.isMeetingRecording,
+            isStarting: appState.isMeetingStarting,
+            activeIsThisEvent: activeIsThisEvent
+        )
+    }
+
+    private func liveEventButtons(_ actions: [LiveCalendarEventAction], for event: UnifiedCalendarEvent) -> some View {
+        HStack(spacing: 6) {
+            ForEach(actions, id: \.self) { action in
+                switch action {
+                case .joinAndTranscribe:
+                    Button {
+                        if let meetingURL = event.meetingURL {
+                            performJoinAction(.joinAndRecord, for: event, meetingURL: meetingURL)
+                        }
+                    } label: {
+                        liveButtonLabel("Join & Transcribe", symbol: MeetingJoinDefaultAction.joinAndRecord.symbolName, filled: true)
+                    }
+                    .buttonStyle(.plain)
+                case .transcribe:
+                    Button {
+                        controller.recordOnly(
+                            title: event.title,
+                            meetingURL: event.meetingURL,
+                            endDate: event.endDate,
+                            calendarOccurrence: event.resolvedCalendarOccurrence
+                        )
+                    } label: {
+                        liveButtonLabel("Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
+                    }
+                    .buttonStyle(.plain)
+                case .switchAndJoin:
+                    Button {
+                        controller.switchRecording(to: event, join: true)
+                    } label: {
+                        liveButtonLabel("Switch & Join", symbol: MeetingJoinDefaultAction.joinAndRecord.symbolName, filled: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the recording that is still running, then joins and transcribes this meeting")
+                case .switchAndTranscribe:
+                    Button {
+                        controller.switchRecording(to: event, join: false)
+                    } label: {
+                        liveButtonLabel("Switch & Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the recording that is still running, then transcribes this meeting")
+                }
+            }
+        }
+    }
+
+    private func liveButtonLabel(_ title: String, symbol: String, filled: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 9))
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(filled ? Color.white : Self.joinActionGreen)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(filled ? Self.joinActionGreen : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Self.joinActionGreen, lineWidth: filled ? 0 : 1)
+        )
     }
 
     private static let joinActionGreen = Color(nsColor: NSColor(red: 0.20, green: 0.72, blue: 0.53, alpha: 1.0))

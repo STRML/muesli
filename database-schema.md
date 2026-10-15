@@ -30,8 +30,9 @@ Do not edit a user's database directly while Muesli is running.
 - Only the text-record subset of dictations and meetings participates in iCloud
   sync. A column living on one of those tables is not automatically a synced
   field.
-- People, folders, computer-use traces, live checkpoints, resume snapshots,
-  audio paths, destination-app attribution, and Insights caches are local-only.
+- People, speaker profiles and voiceprints, folders, computer-use traces, live
+  checkpoints, resume snapshots, audio paths, destination-app attribution, and
+  Insights caches are local-only.
 - There is no FTS table. Global search currently uses parameterized `LIKE`
   queries over selected dictation, meeting, trace, and participant fields.
 - ISO-8601 strings are used for user-visible event times such as `timestamp` and
@@ -50,6 +51,13 @@ erDiagram
     meetings ||--o{ meeting_participants : "has local people"
     meetings ||--o{ meeting_transcript_checkpoints : "has live checkpoints"
     meetings ||--o| meeting_resume_snapshots : "has resume safety snapshot"
+    meetings ||--o{ meeting_speakers : "has diarized speakers"
+    speaker_profiles ||--o{ speaker_voiceprints : "has voiceprints"
+    speaker_profiles |o--o{ meeting_speakers : "names"
+    meetings ||--o{ folder_suggestions : "has folder suggestions"
+    meeting_folders ||--o{ folder_suggestions : "is suggested"
+    meeting_folders ||--o{ classification_memory : "is learned for"
+    meetings ||--o| classification_learned : "is counted in memory"
 
     insights_tokens ||--o| insights_token_totals : "has all-time totals"
     insights_tokens ||--o{ insights_daily_tokens : "has daily totals"
@@ -93,6 +101,9 @@ meeting, or iPhone meeting record.
   `note_only`, or `failed`)
 - Origin/type: `source` (`meeting`, `audio_import`, or `ios`)
 - Local files: `mic_audio_path`, `system_audio_path`, `saved_recording_path`
+- Audio retention: `recording_pinned` (`1` exempts the meeting's audio from
+  disk-budget pruning). Pruning only clears the three path columns; the
+  transcript, notes and row are never removed.
 - Calendar snapshot: `calendar_event_id`, `calendar_occurrence_key`,
   `calendar_source`, `calendar_id`, `calendar_series_id`,
   `calendar_occurrence_start`
@@ -114,6 +125,7 @@ occurrence can be recorded more than once.
 | `meeting_participants` | Calendar-attendee or Apple Contact name/email snapshots, including source and calendar suppression state | `(meeting_id, participant_identifier)`; cascades with its meeting | Local-only |
 | `meeting_transcript_checkpoints` | Incremental live transcript recovery segments | `id`; cascades with its meeting | Local-only |
 | `meeting_resume_snapshots` | Safety copy used while resuming a finished meeting | One row per `meeting_id`; cascades with its meeting | Local-only |
+| `recording_prune_log` | One row per audio file removed by disk-budget retention (`meeting_id`, `path`, `bytes`, `reason` of `budget`, `missing_file` or `repair_missing`, `pruned_at` as Unix `REAL`). Never holds transcript text | `id`; no foreign key, so it outlives the meeting | Local-only |
 
 Participant identifiers describe provenance and identity, while the stored name
 and email are snapshots. Calendar entries normally use a normalized email-based
@@ -131,6 +143,25 @@ unreleased direct Google OAuth integration does not import or persist meeting
 participants; Google calendars exposed through macOS Calendar use this EventKit
 path.
 
+### Named speakers (voiceprints)
+
+Speaker embeddings are biometric data. These tables are strictly local: they
+never enter `SyncTextRecord`, CloudKit, telemetry, exports, CLI JSON, or logs.
+Code lives in `MuesliCore/SpeakerIdentityStore.swift` and
+`MuesliCore/SpeakerVoiceprintMatcher.swift`.
+
+| Table | Purpose | Key and deletion behavior |
+|---|---|---|
+| `speaker_profiles` | A named person (`name`, `created_at` Unix time) | `id`; names are unique case-insensitively (`idx_speaker_profiles_name`), so naming a speaker with an existing name merges into that profile |
+| `speaker_voiceprints` | Float32 embedding `BLOB` plus `dimension`, taken from a meeting speaker's centroid when the user names that speaker; `source_meeting_id` is a plain integer, not a foreign key | `id`; cascades with its profile |
+| `meeting_speakers` | Each meeting's diarized remote speakers: `label` is the token currently printed in `raw_transcript` ("Speaker 2", or the name after a rename), `embedding` is the meeting centroid (NULL when the speaker had too little audio), `profile_id` the matched or assigned person | `(meeting_id, label)`; cascades with a hard-deleted meeting, deleted explicitly when a meeting is soft-deleted or cleared, `profile_id` set to NULL when the person is deleted |
+
+Naming a speaker rewrites only exact `[HH:MM:SS] <label>: ` line prefixes in
+`raw_transcript` (marking the meeting `sync_dirty`, like any transcript edit),
+except for private meetings, whose transcript is left unchanged so a name never
+reaches iCloud through them. Deleting a person keeps the typed name in
+transcripts.
+
 ### Organization and state
 
 #### `meeting_folders`
@@ -142,6 +173,23 @@ Stores the local nested Meetings sidebar hierarchy.
 - Ordering: `sort_order`
 - Meetings reference folders through `meetings.folder_id`
 - Local-only; folder membership is not part of `SyncTextRecord`
+
+#### Folder auto-classification
+
+Three local-only tables back the suggest-and-confirm folder classifier
+(`FolderClassificationStore.swift`, rules in `FolderClassificationRules.swift`).
+All of them cascade when their folder or meeting is deleted, and none is synced.
+
+| Table | Purpose | Key |
+|---|---|---|
+| `folder_suggestions` | One suggested folder for an unfiled meeting: `source` (`series`, `email`, `title`, `llm`), `confidence` 0–1, human-readable `reason`, and `state` (`pending`, `accepted`, `rejected`, `dismissed`, `auto_applied`) | `id`; unique `(meeting_id, folder_id, source)`, so a dismissed suggestion is never re-created |
+| `classification_memory` | What the user's own filing taught: per `kind` (`series`, `email`, `title`) and normalized `key`, how many meetings were filed into `folder_id` (`confirmations`) and how many suggestions built on it were rejected (`contradictions`) | `(kind, key, folder_id)` |
+| `classification_learned` | Which folder a meeting is currently counted under in `classification_memory`, with the exact keys counted (`keys_json`). Makes learning idempotent and lets a later move take the count back | `meeting_id` |
+
+Keys are calendar series ids, lowercased attendee addresses without `mailto:`,
+and titles normalized by stripping meeting-app prefixes, dates, times and digits.
+Only user moves and accepted suggestions are learned. A policy auto-apply is
+stored as `auto_applied` and never counted as a confirmation.
 
 #### `cloud_sync_state`
 

@@ -23,6 +23,7 @@ final class ConfigStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
         migrateLegacyOpenRouterCredential(in: &config)
+        config.enforceSummaryBackendLock()
         if hadLegacyOpenRouterKey, config.openRouterAPIKey.isEmpty {
             write(config)
         }
@@ -32,6 +33,7 @@ final class ConfigStore {
     func save(_ config: AppConfig) {
         ensureDirectory()
         var persistedConfig = config
+        persistedConfig.enforceSummaryBackendLock()
         migrateLegacyOpenRouterCredential(in: &persistedConfig)
         write(persistedConfig)
     }

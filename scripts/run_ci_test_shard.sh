@@ -65,6 +65,23 @@ case "${shard}" in
       BodhanLifecycleTests
       DictationBackendPreparationTests
       ContributionMilestoneTests
+      ShutdownDeadlineTests
+      ICloudContainerResolutionTests
+      UISnapshotTests
+      RecordingRetentionPlannerTests
+      RecordingRetentionSchemaTests
+      RecordingRetentionServiceTests
+      LiveRetentionRunTests
+      FolderClassificationCoordinatorTests
+      FolderClassificationLLMTests
+      FolderClassificationRulesTests
+      FolderClassificationStoreTests
+      LiveClassificationRunTests
+      CustomLLMModelCatalogTests
+      CustomLLMModelListControllerTests
+      SummaryBackendLockTests
+      LiveTranscriptFollowStateTests
+      RecordingIndicatorIconTests
     )
     ;;
   dictation-transcription)
@@ -113,6 +130,15 @@ case "${shard}" in
       DictationStateIdleTests
       DictationCorrectionMonitorTests
       Nemotron35ModelStoreTests
+      LiveSpeakerLabelSessionTests
+      LiveSpeakerLabelerTests
+      LiveSpeakerRealModelSmokeTests
+      LiveSpeakerResampleTests
+      LiveSpeakerSupportTests
+      SpeakerEmbeddingSmokeTests
+      SpeakerIdentityPipelineTests
+      SpeakerIdentityStoreTests
+      SpeakerVoiceprintMatcherTests
     )
     ;;
   meetings)
@@ -137,6 +163,8 @@ case "${shard}" in
       MeetingContactIdentityTests
       MeetingContactResolverTests
       MeetingDetectorTests
+      MeetingCallEndDetectionTests
+      MeetingSignalLossAlertTests
       MeetingParticipantStoreTests
       MeetingProcessingStageTests
       MeetingRecordingWriterTests
@@ -177,6 +205,24 @@ case "${shard}" in
       CalendarPermissionStateTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
+      ActiveRecordingSidebarItemTests
+      SidebarMeetingEntryTests
+      DetectedCallMatcherTests
+      MeetingCallEndScenarioTests
+      BrowserAutomationPermissionTests
+      LiveCalendarEventActionsTests
+      PlannedCalendarFolderTests
+      LiveStudioSummaryTests
+      MeetingVaultExporterTests
+      PrivateMeetingCLISyncTests
+      PrivateMeetingChatTests
+      PrivateMeetingExportTests
+      PrivateMeetingPolicyTests
+      PrivateMeetingsStoreTests
+      MeetingTitleLayoutTests
+      CallRosterParserTests
+      CallRosterNamingTests
+      CallRosterTrackerTests
     )
     ;;
   *)

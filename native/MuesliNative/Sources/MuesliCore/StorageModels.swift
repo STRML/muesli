@@ -519,17 +519,42 @@ public struct MeetingParticipantDraft: Equatable, Sendable {
     }
 }
 
+/// The vault file Muesli wrote for a meeting. `state` is `exported` or `pending_removal`.
+public struct MeetingExportRecord: Equatable, Sendable {
+    public let meetingID: Int64
+    public let path: String
+    public let state: String
+
+    public init(meetingID: Int64, path: String, state: String) {
+        self.meetingID = meetingID
+        self.path = path
+        self.state = state
+    }
+}
+
 public struct MeetingFolder: Identifiable, Codable, Sendable {
     public let id: Int64
     public var name: String
     public let parentID: Int64?
     public let createdAt: String
+    /// Meetings in a private folder, or in any of its subfolders, are private.
+    public let isPrivate: Bool
 
-    public init(id: Int64, name: String, parentID: Int64? = nil, createdAt: String) {
+    public init(id: Int64, name: String, parentID: Int64? = nil, createdAt: String, isPrivate: Bool = false) {
         self.id = id
         self.name = name
         self.parentID = parentID
         self.createdAt = createdAt
+        self.isPrivate = isPrivate
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        parentID = try container.decodeIfPresent(Int64.self, forKey: .parentID)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
     }
 }
 

@@ -5,7 +5,10 @@ struct MeetingListItemView: View {
     let record: MeetingRecord
     let isSelected: Bool
     let hasFollowUps: Bool
+    /// Changes when the system locale does, so the row redraws its formatted date without losing its @State.
+    let localeVersion: Int
     let folders: [MeetingFolder]
+    let isPrivate: Bool
     private let folderByID: [Int64: MeetingFolder]
     private let folderIDsWithChildren: Set<Int64>
     let onSelect: () -> Void
@@ -22,7 +25,9 @@ struct MeetingListItemView: View {
         record: MeetingRecord,
         isSelected: Bool,
         hasFollowUps: Bool,
+        localeVersion: Int = 0,
         folders: [MeetingFolder],
+        isPrivate: Bool = false,
         onSelect: @escaping () -> Void,
         onMove: @escaping (Int64?) -> Void,
         onCreateFolderAndMove: ((String) -> Void)?,
@@ -31,7 +36,9 @@ struct MeetingListItemView: View {
         self.record = record
         self.isSelected = isSelected
         self.hasFollowUps = hasFollowUps
+        self.localeVersion = localeVersion
         self.folders = folders
+        self.isPrivate = isPrivate
         self.folderByID = Dictionary(uniqueKeysWithValues: folders.map { ($0.id, $0) })
         self.folderIDsWithChildren = Set(folders.compactMap(\.parentID))
         self.onSelect = onSelect
@@ -57,6 +64,14 @@ struct MeetingListItemView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
             HStack(alignment: .top) {
+                if isPrivate {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .padding(.top, 4)
+                        .help("Private meeting: never sent to a backend you haven't trusted for private meetings")
+                        .accessibilityLabel("Private meeting")
+                }
                 Text(record.title)
                     .font(MuesliTheme.headline())
                     .foregroundStyle(MuesliTheme.textPrimary)

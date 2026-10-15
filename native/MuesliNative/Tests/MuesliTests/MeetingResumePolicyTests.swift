@@ -17,6 +17,14 @@ struct MeetingResumePolicyTests {
         }
     }
 
+    @Test("a resumed calendar meeting stops with the call; a hand-made note does not")
+    func resumeStartOrigin() {
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true) == .scheduledMeetingPrompt)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: false) == .manual)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true).signalLossResponse == .stopWithNotice)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: false).signalLossResponse == .none)
+    }
+
     @Test("combined transcript keeps the prior text and appends the new with a separator")
     func combinedTranscriptAppends() {
         let combined = MeetingResumePolicy.combinedResumeTranscript(prior: "first half", new: "second half")
