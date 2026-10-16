@@ -907,6 +907,36 @@ struct DictationStoreTests {
         #expect(outgoing.engineIdentifier == nil)
     }
 
+    @Test("Mac edit of a phone dictation with no local engine leaves the iCloud engine alone")
+    func macEditWithoutLocalEngineKeepsCloudEngine() throws {
+        let store = try makeStore()
+        let createdAt = Date(timeIntervalSince1970: 1_770_000_000)
+        // A dictation that synced before engines were stored locally arrives with no engine.
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "dictation-ios-pre-upgrade", kind: .dictation, text: "Said on the phone",
+            source: "ios", createdAt: createdAt, updatedAt: createdAt,
+            durationSeconds: 2, wordCount: 4, cloudChangeTag: "tag-1"
+        )))
+        try setDictationDirtyText(recordName: "dictation-ios-pre-upgrade", text: "Edited on the Mac",
+                                  updatedAt: createdAt.addingTimeInterval(60), store: store)
+        let outgoing = try #require(try store.textRecordsNeedingSync().first)
+        #expect(outgoing.engineIdentifier == nil)
+
+        // A fresh or system-fields-only upload must not send the field, or CloudKit
+        // (changedKeys save policy) deletes the engine the phone wrote.
+        let fresh = MuesliICloudSyncEngine.syncZoneCloudRecord(from: outgoing)
+        #expect(!fresh.changedKeys().contains("engineIdentifier"))
+        #expect(fresh["text"] as? String == "Edited on the Mac")
+
+        // A conflict retry over the server copy keeps the phone's engine.
+        let server = CKRecord(recordType: MuesliICloudSyncEngine.Schema.textRecordType,
+                              recordID: CKRecord.ID(recordName: outgoing.id, zoneID: MuesliICloudSyncEngine.Schema.syncZoneID))
+        server["engineIdentifier"] = "remote-custom-llm" as NSString
+        let merged = MuesliICloudSyncEngine.syncZoneCloudRecord(from: outgoing, baseRecord: server)
+        #expect(merged["engineIdentifier"] as? String == "remote-custom-llm")
+        #expect(merged["text"] as? String == "Edited on the Mac")
+    }
+
     @Test("synced engine names match the iPhone app, and unknown IDs show as-is")
     func syncedEngineDisplayNames() {
         #expect(SyncedEngine.displayName(for: "remote-custom-llm") == "Remote (your server)")
