@@ -121,13 +121,41 @@ final class LiveTranscriptPresentationModel {
 /// New captions pull the panel to the bottom only while the reader is already there. Once they
 /// scroll up the panel stays put, and it follows again when they return to the bottom.
 struct LiveTranscriptFollowState: Equatable {
-    /// True at first render, before any bottom marker has been seen.
+    /// True at first render, before any bottom marker has been seen, and whenever the content
+    /// fits the viewport (the marker is then always on screen).
     private(set) var isAtBottom = true
+    /// A follow-scroll was decided but has not landed. The new text may already have pushed the
+    /// marker off screen; that must not read as the reader scrolling up.
+    private var isFollowScrollPending = false
 
     var shouldFollowNewContent: Bool { isAtBottom }
 
+    /// The single source of truth for the "Scroll to bottom" pill: shown exactly while
+    /// auto-scroll is paused.
+    var showsScrollToBottomToast: Bool { !isAtBottom }
+
     mutating func noteBottomMarker(visible: Bool) {
-        isAtBottom = visible
+        if visible {
+            isAtBottom = true
+            isFollowScrollPending = false
+        } else if !isFollowScrollPending {
+            isAtBottom = false
+        }
+    }
+
+    /// Call when new text arrives; returns whether the caller should scroll to the bottom.
+    mutating func beginFollowScroll() -> Bool {
+        guard isAtBottom else { return false }
+        isFollowScrollPending = true
+        return true
+    }
+
+    mutating func finishFollowScroll() { isFollowScrollPending = false }
+
+    /// The reader asked to jump back: re-pin before scrolling so the next partial follows.
+    mutating func tapScrollToBottom() {
+        isAtBottom = true
+        isFollowScrollPending = true
     }
 }
 
@@ -202,24 +230,19 @@ struct LiveTranscriptView: View {
                 .onChange(of: transcript) { _, newTranscript in
                     // Decided before the new lines lay out: the marker is still on screen if the
                     // reader was at the bottom.
-                    let followsNewLines = follow.shouldFollowNewContent
+                    let followsNewLines = follow.beginFollowScroll()
                     presentation.update(
                         transcript: newTranscript,
                         partialYou: partialYou,
                         partialOthers: partialOthers
                     )
-                    guard followsNewLines else { return }
-                    DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
-                        }
-                    }
+                    if followsNewLines { scrollToBottom(proxy) }
                 }
                 // Partials grow the open paragraph in place. Follow them only when the
                 // reader was already at the bottom (decided before layout); a reader who
                 // scrolled up is left alone.
                 .onChange(of: partialYou) { _, new in
-                    let followsNewLines = follow.shouldFollowNewContent
+                    let followsNewLines = follow.beginFollowScroll()
                     presentation.update(
                         transcript: transcript,
                         partialYou: new,
@@ -228,7 +251,7 @@ struct LiveTranscriptView: View {
                     if followsNewLines { scrollToBottom(proxy) }
                 }
                 .onChange(of: partialOthers) { _, new in
-                    let followsNewLines = follow.shouldFollowNewContent
+                    let followsNewLines = follow.beginFollowScroll()
                     presentation.update(
                         transcript: transcript,
                         partialYou: partialYou,
@@ -246,6 +269,7 @@ struct LiveTranscriptView: View {
                         proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
                     }
                 }
+                .overlay(alignment: .bottom) { scrollToBottomToast(proxy) }
             }
 
             Button(action: copyTranscript) {
@@ -287,6 +311,38 @@ struct LiveTranscriptView: View {
             withAnimation(.easeOut(duration: 0.15)) {
                 proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
             }
+            follow.finishFollowScroll()
         }
+    }
+
+    /// Visible exactly while auto-scroll is paused. Only the pill itself takes hits, so the
+    /// transcript underneath keeps scrolling normally.
+    private func scrollToBottomToast(_ proxy: ScrollViewProxy) -> some View {
+        ZStack {
+            if follow.showsScrollToBottomToast {
+                Button {
+                    follow.tapScrollToBottom()
+                    scrollToBottom(proxy)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Scroll to bottom")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .frame(height: 28)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(Capsule())
+                    .overlay { Capsule().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1) }
+                    .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, MuesliTheme.spacing12)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: follow.showsScrollToBottomToast)
     }
 }

@@ -37,7 +37,8 @@ enum LiveTranscriptParagraphs {
     static let maxParagraphCharacters = 900
     /// Rows carry only a start time, so a row's end is estimated from its word count.
     static let speechWordsPerSecond: Double = 2.5
-    /// Word-overlap (Jaccard) at which two rows of 3+ words count as the same speech revised.
+    /// Word-overlap (Jaccard) at which two rows of 3+ words count as the same speech revised,
+    /// provided they differ by at most one non-numeric word per side.
     static let revisionSimilarity = 0.6
 
     private static let youTailID = -1
@@ -85,8 +86,8 @@ enum LiveTranscriptParagraphs {
         if paragraph.revision(by: segment) != nil { return true }
         if paragraph.committed.count >= maxParagraphCharacters, endsSentence(last.text) { return false }
         guard let lastStart = last.start, let start = segment.start else { return true }
-        let lastEnd = lastStart + Double(words(last.text).count) / speechWordsPerSecond
-        let pause = max(0, start - lastEnd)
+        let lastEnd = lastStart + Double(speechUnits(last.text)) / speechWordsPerSecond
+        let pause = max(0, delta(from: lastEnd, to: start))
         if pause <= mergePause { return true }
         return !endsSentence(last.text) && pause < midSentencePause
     }
@@ -142,17 +143,34 @@ enum LiveTranscriptParagraphs {
         guard !newWords.isEmpty, !oldWords.isEmpty else { return nil }
         if newWords == oldWords { return newWords.count >= 2 ? .replaces : nil }
         if newWords.starts(with: oldWords) { return .replaces }
-        if oldWords.starts(with: newWords) { return newWords.count >= 2 ? .redundant : nil }
-        if newWords.count >= 3, oldWords.count >= 3, jaccard(newWords, oldWords) >= revisionSimilarity {
-            return .replaces
-        }
-        return nil
+        if oldWords.starts(with: newWords) { return newWords.count >= 3 ? .redundant : nil }
+        guard newWords.count >= 3, oldWords.count >= 3,
+              jaccard(newWords, oldWords) >= revisionSimilarity else { return nil }
+        // A restatement swaps at most one word per side, and never a figure: "50%" vs "60%" or
+        // "Q2" vs "Q3" is different information, not a better transcription of the same speech.
+        let added = Set(newWords).subtracting(oldWords)
+        let removed = Set(oldWords).subtracting(newWords)
+        guard added.count <= 1, removed.count <= 1 else { return nil }
+        guard !(added.union(removed)).contains(where: { $0.contains(where: \.isNumber) }) else { return nil }
+        return .replaces
     }
 
+    /// Word count, or characters / 5 for unspaced scripts (CJK), whichever is larger.
+    private static func speechUnits(_ text: String) -> Int {
+        max(words(text).count, text.count / 5)
+    }
+
+    /// Signed seconds from `a` to `b` on a 24h clock: a big backwards jump is midnight.
+    fileprivate static func delta(from a: TimeInterval, to b: TimeInterval) -> TimeInterval {
+        let d = b - a
+        return d < -43_200 ? d + 86_400 : d
+    }
+
+    private static let wordCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "'’%"))
+
     fileprivate static func words(_ text: String) -> [String] {
-        let keep = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "'’%"))
-        return text.lowercased()
-            .components(separatedBy: keep.inverted)
+        text.lowercased()
+            .components(separatedBy: wordCharacters.inverted)
             .filter { !$0.isEmpty }
     }
 
@@ -174,12 +192,14 @@ enum LiveTranscriptParagraphs {
     private static func endsSentence(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"')”’]")))
         guard let last = trimmed.last else { return false }
-        return ".?!…".contains(last)
+        return ".?!…。！？".contains(last)
     }
 
     private static func sameSpeaker(_ a: String?, _ b: String?) -> Bool {
         switch (a, b) {
-        case (nil, nil): return true
+        // Rows without a recognised label (e.g. renamed speakers in a resumed transcript) stay
+        // one per paragraph: nil does not mean "same person".
+        case (nil, nil): return false
         case let (a?, b?): return a.caseInsensitiveCompare(b) == .orderedSame
         default: return false
         }
@@ -205,7 +225,7 @@ extension LiveTranscriptParagraph {
         for count in 1...min(2, segments.count) {
             let old = segments.suffix(count)
             if let oldStart = old.first?.start, let newStart = new.start,
-               abs(newStart - oldStart) > LiveTranscriptParagraphs.revisionWindow { continue }
+               abs(LiveTranscriptParagraphs.delta(from: oldStart, to: newStart)) > LiveTranscriptParagraphs.revisionWindow { continue }
             let oldText = old.map(\.text).joined(separator: " ")
             if let relation = LiveTranscriptParagraphs.relation(of: new.text, to: oldText) {
                 return (count, relation)

@@ -144,6 +144,51 @@ struct LiveTranscriptParagraphsTests {
         #expect(out.map(\.committed).joined(separator: " ") == "Yes, absolutely. Yes, absolutely.")
     }
 
+    @Test("a restatement that changes a figure is different information, not a revision")
+    func figureChangeAppends() {
+        let out = build([
+            row(0, 0, "Others", "We have two million in revenue this quarter"),
+            row(1, 4, "Others", "We have three million in revenue next quarter"),
+        ])
+        #expect(out[0].segments.count == 2)
+        let nums = build([
+            row(0, 0, "Others", "We would come in with 50% of it."),
+            row(1, 3, "Others", "We would come in with 60% of it."),
+        ])
+        #expect(nums[0].segments.count == 2)
+    }
+
+    @Test("a short genuine repeat is kept")
+    func shortRepeatKept() {
+        let out = build([
+            row(0, 0, "Others", "Thank you very much."),
+            row(1, 3, "Others", "Thank you."),
+        ])
+        #expect(out[0].segments.count == 2)
+    }
+
+    @Test("rows without a recognised speaker label do not merge")
+    func unlabelledRowsStaySeparate() {
+        let out = build([row(0, 0, nil, "Alex: hi"), row(1, 1, nil, "Blair: yo")])
+        #expect(out.count == 2)
+    }
+
+    @Test("a row crossing midnight keeps its real pause")
+    func midnight() {
+        let a = TranscriptChatMessage(id: 0, timestamp: "23:59:58", speaker: "You", text: "Almost there.")
+        let b = TranscriptChatMessage(id: 1, timestamp: "00:00:30", speaker: "You", text: "New day.")
+        #expect(build([a, b]).count == 2)
+    }
+
+    @Test("CJK sentence ends split a long turn")
+    func cjkLongTurnSplits() {
+        let line = String(repeating: "今天我们讨论一下这个项目的进展情况", count: 3) + "。"
+        let rows = (0..<30).map { i in
+            row(i, i * 4, "Speaker 1", String(UnicodeScalar(0x4E00 + i * 7)!) + line)
+        }
+        #expect(build(rows).count > 1)
+    }
+
     // MARK: partial tails
 
     @Test("an identical partial twice produces identical output")
