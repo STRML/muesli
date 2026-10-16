@@ -10,9 +10,10 @@ struct MeetingResumePolicyTests {
         #expect(MeetingResumePolicy.canResume(status: .completed))
     }
 
-    @Test("non-completed meetings cannot be resumed")
-    func nonCompletedCannotResume() {
-        for status in [MeetingStatus.recording, .processing, .noteOnly, .failed] {
+    @Test("a processing meeting can be resumed; recording, note-only and failed rows cannot")
+    func onlyFinishedOrProcessingCanResume() {
+        #expect(MeetingResumePolicy.canResume(status: .processing))
+        for status in [MeetingStatus.recording, .noteOnly, .failed] {
             #expect(!MeetingResumePolicy.canResume(status: status))
         }
     }

@@ -7321,6 +7321,21 @@ public final class MuesliController: NSObject {
         meetingRetranscriptionTasks.isEmpty && MeetingResumePolicy.canResume(status: meeting.status)
     }
 
+    func resumeAvailability(for meeting: MeetingRecord) -> MeetingResumePolicy.Availability {
+        .hidden
+    }
+
+    /// Registers the post-Stop pipeline for `meetingID` so Resume can supersede its summary.
+    func trackMeetingFinalization(meetingID: Int64, gate: MeetingSummaryStageGate) {}
+
+    /// Drops the registration; returns true when a Resume was deferred behind it and must start now.
+    func finishMeetingFinalizationTracking(meetingID: Int64) -> Bool { false }
+
+    func hasDeferredResume(meetingID: Int64) -> Bool { false }
+
+    /// Cancels a manual re-summarize for `meetingID`; its late result is discarded.
+    func cancelInFlightResummary(meetingID: Int64) {}
+
     /// Whether `meeting` can spawn a follow-up meeting right now (also gates the UI control).
     func canStartFollowUpMeeting(_ meeting: MeetingRecord) -> Bool {
         MeetingFollowUpPolicy.canStartFollowUp(status: meeting.status)

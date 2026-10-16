@@ -7,10 +7,48 @@ import MuesliCore
 /// Resume is intentionally age-independent: users may continue transcribing into
 /// an older meeting artifact when that is the right product-level grouping.
 enum MeetingResumePolicy {
-    /// Only finalized meetings can be resumed. Active, processing, note-only, and
-    /// failed rows have separate lifecycle actions.
+    /// Finalized meetings and ones still processing after Stop can be resumed.
+    /// Active, note-only, and failed rows have separate lifecycle actions.
     static func canResume(status: MeetingStatus) -> Bool {
         status == .completed
+    }
+
+    enum Availability: Equatable {
+        case hidden
+        case disabled(reason: String)
+        case enabled
+    }
+
+    static let retranscriptionDisabledReason =
+        "Resume is unavailable while a recording is being re-transcribed. Cancel or wait for it to finish."
+
+    /// What the Resume control does for a row right now. `hasActiveFinalization` is true while the
+    /// post-Stop pipeline (transcript finalize, then summary) for this row is still running.
+    static func availability(
+        status: MeetingStatus,
+        isRetranscriptionRunning: Bool,
+        isAnotherRecordingActive: Bool,
+        hasActiveFinalization: Bool
+    ) -> Availability {
+        .hidden
+    }
+
+    /// Summary results land on a row only while it is still the finished meeting the summary was
+    /// started for. A row that has since been resumed (recording) or is mid-finalize must keep
+    /// whatever it has.
+    static func shouldPersistSummary(rowStatus: MeetingStatus?, wasCancelled: Bool) -> Bool {
+        true
+    }
+
+    /// A summary failure is only worth showing when it is still about the visible state.
+    static func shouldSurfaceSummaryFailure(rowStatus: MeetingStatus?, wasCancelled: Bool) -> Bool {
+        true
+    }
+
+    /// Whether the resumed stop must run the summary again. New speech always does; so does a
+    /// transcript whose summary was cancelled before it ever produced notes.
+    static func needsSummaryRegeneration(hasNewContent: Bool, existingNotes: String?, combinedTranscript: String) -> Bool {
+        hasNewContent
     }
 
     /// A resumed meeting that began from a calendar event keeps the call-ended warning that a
