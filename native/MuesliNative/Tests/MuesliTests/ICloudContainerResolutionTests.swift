@@ -125,4 +125,26 @@ struct ICloudSyncStateScopeTests {
             != UserDefaultsICloudChangeTokenStore.defaultKey(container: other))
         #expect(UserDefaultsICloudChangeTokenStore.defaultKey(container: mine).contains(mine))
     }
+
+    @Test("upstream's container has no pre-scoping state to carry over")
+    func upstreamHasNoContainerScopeMigration() {
+        #expect(MuesliCKSyncEngine.containerScopeMigration(environment: "production", container: upstream) == nil)
+    }
+
+    @Test("another container carries over the state saved before keys named the container")
+    func otherContainerMigratesFromUnscopedKeys() throws {
+        for environment in ["production", "development"] {
+            let migration = try #require(
+                MuesliCKSyncEngine.containerScopeMigration(environment: environment, container: mine)
+            )
+            #expect(migration.unscopedAccountScopeKey
+                == MuesliCKSyncEngine.accountScopeKey(environment: environment, container: upstream))
+            #expect(migration.unscopedStateKey
+                == MuesliCKSyncEngine.stateKey(environment: environment, container: upstream))
+            #expect(migration.unscopedChangeTokenKey
+                == UserDefaultsICloudChangeTokenStore.defaultKey(container: upstream))
+            #expect(migration.changeTokenKey
+                == UserDefaultsICloudChangeTokenStore.defaultKey(container: mine))
+        }
+    }
 }

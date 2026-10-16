@@ -123,6 +123,23 @@ struct MuesliCKSyncLegacyScopeMigration: Sendable, Equatable {
     let stateKey: String
 }
 
+/// Where a non-upstream container's state lived before the saved-state keys named the container:
+/// under upstream's keys for the same environment.
+struct MuesliCKSyncContainerScopeMigration: Sendable, Equatable {
+    let unscopedAccountScopeKey: String
+    let unscopedStateKey: String
+    let unscopedChangeTokenKey: String
+    let changeTokenKey: String
+
+    /// Moves the change token into this container's key unless that key already holds one.
+    func moveChangeToken(in defaults: UserDefaults) {
+        guard defaults.data(forKey: changeTokenKey) == nil,
+              let token = defaults.data(forKey: unscopedChangeTokenKey) else { return }
+        defaults.set(token, forKey: changeTokenKey)
+        defaults.removeObject(forKey: unscopedChangeTokenKey)
+    }
+}
+
 /// Owns the single CKSyncEngine instance for Muesli's private text-record zone.
 ///
 /// SQLite's `sync_dirty` flags remain the durable outbox. Before every send we
@@ -181,6 +198,30 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         )
     }
 
+    static var containerScopeMigration: MuesliCKSyncContainerScopeMigration? {
+        containerScopeMigration(
+            environment: MuesliICloudSyncEngine.cloudKitEnvironmentKeyComponent,
+            container: MuesliICloudSyncEngine.Schema.containerIdentifier
+        )
+    }
+
+    /// The unscoped keys a non-upstream container wrote before the keys named the container.
+    /// Those are upstream's keys, so the state there may belong to either container; the move
+    /// happens only after the saved owner proves it is this container's (see `authorizeAccount`).
+    static func containerScopeMigration(
+        environment: String,
+        container: String
+    ) -> MuesliCKSyncContainerScopeMigration? {
+        let upstream = MuesliICloudSyncEngine.Schema.defaultContainerIdentifier
+        guard container != upstream else { return nil }
+        return MuesliCKSyncContainerScopeMigration(
+            unscopedAccountScopeKey: accountScopeKey(environment: environment, container: upstream),
+            unscopedStateKey: stateKey(environment: environment, container: upstream),
+            unscopedChangeTokenKey: UserDefaultsICloudChangeTokenStore.defaultKey(container: upstream),
+            changeTokenKey: UserDefaultsICloudChangeTokenStore.defaultKey(container: container)
+        )
+    }
+
     private static let subscriptionID = "muesli-cksyncengine-private-v1"
     private static let uploadBatchSize = 200
     private static let maximumUploadBatchesPerSync = 50
@@ -188,6 +229,8 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
     private let store: DictationStore
     private let legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Set<String>)?
     private let legacyScopeMigration: MuesliCKSyncLegacyScopeMigration?
+    private let containerScopeMigration: MuesliCKSyncContainerScopeMigration?
+    private let defaults: UserDefaults
     private var container: CKContainer?
     private var preflight: MuesliICloudSyncEngine?
     private var engine: CKSyncEngine?
@@ -219,6 +262,8 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         container: CKContainer? = nil,
         legacyAccountRecordVerifier: (@Sendable (Set<String>) async throws -> Set<String>)? = nil,
         legacyScopeMigration: MuesliCKSyncLegacyScopeMigration? = MuesliCKSyncEngine.productionLegacyScopeMigration,
+        containerScopeMigration: MuesliCKSyncContainerScopeMigration? = MuesliCKSyncEngine.containerScopeMigration,
+        defaults: UserDefaults = .standard,
         bridgeRefreshDidFinish: (@MainActor @Sendable () -> Void)? = nil,
         syncZoneFetchDidSucceed: (@MainActor @Sendable () -> Void)? = nil,
         engineCancellationObserver: @escaping @Sendable () async -> Void = {}
@@ -227,6 +272,8 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
         self.container = container
         self.legacyAccountRecordVerifier = legacyAccountRecordVerifier
         self.legacyScopeMigration = legacyScopeMigration
+        self.containerScopeMigration = containerScopeMigration
+        self.defaults = defaults
         self.bridgeRefreshDidFinish = bridgeRefreshDidFinish
         self.syncZoneFetchDidSucceed = syncZoneFetchDidSucceed
         self.engineCancellationObserver = engineCancellationObserver
@@ -931,6 +978,26 @@ actor MuesliCKSyncEngine: CKSyncEngineDelegate {
                 fputs("[muesli-native] CKSyncEngine account boundary blocked\n", stderr)
             }
             return matches
+        }
+
+        // CloudKit user record IDs differ per container, so an unscoped owner equal to this
+        // account's hash in this container proves the unscoped state was written here. Same
+        // container, environment and account means the engine cursor is still valid; it moves
+        // as is and nothing is requeued.
+        if let containerScopeMigration,
+           try store.moveCloudSyncState(
+               expectedScope: requestedScope,
+               fromAccountScopeKey: containerScopeMigration.unscopedAccountScopeKey,
+               fromStateKey: containerScopeMigration.unscopedStateKey,
+               toAccountScopeKey: Self.accountScopeKey,
+               toStateKey: Self.stateKey
+           ) {
+            // The legacy change token has no owner of its own; it was written beside this state
+            // by the same build, so the owner proof covers it. A wrong token only costs a refetch.
+            containerScopeMigration.moveChangeToken(in: defaults)
+            accountBoundaryBlocked = false
+            fputs("[muesli-native] CKSyncEngine moved saved state into the container scope\n", stderr)
+            return true
         }
 
         if let legacyScopeMigration,
