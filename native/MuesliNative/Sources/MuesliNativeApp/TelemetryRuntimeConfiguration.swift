@@ -85,10 +85,31 @@ enum TelemetryBootstrap {
     @discardableResult
     static func start(userConsented: Bool, bundle: Bundle = .main) -> TelemetryRuntimeConfiguration {
         let runtime = TelemetryRuntimeConfiguration.current(userConsented: userConsented, bundle: bundle)
+        if !runtime.isEnabled {
+            discardQueuedSignals()
+        }
         let config = TelemetryDeck.Config(appID: runtime.sdkAppID)
         config.analyticsDisabled = !runtime.isEnabled
+        // Session stats are collected locally even when analytics are disabled, and would be
+        // attached to signals after a later opt-in.
+        config.sessionStatsEnabled = runtime.isEnabled
         config.defaultParameters = { runtime.defaultParameters }
         TelemetryDeck.initialize(config: config)
         return runtime
+    }
+
+    /// The SDK (2.11.0) uploads its on-disk queue on every initialize, ignoring `analyticsDisabled`.
+    /// The queue is `<Caches>/telemetrysignalcache`, shared by every unsandboxed TelemetryDeck app,
+    /// so it can hold signals from an earlier opted-in build. Deleting it is the only way to keep an
+    /// opted-out launch from sending them.
+    static func discardQueuedSignals(cachesDirectory: URL? = nil, fileManager: FileManager = .default) {
+        guard let directory = cachesDirectory ?? fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return
+        }
+        try? fileManager.removeItem(at: signalCacheURL(in: directory))
+    }
+
+    static func signalCacheURL(in cachesDirectory: URL) -> URL {
+        cachesDirectory.appendingPathComponent("telemetrysignalcache")
     }
 }

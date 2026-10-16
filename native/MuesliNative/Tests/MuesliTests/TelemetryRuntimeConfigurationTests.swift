@@ -84,6 +84,20 @@ struct TelemetryRuntimeConfigurationTests {
         #expect(configuration.sdkAppID == TelemetryRuntimeConfiguration.disabledSDKAppID)
     }
 
+    @Test("an opted-out launch discards the SDK's queued signals instead of uploading them")
+    func discardsQueuedSignals() throws {
+        let caches = FileManager.default.temporaryDirectory.appendingPathComponent("telemetry-cache-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: caches) }
+        let queue = TelemetryBootstrap.signalCacheURL(in: caches)
+        try Data("[]".utf8).write(to: queue)
+
+        TelemetryBootstrap.discardQueuedSignals(cachesDirectory: caches)
+
+        #expect(!FileManager.default.fileExists(atPath: queue.path))
+        TelemetryBootstrap.discardQueuedSignals(cachesDirectory: caches) // nothing queued: no-op
+    }
+
     @Test("analytics consent defaults off and round-trips through config JSON")
     func consentSettingDefaultsOff() throws {
         let fresh = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
