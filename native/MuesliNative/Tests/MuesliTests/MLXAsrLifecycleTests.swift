@@ -57,6 +57,32 @@ struct MLXAsrLifecycleTests {
         #expect(log.events.contains("unload:stale"), "A runtime that finished loading after shutdown must be released")
     }
 
+    @Test("A caller cancelled while its load is in flight releases the runtime once the load finishes")
+    func cancelledCallerReleasesCompletedLoad() async {
+        let log = MLXAsrTestLog()
+        let loadGate = MLXAsrTestGate()
+        let model = Support.model()
+        let transcriber = Support.transcriber { _, _, _ in
+            await loadGate.suspend()
+            return StubMLXAsrRuntime(name: "orphan", log: log)
+        }
+        let preparing = Task { try await transcriber.prepare(model) }
+        await loadGate.waitUntilEntered()
+        // The load task is unstructured, so cancelling the caller does not stop the loader.
+        preparing.cancel()
+        await loadGate.release()
+        do {
+            try await preparing.value
+            Issue.record("A cancelled preparation unexpectedly succeeded")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        let state = await transcriber.lifecycleState
+        #expect(state.loadedModelID == nil && state.loadingModelID == nil)
+        #expect(!state.hasRuntime)
+        #expect(log.count(of: "unload:orphan") == 1, "A load the caller no longer wants must be released")
+    }
+
     @Test("A failed load leaves clean state and the next prepare loads again")
     func loadFailureClearsState() async throws {
         struct LoadFailure: Error {}

@@ -241,7 +241,10 @@ actor MLXAsrTranscriber {
                 loaded.unload()  // finished after shutdown(): release instead of restoring
                 throw CancellationError()
             }
-            try Task.checkCancellation()
+            guard !Task.isCancelled else {
+                loaded.unload()  // the caller left while the shared load ran: release, do not leak
+                throw CancellationError()
+            }
             runtime = loaded
             model = selected
             loadTask = nil

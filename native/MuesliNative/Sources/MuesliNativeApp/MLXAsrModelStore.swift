@@ -138,17 +138,49 @@ struct MLXAsrModelStore: Sendable {
 
     /// Installs or updates the pinned revision. Does nothing when `status` is `.ready`.
     /// The coordinator re-checks every file on disk and fetches only those that are missing,
-    /// short or fail their digest. Files that left the manifest are removed last, so a failed
-    /// update never strips the previous install.
+    /// short or fail their digest.
+    ///
+    /// An update never touches the installed folder until the new revision is complete. The
+    /// coordinator deletes a file whose digest no longer matches before fetching it, so the
+    /// update runs in a hidden sibling folder seeded with copies of the current files (APFS
+    /// clones, so no extra space for unchanged files) and is swapped in on success. A failed or
+    /// cancelled update leaves the previous install and its marker as they were, and leaves the
+    /// staging folder so the next attempt resumes.
     func download(progress: ((Double, String?) -> Void)? = nil,
                   progressSnapshot: ModelDownloadProgressHandler? = nil) async throws {
         try spec.validate()
         let current = status
         if current == .ready { return }
-        // From here the on-disk files no longer match any recorded install.
-        try? FileManager.default.removeItem(at: markerURL)
+        guard current == .updateRequired else {
+            try await fetch(into: directory, verb: "Downloading", progress: progress, progressSnapshot: progressSnapshot)
+            try install(in: directory)
+            return
+        }
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: stagingDirectory.path) {
+            try fm.copyItem(at: directory, to: stagingDirectory)
+        }
+        try await fetch(into: stagingDirectory, verb: "Updating", progress: progress, progressSnapshot: progressSnapshot)
+        try install(in: stagingDirectory)
+        _ = try fm.replaceItemAt(directory, withItemAt: stagingDirectory)
+    }
 
-        let verb = current == .updateRequired ? "Updating" : "Downloading"
+    /// Cancels an active download, then removes every file this model owns.
+    func delete() async throws {
+        await coordinator.cancelAndWait(modelID: spec.id)
+        for folder in [directory, stagingDirectory] where FileManager.default.fileExists(atPath: folder.path) {
+            try FileManager.default.removeItem(at: folder)
+        }
+    }
+
+    // MARK: - Private
+
+    /// Where an update is assembled before it replaces `directory`.
+    private var stagingDirectory: URL { spec.cacheRoot.appendingPathComponent(".\(spec.id).updating") }
+
+    private func fetch(into destination: URL, verb: String,
+                       progress: ((Double, String?) -> Void)?,
+                       progressSnapshot: ModelDownloadProgressHandler?) async throws {
         let manifest = ModelDownloadManifest(
             id: spec.id, version: spec.revision,
             files: spec.files.map {
@@ -157,34 +189,30 @@ struct MLXAsrModelStore: Sendable {
             },
             maximumConcurrency: 2)
         do {
-            try await coordinator.download(manifest, to: directory) { snapshot in
+            try await coordinator.download(manifest, to: destination) { snapshot in
                 progress?(snapshot.fractionCompleted ?? 0, "\(verb) \(spec.displayName)...")
                 progressSnapshot?(snapshot)
             }
         } catch let error as ModelDownloadError {
             throw Self.map(error, name: spec.displayName)
         }
-        try writeMarker()
-        removeFilesOutsideManifest()
     }
 
-    /// Cancels an active download, then removes every file this model owns.
-    func delete() async throws {
-        await coordinator.cancelAndWait(modelID: spec.id)
-        if FileManager.default.fileExists(atPath: directory.path) {
-            try FileManager.default.removeItem(at: directory)
-        }
+    /// Marks `folder` as a complete install of this manifest and drops files that left it.
+    private func install(in folder: URL) throws {
+        try writeMarker(in: folder)
+        removeFilesOutsideManifest(in: folder)
     }
-
-    // MARK: - Private
 
     /// Errors that mean "the pinned bytes are not there" become `modelUnavailable`.
-    /// Network, disk, rate-limit (429) and timeout (408) errors pass through so the UI can offer a retry.
+    /// Network, disk, rate-limit (429), timeout (408) and Content-Length errors pass through so
+    /// the UI can offer a retry. A wrong Content-Length is usually a captive portal or proxy page;
+    /// bytes that really differ are still caught by the size and digest checks.
     private static func map(_ error: ModelDownloadError, name: String) -> Error {
         switch error {
         case .invalidHTTPStatus(let status, _) where [401, 403, 404, 410, 451].contains(status):
             return MLXAsrModelStoreError.modelUnavailable(name)
-        case .checksumMismatch, .sizeMismatch, .invalidContentLength:
+        case .checksumMismatch, .sizeMismatch:
             return MLXAsrModelStoreError.modelUnavailable(name)
         default:
             return error
@@ -206,24 +234,24 @@ struct MLXAsrModelStore: Sendable {
         return try? JSONDecoder().decode(InstallMarker.self, from: data)
     }
 
-    private func writeMarker() throws {
+    private func writeMarker(in folder: URL) throws {
         let marker = InstallMarker(id: spec.id, revision: spec.revision, files: spec.files)
-        try JSONEncoder().encode(marker).write(to: markerURL, options: .atomic)
+        try JSONEncoder().encode(marker).write(to: folder.appendingPathComponent(Self.markerName), options: .atomic)
     }
 
     /// Removes regular files that are neither in the manifest nor hidden bookkeeping files.
     /// Symbolic links are left alone and never followed.
-    private func removeFilesOutsideManifest() {
+    private func removeFilesOutsideManifest(in folder: URL) {
         let keep = Set(spec.files.map(\.path))
         let fm = FileManager.default
-        guard let walker = fm.enumerator(atPath: directory.path) else { return }
+        guard let walker = fm.enumerator(atPath: folder.path) else { return }
         for case let relative as String in walker {
             let name = (relative as NSString).lastPathComponent
             if name.hasPrefix(".") {
                 walker.skipDescendants()
                 continue
             }
-            let url = directory.appendingPathComponent(relative)
+            let url = folder.appendingPathComponent(relative)
             let type = (try? fm.attributesOfItem(atPath: url.path)[.type]) as? FileAttributeType
             if type == .typeRegular, !keep.contains(relative) { try? fm.removeItem(at: url) }
         }

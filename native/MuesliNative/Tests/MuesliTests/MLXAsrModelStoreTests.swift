@@ -88,6 +88,11 @@ private let payload: [String: Data] = [
     "weights.safetensors": Data((0..<4096).map { UInt8($0 % 251) }),
 ]
 
+enum MLXAsrUpdateInterruption: Sendable, CustomTestStringConvertible {
+    case rateLimited, cancelled
+    var testDescription: String { self == .rateLimited ? "429" : "cancelled" }
+}
+
 /// Failure matrix rows 1, 2, 11 and 18 (docs/mlx-asr-backends.md).
 @Suite("MLX ASR model store", .serialized, .timeLimit(.minutes(1)))
 struct MLXAsrModelStoreTests {
@@ -192,6 +197,66 @@ struct MLXAsrModelStoreTests {
         #expect(!FileManager.default.fileExists(atPath: retired.path))
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: working.directory.path).filter { !$0.hasPrefix(".") }
         #expect(Set(leftovers) == Set(changed.keys))
+    }
+
+    @Test("An update that fails or is cancelled leaves the previous install intact and still awaiting update",
+          arguments: [MLXAsrUpdateInterruption.rateLimited, .cancelled])
+    func interruptedUpdateKeepsPreviousInstall(interruption: MLXAsrUpdateInterruption) async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let old = fixture.store(revision: Fixture.revision("a"), files: payload)
+        try await old.download()
+        #expect(old.isDownloaded)
+
+        // vocab.json changes content under the same path, the case an in-place update destroys.
+        var updated = payload
+        updated["vocab.json"] = Data(String(repeating: "w", count: 710).utf8)
+        let new = fixture.store(revision: Fixture.revision("b"), files: updated)
+        #expect(new.status == .updateRequired)
+
+        switch interruption {
+        case .rateLimited:
+            StubHub.reset(statusOverride: 429)
+            await #expect(throws: (any Error).self) { try await new.download() }
+        case .cancelled:
+            let attempt = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                try await new.download()
+            }
+            await #expect(throws: CancellationError.self) { try await attempt.value }
+        }
+
+        #expect(new.status == .updateRequired, "A failed update is still an update, not a partial download")
+        #expect(old.isDownloaded, "The previous revision stays installed until the new one is complete")
+        for (path, data) in payload {
+            #expect(try Data(contentsOf: old.directory.appendingPathComponent(path)) == data, "\(path) changed")
+        }
+
+        // A later attempt still completes the update.
+        StubHub.reset()
+        let retry = fixture.store(revision: Fixture.revision("b"), files: updated)
+        try await retry.download()
+        #expect(retry.isDownloaded)
+        #expect(try Data(contentsOf: retry.directory.appendingPathComponent("vocab.json")) == updated["vocab.json"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.root.path) == ["unit-model"],
+                "The staging folder is consumed by the swap")
+    }
+
+    @Test("A Content-Length that disagrees with the manifest is a retryable download error, not an unavailable model")
+    func contentLengthMismatchIsNotUnavailable() async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let revision = Fixture.revision("a")
+        let store = fixture.store(revision: revision, files: payload)
+        // A captive portal or proxy page arrives with 200 and the wrong length.
+        StubHub.serve("/example/unit-model/resolve/\(revision)/vocab.json", Data("<html>login</html>".utf8))
+        do {
+            try await store.download()
+            Issue.record("Download unexpectedly succeeded")
+        } catch let error as ModelDownloadError {
+            guard case .invalidContentLength = error else { Issue.record("Unexpected \(error)"); return }
+        } catch {
+            Issue.record("Expected the coordinator's error to pass through, got \(error)")
+        }
+        #expect(!store.isDownloaded)
     }
 
     @Test("Wrong bytes under the pinned revision are reported as unavailable and nothing is marked ready")
