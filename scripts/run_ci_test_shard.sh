@@ -233,6 +233,12 @@ case "${shard}" in
       CalendarPermissionStateTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
+      PrivateMeetingCLISyncTests
+      PrivateMeetingICloudRemovalTests
+      PrivateMeetingChatTests
+      PrivateMeetingExportTests
+      PrivateMeetingPolicyTests
+      PrivateMeetingsStoreTests
       MeetingTitleLayoutTests
     )
     ;;
