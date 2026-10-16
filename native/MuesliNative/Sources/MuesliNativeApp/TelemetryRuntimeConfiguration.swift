@@ -78,38 +78,107 @@ struct TelemetryRuntimeConfiguration: Equatable, Sendable {
     }
 }
 
-enum TelemetryBootstrap {
-    /// (Re)initializes TelemetryDeck for the user's current choice. It must always run before any
-    /// `TelemetryDeck.signal` call: an uninitialized SDK builds a fresh, enabled manager per call.
-    /// A disabled config carries the all-zero app ID and `analyticsDisabled`, so no signal is recorded.
-    @discardableResult
-    static func start(userConsented: Bool, bundle: Bundle = .main) -> TelemetryRuntimeConfiguration {
-        let runtime = TelemetryRuntimeConfiguration.current(userConsented: userConsented, bundle: bundle)
-        if !runtime.isEnabled {
-            discardQueuedSignals()
+/// The TelemetryDeck calls Muesli makes, behind a seam so the consent gate is testable.
+protocol TelemetrySDK: Sendable {
+    func start(_ runtime: TelemetryRuntimeConfiguration)
+    func stop()
+    func signal(_ name: String, parameters: [String: String])
+    func errorOccurred(id: String, parameters: [String: String], isAppState: Bool)
+}
+
+/// Calls are serialized by `TelemetryGate`'s lock.
+final class TelemetryDeckSDK: TelemetrySDK, @unchecked Sendable {
+    private var config: TelemetryDeck.Config?
+
+    func start(_ runtime: TelemetryRuntimeConfiguration) {
+        if let config {
+            config.analyticsDisabled = false
+            config.sessionStatsEnabled = true
+            return
         }
-        let config = TelemetryDeck.Config(appID: runtime.sdkAppID)
-        config.analyticsDisabled = !runtime.isEnabled
-        // Session stats are collected locally even when analytics are disabled, and would be
-        // attached to signals after a later opt-in.
-        config.sessionStatsEnabled = runtime.isEnabled
+        let config = TelemetryDeck.Config(appID: runtime.appID)
         config.defaultParameters = { runtime.defaultParameters }
         TelemetryDeck.initialize(config: config)
+        self.config = config
+    }
+
+    /// Opt-out disables the live SDK instead of calling `TelemetryDeck.terminate()`. After
+    /// terminate, the SDK's own delayed session start (0.5 s after initialize) would reach an
+    /// uninitialized manager, which builds a new one that reads and uploads the shared cache.
+    /// Disabled, the SDK records no new signals; ones queued before the opt-out may still send.
+    func stop() {
+        config?.analyticsDisabled = true
+        config?.sessionStatsEnabled = false
+    }
+
+    func signal(_ name: String, parameters: [String: String]) {
+        TelemetryDeck.signal(name, parameters: parameters)
+    }
+
+    func errorOccurred(id: String, parameters: [String: String], isAppState: Bool) {
+        TelemetryDeck.errorOccurred(id: id, category: isAppState ? .appState : .thrownException,
+                                    message: nil, parameters: parameters)
+    }
+}
+
+/// Owns whether TelemetryDeck runs at all. Without consent (or without a compiled-in app ID) the
+/// SDK is never initialized and never touched: in TelemetryDeck 2.11.0 even a disabled
+/// `initialize` creates a SignalManager that reads the shared `<Caches>/telemetrysignalcache` and
+/// uploads it, and any SDK call before `initialize` builds such a manager on the fly. So every
+/// Muesli signal goes through `signal`/`errorOccurred` here, which drop it while inactive.
+final class TelemetryGate: @unchecked Sendable {
+    static let shared = TelemetryGate(sdk: TelemetryDeckSDK())
+
+    private let sdk: TelemetrySDK
+    private let lock = NSLock()
+    private var active = false
+
+    init(sdk: TelemetrySDK) {
+        self.sdk = sdk
+    }
+
+    var isActive: Bool {
+        lock.withLock { active }
+    }
+
+    /// Starts TelemetryDeck when the runtime allows it and stops it when it no longer does.
+    @discardableResult
+    func apply(_ runtime: TelemetryRuntimeConfiguration) -> TelemetryRuntimeConfiguration {
+        lock.withLock {
+            if runtime.isEnabled, !active {
+                sdk.start(runtime)
+                active = true
+            } else if !runtime.isEnabled, active {
+                sdk.stop()
+                active = false
+            }
+        }
         return runtime
     }
 
-    /// The SDK (2.11.0) uploads its on-disk queue on every initialize, ignoring `analyticsDisabled`.
-    /// The queue is `<Caches>/telemetrysignalcache`, shared by every unsandboxed TelemetryDeck app,
-    /// so it can hold signals from an earlier opted-in build. Deleting it is the only way to keep an
-    /// opted-out launch from sending them.
-    static func discardQueuedSignals(cachesDirectory: URL? = nil, fileManager: FileManager = .default) {
-        guard let directory = cachesDirectory ?? fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-            return
-        }
-        try? fileManager.removeItem(at: signalCacheURL(in: directory))
+    @discardableResult
+    func apply(userConsented: Bool, bundle: Bundle = .main) -> TelemetryRuntimeConfiguration {
+        apply(TelemetryRuntimeConfiguration.current(userConsented: userConsented, bundle: bundle))
     }
 
-    static func signalCacheURL(in cachesDirectory: URL) -> URL {
-        cachesDirectory.appendingPathComponent("telemetrysignalcache")
+    func signal(_ name: String, parameters: [String: String] = [:]) {
+        lock.withLock {
+            guard active else { return }
+            sdk.signal(name, parameters: parameters)
+        }
+    }
+
+    func errorOccurred(id: String, parameters: [String: String], isAppState: Bool) {
+        lock.withLock {
+            guard active else { return }
+            sdk.errorOccurred(id: id, parameters: parameters, isAppState: isAppState)
+        }
+    }
+}
+
+/// The only way Muesli code sends analytics.
+enum MuesliTelemetry {
+    static func signal(_ name: String, parameters: [String: String] = [:]) {
+        TelemetryGate.shared.signal(name, parameters: parameters)
     }
 }

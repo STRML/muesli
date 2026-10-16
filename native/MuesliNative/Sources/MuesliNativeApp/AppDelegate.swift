@@ -2,7 +2,6 @@ import AppKit
 import CloudKit
 import Foundation
 import Sparkle
-import TelemetryDeck
 import MuesliCore
 
 @MainActor
@@ -16,12 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         installStandardEditMenu()
 
         // Consent is read before anything can signal; the controller loads the same config later.
-        let runtimeTelemetry = TelemetryBootstrap.start(userConsented: ConfigStore().load().shareUsageAnalytics)
-        if runtimeTelemetry.isEnabled {
-            TelemetryDeck.signal("app.launched")
-        }
-        // Always drain a pending marker. TelemetryDeck's global privacy gate
-        // suppresses the signal when analytics are disabled.
+        // Without consent TelemetryDeck is never initialized and every signal below is dropped.
+        TelemetryGate.shared.apply(userConsented: ConfigStore().load().shareUsageAnalytics)
+        MuesliTelemetry.signal("app.launched")
+        // Always drain a pending marker; the gate drops its signal when analytics are off.
         DiarizerPreloadDiagnostics().reportInterruptedAttemptIfNeeded()
 
         do {

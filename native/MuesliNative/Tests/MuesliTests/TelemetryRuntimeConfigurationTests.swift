@@ -84,18 +84,51 @@ struct TelemetryRuntimeConfigurationTests {
         #expect(configuration.sdkAppID == TelemetryRuntimeConfiguration.disabledSDKAppID)
     }
 
-    @Test("an opted-out launch discards the SDK's queued signals instead of uploading them")
-    func discardsQueuedSignals() throws {
-        let caches = FileManager.default.temporaryDirectory.appendingPathComponent("telemetry-cache-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: caches) }
-        let queue = TelemetryBootstrap.signalCacheURL(in: caches)
-        try Data("[]".utf8).write(to: queue)
+    @Test("an opted-out launch does not initialize TelemetryDeck, and its signals never reach the SDK")
+    func optedOutLaunchDoesNotInitialize() {
+        let sdk = RecordingTelemetrySDK()
+        let gate = TelemetryGate(sdk: sdk)
 
-        TelemetryBootstrap.discardQueuedSignals(cachesDirectory: caches)
+        gate.apply(makeConfiguration(appID: validAppID, channel: "dev", userConsented: false))
+        gate.apply(makeConfiguration(appID: nil, channel: nil, userConsented: true))
+        gate.signal("dictation.completed", parameters: ["backend": "whisper"])
+        gate.errorOccurred(id: "incident", parameters: [:], isAppState: false)
 
-        #expect(!FileManager.default.fileExists(atPath: queue.path))
-        TelemetryBootstrap.discardQueuedSignals(cachesDirectory: caches) // nothing queued: no-op
+        #expect(!gate.isActive)
+        #expect(sdk.events.isEmpty)
+    }
+
+    @Test("only the telemetry gate calls TelemetryDeck")
+    func onlyTheGateCallsTelemetryDeck() throws {
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        var offenders: [String] = []
+        for case let url as URL in files where url.pathExtension == "swift"
+            && url.lastPathComponent != "TelemetryRuntimeConfiguration.swift" {
+            let source = try String(contentsOf: url, encoding: .utf8)
+            if source.contains("import TelemetryDeck") || source.contains("TelemetryDeck.signal(") {
+                offenders.append(url.lastPathComponent)
+            }
+        }
+        #expect(offenders.isEmpty, "Send analytics through MuesliTelemetry or TelemetryGate: \(offenders)")
+    }
+
+    @Test("opting in starts TelemetryDeck once and opting out stops it")
+    func optInStartsAndOptOutStops() {
+        let sdk = RecordingTelemetrySDK()
+        let gate = TelemetryGate(sdk: sdk)
+        let consented = makeConfiguration(appID: validAppID, channel: "dev", userConsented: true)
+
+        gate.apply(consented)
+        gate.apply(consented)
+        gate.signal("dictation.completed")
+        gate.apply(makeConfiguration(appID: validAppID, channel: "dev", userConsented: false))
+        gate.signal("dictation.completed")
+
+        #expect(!gate.isActive)
+        #expect(sdk.events == ["start:\(validAppID)", "signal:dictation.completed", "stop"])
     }
 
     @Test("analytics consent defaults off and round-trips through config JSON")
@@ -125,4 +158,13 @@ struct TelemetryRuntimeConfigurationTests {
             userConsented: userConsented
         )
     }
+}
+
+private final class RecordingTelemetrySDK: TelemetrySDK, @unchecked Sendable {
+    private(set) var events: [String] = []
+
+    func start(_ runtime: TelemetryRuntimeConfiguration) { events.append("start:\(runtime.appID)") }
+    func stop() { events.append("stop") }
+    func signal(_ name: String, parameters: [String: String]) { events.append("signal:\(name)") }
+    func errorOccurred(id: String, parameters: [String: String], isAppState: Bool) { events.append("error:\(id)") }
 }

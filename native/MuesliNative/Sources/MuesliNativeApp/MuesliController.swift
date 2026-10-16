@@ -4,7 +4,6 @@ import CloudKit
 import CoreAudio
 import Foundation
 import Sparkle
-import TelemetryDeck
 import MuesliCore
 import os
 
@@ -1244,7 +1243,7 @@ public final class MuesliController: NSObject {
                   self.appState.activeFeatureTour == nil else { return }
 
             self.appState.pendingFeatureTourInvitation = tour
-            TelemetryDeck.signal("feature_walkthrough.invitation_shown", parameters: [
+            MuesliTelemetry.signal("feature_walkthrough.invitation_shown", parameters: [
                 "version": tour.version,
                 "step_count": "\(tour.steps.count)",
             ])
@@ -1257,7 +1256,7 @@ public final class MuesliController: NSObject {
     func acceptFeatureTourInvitation() {
         guard let tour = appState.pendingFeatureTourInvitation else { return }
         appState.pendingFeatureTourInvitation = nil
-        TelemetryDeck.signal("feature_walkthrough.decision", parameters: [
+        MuesliTelemetry.signal("feature_walkthrough.decision", parameters: [
             "version": tour.version,
             "decision": "accepted",
             "step_count": "\(tour.steps.count)",
@@ -1268,7 +1267,7 @@ public final class MuesliController: NSObject {
     func skipFeatureTourInvitation() {
         guard let tour = appState.pendingFeatureTourInvitation else { return }
         appState.pendingFeatureTourInvitation = nil
-        TelemetryDeck.signal("feature_walkthrough.decision", parameters: [
+        MuesliTelemetry.signal("feature_walkthrough.decision", parameters: [
             "version": tour.version,
             "decision": "skipped",
             "step_count": "\(tour.steps.count)",
@@ -1289,7 +1288,7 @@ public final class MuesliController: NSObject {
             self.appState.activeFeatureTour = tour
             self.appState.featureTourStepIndex = 0
             self.navigateToFeatureTourStep(tour.steps[0])
-            TelemetryDeck.signal("feature_walkthrough.started", parameters: [
+            MuesliTelemetry.signal("feature_walkthrough.started", parameters: [
                 "version": tour.version,
                 "source": source,
                 "step_count": "\(tour.steps.count)",
@@ -1317,7 +1316,7 @@ public final class MuesliController: NSObject {
     func dismissFeatureTour() {
         if let tour = appState.activeFeatureTour,
            tour.steps.indices.contains(appState.featureTourStepIndex) {
-            TelemetryDeck.signal("feature_walkthrough.dismissed", parameters: [
+            MuesliTelemetry.signal("feature_walkthrough.dismissed", parameters: [
                 "version": tour.version,
                 "step": tour.steps[appState.featureTourStepIndex].id,
                 "step_index": "\(appState.featureTourStepIndex + 1)",
@@ -1329,7 +1328,7 @@ public final class MuesliController: NSObject {
 
     private func completeFeatureTour() {
         if let tour = appState.activeFeatureTour {
-            TelemetryDeck.signal("feature_walkthrough.completed", parameters: [
+            MuesliTelemetry.signal("feature_walkthrough.completed", parameters: [
                 "version": tour.version,
                 "step_count": "\(tour.steps.count)",
             ])
@@ -1921,7 +1920,7 @@ public final class MuesliController: NSObject {
     func recordContributionMilestonePromptSeen() {
         guard let prompt = appState.contributionMilestonePrompt,
               contributionMilestonePromptSeenIDsThisLaunch.insert(prompt.id).inserted else { return }
-        TelemetryDeck.signal("contribution_prompt_seen", parameters: [
+        MuesliTelemetry.signal("contribution_prompt_seen", parameters: [
             "kind": prompt.kind.rawValue,
             "count": "\(prompt.count)",
             "github_star_clicked": "\(config.contributionGitHubStarClicked)",
@@ -1947,7 +1946,7 @@ public final class MuesliController: NSObject {
         }
         configStore.save(config)
         appState.config = config
-        TelemetryDeck.signal("contribution_prompt_dismissed", parameters: [
+        MuesliTelemetry.signal("contribution_prompt_dismissed", parameters: [
             "kind": prompt.kind.rawValue,
             "count": "\(prompt.count)",
         ])
@@ -1962,7 +1961,7 @@ public final class MuesliController: NSObject {
         }
         // CTA clicks intentionally dismiss for this launch; any remaining CTA can reappear next launch.
         contributionMilestonePromptDismissedThisLaunch = true
-        TelemetryDeck.signal("contribution_prompt_action_clicked", parameters: [
+        MuesliTelemetry.signal("contribution_prompt_action_clicked", parameters: [
             "action": action.rawValue,
             "kind": prompt.kind.rawValue,
             "count": "\(prompt.count)",
@@ -2016,7 +2015,7 @@ public final class MuesliController: NSObject {
             totalWords: appState.dictationStats.totalWords,
             totalMeetings: appState.meetingStats.totalMeetings
         )
-        TelemetryDeck.signal("contribution_sidebar_share_clicked", parameters: [
+        MuesliTelemetry.signal("contribution_sidebar_share_clicked", parameters: [
             "action": action.rawValue,
             "count": "\(wordCount)",
         ])
@@ -2057,7 +2056,7 @@ public final class MuesliController: NSObject {
             reason: "Waiting for an iPhone or iPad to finish Muesli sync setup"
         )
         appState.iCloudBridgeCompanionDiscoveryState = .waiting
-        TelemetryDeck.signal("bridge_device_discovery_started", parameters: ["platform": "macos"])
+        MuesliTelemetry.signal("bridge_device_discovery_started", parameters: ["platform": "macos"])
 
         bridgeCompanionDiscoveryTask = Task { [weak self] in
             let clock = ContinuousClock()
@@ -2088,7 +2087,7 @@ public final class MuesliController: NSObject {
             self.cancelUnpairedBridgeActivation(
                 completionStatus: "Sync setup timed out."
             )
-            TelemetryDeck.signal("bridge_device_discovery_timed_out", parameters: ["platform": "macos"])
+            MuesliTelemetry.signal("bridge_device_discovery_timed_out", parameters: ["platform": "macos"])
         }
     }
 
@@ -2099,7 +2098,7 @@ public final class MuesliController: NSObject {
         endIPhoneBridgeDeviceDiscoveryActivity()
         appState.iCloudBridgeCompanionDiscoveryState = .idle
         cancelUnpairedBridgeActivation(completionStatus: "Sync setup cancelled.")
-        TelemetryDeck.signal("bridge_device_discovery_cancelled", parameters: ["platform": "macos"])
+        MuesliTelemetry.signal("bridge_device_discovery_cancelled", parameters: ["platform": "macos"])
     }
 
     func enableIPhoneBridgeSync() {
@@ -2125,7 +2124,7 @@ public final class MuesliController: NSObject {
         appState.iCloudSyncStatus = "Checking iCloud..."
         appState.iCloudBridgeState = .checkingICloud
         appState.iCloudBridgeMessage = nil
-        TelemetryDeck.signal("bridge_enable_started", parameters: ["platform": "macos"])
+        MuesliTelemetry.signal("bridge_enable_started", parameters: ["platform": "macos"])
 
         iCloudSyncGeneration += 1
         let generation = iCloudSyncGeneration
@@ -2165,7 +2164,7 @@ public final class MuesliController: NSObject {
                     self.iCloudSubscriptionTask = nil
                     self.appState.isICloudBridgeActivationPending = false
                     self.presentICloudSyncFailure(error, statusPrefix: "Sync needs attention")
-                    TelemetryDeck.signal(
+                    MuesliTelemetry.signal(
                         "bridge_enable_failed",
                         parameters: ["platform": "macos", "reason": self.iCloudSyncFailureReason(error)]
                     )
@@ -2189,7 +2188,7 @@ public final class MuesliController: NSObject {
         appState.iCloudSyncStatus = "Reconnecting this Mac to iCloud..."
         appState.iCloudBridgeState = .syncing
         appState.iCloudBridgeMessage = nil
-        TelemetryDeck.signal("icloud_legacy_reconnect_started", parameters: ["platform": "macos"])
+        MuesliTelemetry.signal("icloud_legacy_reconnect_started", parameters: ["platform": "macos"])
 
         iCloudSyncGeneration += 1
         let generation = iCloudSyncGeneration
@@ -2208,7 +2207,7 @@ public final class MuesliController: NSObject {
                     self.appState.iCloudSyncStatus = "Reconnected. Syncing your text..."
                     self.appState.iCloudBridgeState = .syncing
                     self.appState.iCloudBridgeMessage = nil
-                    TelemetryDeck.signal(
+                    MuesliTelemetry.signal(
                         "icloud_legacy_reconnect_completed",
                         parameters: ["platform": "macos"]
                     )
@@ -2236,7 +2235,7 @@ public final class MuesliController: NSObject {
                     self.iCloudSubscriptionTask = nil
                     self.appState.isICloudBridgeActivationPending = false
                     self.presentICloudSyncFailure(error, statusPrefix: "Reconnection failed")
-                    TelemetryDeck.signal(
+                    MuesliTelemetry.signal(
                         "icloud_legacy_reconnect_failed",
                         parameters: ["platform": "macos", "reason": self.iCloudSyncFailureReason(error)]
                     )
@@ -2258,7 +2257,7 @@ public final class MuesliController: NSObject {
         appState.iCloudSyncStatus = "Resetting iCloud sync..."
         appState.iCloudBridgeState = .syncing
         appState.iCloudBridgeMessage = nil
-        TelemetryDeck.signal("icloud_sync_reset_started", parameters: ["platform": "macos"])
+        MuesliTelemetry.signal("icloud_sync_reset_started", parameters: ["platform": "macos"])
 
         iCloudSyncGeneration += 1
         let generation = iCloudSyncGeneration
@@ -2284,7 +2283,7 @@ public final class MuesliController: NSObject {
                     self.appState.iCloudSyncStatus = completionStatus
                     self.appState.iCloudBridgeState = .notConfigured
                     self.appState.iCloudBridgeMessage = nil
-                    TelemetryDeck.signal(
+                    MuesliTelemetry.signal(
                         "icloud_sync_reset_completed",
                         parameters: ["platform": "macos"]
                     )
@@ -2307,7 +2306,7 @@ public final class MuesliController: NSObject {
                     self.iCloudSubscriptionTask = nil
                     self.appState.isICloudSyncInProgress = false
                     self.presentICloudSyncFailure(error, statusPrefix: "Reset failed")
-                    TelemetryDeck.signal(
+                    MuesliTelemetry.signal(
                         "icloud_sync_reset_failed",
                         parameters: ["platform": "macos", "reason": self.iCloudSyncFailureReason(error)]
                     )
@@ -2535,14 +2534,14 @@ public final class MuesliController: NSObject {
                     self.appState.iCloudLastSyncSummary = summary
                     self.appState.iCloudLastSyncedAt = result.syncedAt
                     if result.downloaded.total > 0 {
-                        TelemetryDeck.signal(
+                        MuesliTelemetry.signal(
                             "bridge_remote_records_seen",
                             parameters: ["platform": "macos", "count": "\(result.downloaded.total)"]
                         )
                     }
                     if self.appState.isICloudBridgeActivationPending {
                         self.appState.isICloudBridgeActivationPending = false
-                        TelemetryDeck.signal("bridge_enable_completed", parameters: ["platform": "macos"])
+                        MuesliTelemetry.signal("bridge_enable_completed", parameters: ["platform": "macos"])
                     }
                     self.refreshUI()
                     let shouldRunBridgeDiscoveryFollowUp = self.bridgeDiscoveryFollowUpPending
@@ -2598,7 +2597,7 @@ public final class MuesliController: NSObject {
                     self.presentICloudSyncFailure(error, statusPrefix: "Sync failed")
                     if self.appState.isICloudBridgeActivationPending {
                         self.appState.isICloudBridgeActivationPending = false
-                        TelemetryDeck.signal(
+                        MuesliTelemetry.signal(
                             "bridge_enable_failed",
                             parameters: ["platform": "macos", "reason": self.iCloudSyncFailureReason(error)]
                         )
@@ -2790,7 +2789,7 @@ public final class MuesliController: NSObject {
         endIPhoneBridgeDeviceDiscoveryActivity()
         appState.iCloudBridgeCompanionDiscoveryState = foundCompanion ? .idle : .timedOut
         if foundCompanion, previousState != .idle {
-            TelemetryDeck.signal("bridge_device_discovery_completed", parameters: ["platform": "macos"])
+            MuesliTelemetry.signal("bridge_device_discovery_completed", parameters: ["platform": "macos"])
         }
         if ICloudBridgeActivationSyncPolicy.shouldStartAfterCompanionDiscovery(
             foundCompanion: foundCompanion,
@@ -3364,7 +3363,7 @@ public final class MuesliController: NSObject {
     /// Re-initializes TelemetryDeck so the choice applies now, not at next launch.
     func setShareUsageAnalytics(_ enabled: Bool) {
         updateConfig { $0.shareUsageAnalytics = enabled }
-        TelemetryBootstrap.start(userConsented: enabled)
+        TelemetryGate.shared.apply(userConsented: enabled)
     }
 
     func setPostProcessorEnabled(_ enabled: Bool) {
@@ -5317,7 +5316,7 @@ public final class MuesliController: NSObject {
             if shouldRunMeetingFeatureMonitors {
                 startMeetingFeatureMonitors(includeMaraudersMap: false)
             }
-            TelemetryDeck.signal("onboarding.completed", parameters: [
+            MuesliTelemetry.signal("onboarding.completed", parameters: [
                 "use_case": onboardingUseCase.rawValue,
                 "voice_notes_selected": onboardingUseCase.includesVoiceNotes ? "true" : "false",
                 "dictation_selected": onboardingUseCase.includesDictation ? "true" : "false",
@@ -5394,7 +5393,7 @@ public final class MuesliController: NSObject {
         updateConfig { $0.onboardingUseCase = updatedUseCase.rawValue }
         startDictationHotkeyMonitorIfNeeded(permissions: permissions)
         syncDictationRecorderWarmup(intent: .idlePrewarm(.permissionsReady))
-        TelemetryDeck.signal("onboarding.use_case_reclassified", parameters: [
+        MuesliTelemetry.signal("onboarding.use_case_reclassified", parameters: [
             "from_use_case": previousUseCase.rawValue,
             "to_use_case": updatedUseCase.rawValue,
             "reason": "dictation_permissions_granted",
@@ -5641,7 +5640,7 @@ public final class MuesliController: NSObject {
         enabled: Bool,
         hasRequiredPermissions: Bool
     ) {
-        TelemetryDeck.signal("shortcut_feature.enablement_changed", parameters: [
+        MuesliTelemetry.signal("shortcut_feature.enablement_changed", parameters: [
             "feature": feature,
             "enabled": enabled ? "true" : "false",
             "onboarding_use_case": config.resolvedOnboardingUseCase.rawValue,
@@ -5654,7 +5653,7 @@ public final class MuesliController: NSObject {
         permissionProfile: PushToTalkEnablementPolicy.PermissionProfile,
         hasRequiredPermissions: Bool
     ) {
-        TelemetryDeck.signal("push_to_talk.enablement_changed", parameters: [
+        MuesliTelemetry.signal("push_to_talk.enablement_changed", parameters: [
             "enabled": enabled ? "true" : "false",
             "onboarding_use_case": config.resolvedOnboardingUseCase.rawValue,
             "permission_profile": permissionProfile.rawValue,
@@ -7570,7 +7569,7 @@ public final class MuesliController: NSObject {
                 self.syncAppState()
                 self.historyWindowController?.reload()
                 self.showMeetingDocument(id: result.meetingID)
-                TelemetryDeck.signal("meeting.imported")
+                MuesliTelemetry.signal("meeting.imported")
             }
         } catch is CancellationError {
             await MainActor.run {
@@ -7889,7 +7888,7 @@ public final class MuesliController: NSObject {
                 meetingSession.onMicHealthUserMuted = { [weak self] in
                     Task { @MainActor in
                         guard let self, self.micEpisodeTelemetryGate.allows(meetingID) else { return }
-                        TelemetryDeck.signal(MeetingMicHealthEpisodeKind.userMuted.rawValue, parameters: [:])
+                        MuesliTelemetry.signal(MeetingMicHealthEpisodeKind.userMuted.rawValue, parameters: [:])
                     }
                 }
                 meetingSession.onSystemAudioHealthEpisode = { [weak self] event in
@@ -7902,9 +7901,9 @@ public final class MuesliController: NSObject {
                         ]
                         switch event.kind {
                         case .degraded, .recovered:
-                            TelemetryDeck.signal(event.kind.rawValue, parameters: parameters)
+                            MuesliTelemetry.signal(event.kind.rawValue, parameters: parameters)
                         case .unrecovered:
-                            TelemetryDeck.signal(event.kind.rawValue, parameters: parameters)
+                            MuesliTelemetry.signal(event.kind.rawValue, parameters: parameters)
                             self.recordDiagnosticIncident(
                                 kind: .meetingSystemAudioCaptureFailed,
                                 severity: .warning,
@@ -7945,11 +7944,11 @@ public final class MuesliController: NSObject {
                         }
                         switch event.kind {
                         case .degraded, .recovered:
-                            TelemetryDeck.signal(event.kind.rawValue, parameters: parameters)
+                            MuesliTelemetry.signal(event.kind.rawValue, parameters: parameters)
                         case .unrecovered:
                             // Rich episode signal with full classification, plus
                             // the legacy error incident for dashboard continuity.
-                            TelemetryDeck.signal(event.kind.rawValue, parameters: parameters)
+                            MuesliTelemetry.signal(event.kind.rawValue, parameters: parameters)
                             self.recordDiagnosticIncident(
                                 kind: .meetingMicrophoneCaptureFailed,
                                 severity: .warning,
@@ -8620,7 +8619,7 @@ public final class MuesliController: NSObject {
                 if let meetingResult {
                     self.cleanupTemporaryMeetingAudioFiles(for: meetingResult)
                 }
-                TelemetryDeck.signal("meeting.completed")
+                MuesliTelemetry.signal("meeting.completed")
 
                 self.enqueueOrShowMeetingCompletionNotification(
                     meetingID: completedMeetingID,
@@ -10394,7 +10393,7 @@ public final class MuesliController: NSObject {
                                 deliveryTraceBody: deliveryTraceBody
                             )
                             if target != nil {
-                                TelemetryDeck.signal("quil.completed", parameters: [
+                                MuesliTelemetry.signal("quil.completed", parameters: [
                                     "backend": backend.backend,
                                     "input_chars": String(snapshot.text.count),
                                     "output_chars": String(replacement.count),
@@ -10405,7 +10404,7 @@ public final class MuesliController: NSObject {
                                     outcome: saved ? .success : .needsInput
                                 )
                             } else {
-                                TelemetryDeck.signal("quil.paste_fallback", parameters: [
+                                MuesliTelemetry.signal("quil.paste_fallback", parameters: [
                                     "backend": backend.backend,
                                     "clipboard_retained": String(retainedForManualPaste),
                                 ])
@@ -10716,7 +10715,7 @@ public final class MuesliController: NSObject {
                 let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 await MainActor.run {
                     guard self.computerUseCommandTaskID == taskID else { return }
-                    TelemetryDeck.signal("computer_use.command_parsed", parameters: [
+                    MuesliTelemetry.signal("computer_use.command_parsed", parameters: [
                         "planner_enabled": self.config.enableComputerUsePlanner ? "true" : "false",
                     ])
                 }
@@ -10953,7 +10952,7 @@ public final class MuesliController: NSObject {
         presentComputerUseRuntimeResult(result)
         meetingMonitor.resumeAfterCooldown()
         meetingMonitor.refreshState()
-        TelemetryDeck.signal("computer_use.command_finished", parameters: [
+        MuesliTelemetry.signal("computer_use.command_finished", parameters: [
             "status": "\(result.status)",
         ])
     }
@@ -12233,7 +12232,7 @@ public final class MuesliController: NSObject {
         } else {
             syncAppState()
         }
-        TelemetryDeck.signal("dictation.completed", parameters: [
+        MuesliTelemetry.signal("dictation.completed", parameters: [
             "backend": backend,
             "paste_method": outputMode.pasteMethod,
         ])
