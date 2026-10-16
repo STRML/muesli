@@ -1296,7 +1296,11 @@ final class MuesliICloudSyncEngine {
         cloud["localSource"] = record.localSource as NSString?
         cloud["meetingStatus"] = record.meetingStatus?.rawValue as NSString?
         cloud["followUpToRecordName"] = record.followUpToRecordName as NSString?
-        cloud["engineIdentifier"] = record.engineIdentifier as NSString?
+        // Saves use the changedKeys policy, so writing nil would delete the engine the
+        // phone uploaded. A row with no local engine leaves the field out instead.
+        if let engineIdentifier = record.engineIdentifier {
+            cloud["engineIdentifier"] = engineIdentifier as NSString
+        }
         cloud["createdAt"] = record.createdAt as NSDate
         cloud["updatedAt"] = record.updatedAt as NSDate
         cloud["startedAt"] = record.startedAt as NSDate?
