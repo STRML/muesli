@@ -217,18 +217,23 @@ struct ComputerUseSettingsTests {
         #expect(h.applies == 0)
     }
 
-    @Test("answering a question does not consume the planning budget")
+    @Test("answering a question does not consume the planning budget", .timeLimit(.minutes(1)))
     func questionTimeExcluded() async {
         let h = Harness()
+        // The injected clock carries the budget logic. The budget is far above the
+        // test's real run time so the wall-clock per-call watchdog never fires under load.
+        let budget: TimeInterval = 3_600
         var time: TimeInterval = 0
         var calls = 0
         let result = await ComputerUseSettings.run(command: "Switch indicator", settings: [h.setting],
             config: { h.config }, persistedConfig: { h.saved }, ask: { _ in
-                time += 1_000
+                // Answering takes ten whole budgets; counting any of it would time out.
+                time += budget * 10
                 return "Notch"
-            }, planningTimeout: 10, now: { time }) { _, _ in
+            }, planningTimeout: budget, now: { time }) { _, _ in
                 calls += 1
-                time += 1
+                // Three planner calls spend 90% of the budget, so the planning clock is live.
+                time += budget * 0.3
                 switch calls {
                 case 1: return ("inspect_muesli_setting", #"{"setting":"indicator"}"#)
                 case 2: return ("ask_user_question", #"{"question":"Which indicator?","options":["Notch","Classic"]}"#)
@@ -236,6 +241,7 @@ struct ComputerUseSettingsTests {
                 }
             }
         #expect(result?.status == .done)
+        #expect(calls == 3)
         #expect(h.applies == 1)
     }
 
