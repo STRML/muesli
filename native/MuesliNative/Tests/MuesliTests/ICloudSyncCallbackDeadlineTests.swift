@@ -314,6 +314,15 @@ struct ICloudBridgeWorkingCopyTests {
         #expect(IPhoneBridgeLinks.syncDeepLinkURL(bundleIdentifier: "com.muesli.app").scheme == "muesli")
     }
 
+    @Test("Mac dev builds under another team's bundle ID generate the iOS release sync scheme")
+    func syncQRCodeForkDevIdentityPairsWithReleaseApp() {
+        // dev-test-local.sh builds com.samuelreed.muesli.dev signed for the Production CloudKit
+        // environment, so it pairs with the fork's TestFlight iPhone app, whose scanner accepts
+        // only the muesli scheme. Only upstream's com.muesli.dev lanes pair with the iOS dev app.
+        #expect(IPhoneBridgeLinks.syncDeepLinkURL(bundleIdentifier: "com.samuelreed.muesli.dev").scheme == "muesli")
+        #expect(IPhoneBridgeLinks.syncDeepLinkURL(bundleIdentifier: nil).scheme == "muesli")
+    }
+
     @Test("QR setup dismisses as soon as the companion connects")
     func syncQRCodeClosesAfterConnection() {
         #expect(ICloudSyncQRCodePresentationPolicy.phase(

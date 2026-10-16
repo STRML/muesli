@@ -4140,6 +4140,82 @@ public final class DictationStore {
         guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
     }
 
+    /// Moves one saved owner and engine state to new keys when the destination has no owner yet
+    /// and the source owner equals `expectedScope`. Unlike `migrateCloudSyncAccountScope`, the
+    /// engine state is kept and no rows are requeued: the caller has proven the state belongs to
+    /// the same container, environment and account. An existing destination state is kept.
+    public func moveCloudSyncState(
+        expectedScope: String,
+        fromAccountScopeKey: String,
+        fromStateKey: String,
+        toAccountScopeKey: String,
+        toStateKey: String
+    ) throws -> Bool {
+        let keys = [fromAccountScopeKey, fromStateKey, toAccountScopeKey, toStateKey]
+        guard Set(keys).count == keys.count else { return false }
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        try exec("BEGIN IMMEDIATE TRANSACTION", db: db)
+        do {
+            guard try cloudSyncStateValue(forKey: toAccountScopeKey, db: db) == nil,
+                  try cloudSyncStateValue(forKey: fromAccountScopeKey, db: db)
+                      == Data(expectedScope.utf8) else {
+                try exec("COMMIT", db: db)
+                return false
+            }
+            try insertCloudSyncStateValue(Data(expectedScope.utf8), forKey: toAccountScopeKey, db: db)
+            if let state = try cloudSyncStateValue(forKey: fromStateKey, db: db),
+               try cloudSyncStateValue(forKey: toStateKey, db: db) == nil {
+                try insertCloudSyncStateValue(state, forKey: toStateKey, db: db)
+            }
+            try deleteCloudSyncStateValues(forKeys: [fromAccountScopeKey, fromStateKey], db: db)
+            try exec("COMMIT", db: db)
+            return true
+        } catch {
+            _ = sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+            throw error
+        }
+    }
+
+    private func cloudSyncStateValue(forKey key: String, db: OpaquePointer?) throws -> Data? {
+        let sql = "SELECT value FROM cloud_sync_state WHERE key = ? LIMIT 1"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
+        switch sqlite3_step(statement) {
+        case SQLITE_ROW:
+            guard let bytes = sqlite3_column_blob(statement, 0) else { return Data() }
+            return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
+        case SQLITE_DONE:
+            return nil
+        default:
+            throw lastError(db)
+        }
+    }
+
+    private func insertCloudSyncStateValue(_ value: Data, forKey key: String, db: OpaquePointer?) throws {
+        let sql = "INSERT INTO cloud_sync_state (key, value, updated_at) VALUES (?, ?, ?)"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
+        bindOptionalBlob(value, at: 2, statement: statement)
+        sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+    }
+
+    private func deleteCloudSyncStateValues(forKeys keys: [String], db: OpaquePointer?) throws {
+        let sql = "DELETE FROM cloud_sync_state WHERE key = ?"
+        for key in keys {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError(db) }
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, (key as NSString).utf8String, -1, nil)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError(db) }
+        }
+    }
+
     /// Promotes a legacy environment namespace only when its hashed account owner
     /// exactly matches the current account. The obsolete CKSyncEngine cursor is
     /// discarded and eligible text rows are requeued without reading or changing
