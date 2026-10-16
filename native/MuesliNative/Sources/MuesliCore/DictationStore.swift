@@ -2507,7 +2507,9 @@ public final class DictationStore {
     /// synced records whose device reported no engine remain unattributed; never infer a model.
     private func insightsUsage(db: OpaquePointer?, sinceDay: String?, byModel: Bool) throws -> [InsightsUsage] {
         let key = byModel
-            ? "CASE WHEN NULLIF(TRIM(d.transcription_model), '') IS NULL THEN 'unknown' ELSE COALESCE(d.transcription_backend, '') || ':' || d.transcription_model || CASE WHEN NULLIF(d.transcription_endpoint, '') IS NULL THEN '' ELSE ':' || d.transcription_endpoint END END"
+            // Synced engines group by display name: iOS reports aliases ("parakeet-v3",
+            // "fluidaudio-parakeet-v3") for one engine.
+            ? "CASE WHEN NULLIF(TRIM(d.transcription_model), '') IS NULL THEN 'unknown' WHEN d.transcription_backend = '\(SyncedEngine.backend)' THEN '\(SyncedEngine.backend):' || COALESCE(NULLIF(TRIM(d.transcription_model_name), ''), d.transcription_model) ELSE COALESCE(d.transcription_backend, '') || ':' || d.transcription_model || CASE WHEN NULLIF(d.transcription_endpoint, '') IS NULL THEN '' ELSE ':' || d.transcription_endpoint END END"
             : "CASE WHEN NULLIF(TRIM(d.target_app_bundle_id), '') IS NOT NULL THEN 'bundle:' || TRIM(d.target_app_bundle_id) WHEN NULLIF(TRIM(d.target_app_name), '') IS NOT NULL THEN 'name:' || LOWER(TRIM(d.target_app_name)) ELSE 'unknown' END"
         let name = byModel
             ? "COALESCE(NULLIF(TRIM(d.transcription_model_name), ''), NULLIF(TRIM(d.transcription_model), ''), 'Not recorded')"
