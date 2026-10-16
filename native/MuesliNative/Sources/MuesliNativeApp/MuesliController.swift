@@ -5748,6 +5748,7 @@ public final class MuesliController: NSObject {
         guard let activeMeetingID,
               isMeetingRecording() || isStartingMeetingRecording else { return false }
         showMeetingDocument(id: activeMeetingID)
+        appState.liveTabAutoSelect.noteUserPick(meetingID: activeMeetingID)
         appState.meetingNotesFocusRequest &+= 1
         presentHistoryWindow()
         return true

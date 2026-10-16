@@ -177,18 +177,22 @@ struct MeetingDetailView: View {
                 }
                 .background(MuesliTheme.backgroundBase)
                 .onAppear {
+                    selectLiveTabIfRecordingStarted(meeting)
                     threadContext = controller.meetingThreadContext(for: meeting.id)
                     if controller.canUseSummaryProvider(.openRouter) {
                         controller.loadOpenRouterModels(.text)
                     }
                 }
                 .onChange(of: meeting.id) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: meeting.status) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: appState.meetingNotesFocusRequest) { _, _ in
+                    appState.liveTabAutoSelect.noteUserPick(meetingID: meeting.id)
                     recordingMode = .notes
                 }
                 .onChange(of: meeting.manualNotes) { _, _ in
@@ -759,8 +763,21 @@ struct MeetingDetailView: View {
         return target
     }
 
+    private func selectLiveTabIfRecordingStarted(_ meeting: MeetingRecord) {
+        let isRecording = meeting.status == .recording && showsManualNotesEditor(for: meeting)
+        if appState.liveTabAutoSelect.shouldSelectLive(meetingID: meeting.id, isRecording: isRecording) {
+            recordingMode = .live
+        }
+    }
+
     private var recordingModePicker: some View {
-        Picker("", selection: $recordingMode) {
+        Picker("", selection: Binding(
+            get: { recordingMode },
+            set: { newMode in
+                if let id = meeting?.id { appState.liveTabAutoSelect.noteUserPick(meetingID: id) }
+                recordingMode = newMode
+            }
+        )) {
             Text("Notes").tag(RecordingContentMode.notes)
             Text("Live").tag(RecordingContentMode.live)
         }

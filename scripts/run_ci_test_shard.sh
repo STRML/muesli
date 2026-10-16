@@ -86,6 +86,9 @@ case "${shard}" in
       CustomLLMModelListControllerTests
       SummaryBackendLockTests
       LiveTranscriptFollowStateTests
+      LiveTranscriptParagraphsTests
+      LiveTranscriptScrollToBottomToastTests
+      LiveTabAutoSelectTests
       RecordingIndicatorIconTests
       NarrowLayoutTests
     )
