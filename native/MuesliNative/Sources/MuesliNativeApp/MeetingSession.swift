@@ -175,7 +175,7 @@ final class MeetingSession {
     private let discardCleanup = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     var capturePhase: MeetingCapturePhase { captureLifecycle.phase }
     func beginStoppingCapture() { captureLifecycle.requestStop() }
-    private let neuralAec = MeetingNeuralAec()
+    private let neuralAec: MeetingNeuralAec
     private let inputObservationQueue = DispatchQueue(label: "com.muesli.meeting-input-controls")
     private let inputMuted = OSAllocatedUnfairLock<Bool?>(initialState: nil)
     private let inputObserver: CoreAudioMicrophoneActivityObserver
@@ -275,7 +275,9 @@ final class MeetingSession {
         config: AppConfig,
         templateSnapshot: MeetingTemplateSnapshot,
         transcriptionCoordinator: TranscriptionCoordinator,
-        meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder()
+        meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
+        systemAudioCapture: SystemAudioCapturing? = nil,
+        aec: MeetingNeuralAec = MeetingNeuralAec()
     ) {
         self.title = title
         self.calendarEventID = calendarEventID
@@ -285,7 +287,10 @@ final class MeetingSession {
         self.templateSnapshot = templateSnapshot
         self.transcriptionCoordinator = transcriptionCoordinator
         self.meetingMicRecorder = meetingMicRecorder
-        if config.useCoreAudioTap {
+        self.neuralAec = aec
+        if let systemAudioCapture {
+            self.systemAudioRecorder = systemAudioCapture
+        } else if config.useCoreAudioTap {
             self.systemAudioRecorder = CoreAudioSystemRecorder()
         } else {
             self.systemAudioRecorder = SystemAudioRecorder()
@@ -605,17 +610,57 @@ final class MeetingSession {
         stopPartialSessions()
     }
 
-    func pause() {
-        let shouldPause = chunkRotationQueue.sync { () -> Bool in
-            guard isRecording, !isPaused else { return false }
+    #if DEBUG
+    // Exercise the actual session AEC/chunk/pause path without device access,
+    // model downloads, or ASR requests. Only capture drivers and chunk ASR are
+    // substituted; production pause/resume/discard and queue ordering are used.
+    var testingConsumeChunk: ((String, URL, MeetingChunkTimingSnapshot) -> Void)?
+
+    func testingStartCapture() async throws {
+        try chunkRotationQueue.sync {
+            startTime = Date()
+            chunkTimingTracker.start()
+            systemChunkTimingTracker.start()
+            try prepareRealtimeAudioPipeline(vadManager: nil)
+            retainedRecordingWriter = try MeetingRecordingWriter()
+        }
+        try await captureLifecycle.start()
+    }
+
+    func testingPipelineBarrier(_ inspect: () -> Void = {}) { chunkRotationQueue.sync(execute: inspect) }
+    func testingEnqueuePipeline(_ operation: @escaping () -> Void) {
+        chunkRotationQueue.async(execute: DispatchWorkItem(block: operation))
+    }
+
+    func testingFinishCapture() async -> (URL?, URL?, URL?) {
+        let result = await captureLifecycle.stop()
+        for url in [result.microphone, result.systemAudio].compactMap({ $0 }) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return chunkRotationQueue.sync {
+            captureLifecycle.finishMicrophoneDelivery()
             appendFlushedStreamingMicOnQueue()
-            rotateChunkOnQueue()
-            rotateSystemChunkOnQueue()
-            retainedRecordingWriter?.markPauseBoundary()
-            neuralAec.resetForStreaming()
-            guard captureLifecycle.setPaused(true) else { return false }
-            suspendPartialSessions()
-            return true
+            let urls = (rawMicChunkRecorder?.stop(), systemChunkRecorder?.stop(), retainedRecordingWriter?.stop())
+            rawMicChunkRecorder = nil; systemChunkRecorder = nil; retainedRecordingWriter = nil
+            return urls
+        }
+    }
+
+    func testingWaitForDiscard() async { await discardCleanup.withLock { $0 }?.value }
+    #endif
+
+    func pause() {
+        let shouldPause = captureLifecycle.setPaused(true) { [weak self] in
+            guard let self else { return }
+            self.chunkRotationQueue.sync {
+                guard self.captureLifecycle.isMicrophoneDeliveryOpen else { return }
+                self.appendFlushedStreamingMicOnQueue()
+                self.rotateChunkOnQueue(atPauseBoundary: true)
+                self.rotateSystemChunkOnQueue(atPauseBoundary: true)
+                self.retainedRecordingWriter?.markPauseBoundary()
+                self.neuralAec.resetForStreaming()
+                self.suspendPartialSessions()
+            }
         }
         guard shouldPause else { return }
         systemAudioWatchdog.suspendVerification()
@@ -625,10 +670,11 @@ final class MeetingSession {
     }
 
     func resume() {
-        let shouldResume = chunkRotationQueue.sync { () -> Bool in
-            guard captureLifecycle.setPaused(false) else { return false }
-            resumePartialSessions()
-            return true
+        let shouldResume = captureLifecycle.setPaused(false) { [weak self] in
+            self?.chunkRotationQueue.sync {
+                guard self?.captureLifecycle.isMicrophoneDeliveryOpen == true else { return }
+                self?.resumePartialSessions()
+            }
         }
         guard shouldResume else { return }
 
@@ -639,6 +685,7 @@ final class MeetingSession {
 
     /// Abandon the recording — stop everything, delete temp files, don't transcribe.
     func discard() {
+        captureLifecycle.finishMicrophoneDelivery()
         let shutdown = captureLifecycle.requestStop()
         discardCleanup.withLock { cleanup in
             guard cleanup == nil else { return }
@@ -691,6 +738,11 @@ final class MeetingSession {
         onProgress?(.stoppingCapture)
         let shutdown = captureLifecycle.requestStop()
         let endTime = Date()
+        stopSystemAudioWatchdog()
+        // The mic driver drains its bounded processing queue before returning.
+        // Keep its sink connected until then; finishing the chunk first would
+        // lose accepted buffers whenever disk/conversion work was briefly delayed.
+        let stoppedCapture = await shutdown.value
         var micSegments: [SpeechSegment] = []
         var systemSegments: [SpeechSegment] = []
         let usesStreamingFinalTranscript = config.enableLiveStreamingPartials
@@ -708,6 +760,7 @@ final class MeetingSession {
         systemAudioRecorder.onPCMSamples = nil
         systemAudioRecorder.onRouteChange = nil
         let (meetingStart, lastChunkTiming, lastRawMicURL, lastSystemChunkTiming, lastSystemChunkURL) = chunkRotationQueue.sync { () -> (Date, MeetingChunkTimingSnapshot?, URL?, MeetingChunkTimingSnapshot?, URL?) in
+            captureLifecycle.finishMicrophoneDelivery()
 
             // Flush partial AEC frame before stopping chunk recorder
             appendFlushedStreamingMicOnQueue()
@@ -730,13 +783,8 @@ final class MeetingSession {
         // flushes its last partial window now. Chunks still committing keep their
         // text either way; at worst their live label is "Others".
         liveSpeakerSession()?.stop()
-        // Cancel the watchdog before stopping the recorder so no late tick can
-        // request a rebuild mid-teardown, then terminalize any open tap
-        // episode.
-        stopSystemAudioWatchdog()
         let retainedRecordingURL = retainedRecordingWriter?.stop()
         retainedRecordingWriter = nil
-        let stoppedCapture = await shutdown.value
         if stoppedCapture.timedOut {
             fputs("[meeting] capture shutdown deadline exceeded; preserving completed chunks while drivers retire\n", stderr)
             onCaptureShutdownTimedOut?()
@@ -1035,8 +1083,8 @@ final class MeetingSession {
         }
     }
 
-    private func rotateChunkOnQueue() {
-        guard capturePhase.acceptsSamples else { return }
+    private func rotateChunkOnQueue(atPauseBoundary: Bool = false) {
+        guard atPauseBoundary || captureLifecycle.acceptsLiveSamples else { return }
         appendFlushedStreamingMicOnQueue()
         guard let chunkTiming = chunkTimingTracker.rotate() else {
             return
@@ -1046,6 +1094,14 @@ final class MeetingSession {
         guard rawChunkURL != nil else {
             return
         }
+
+        #if DEBUG
+        if let testingConsumeChunk, let rawChunkURL {
+            testingConsumeChunk("mic", rawChunkURL, chunkTiming)
+            try? FileManager.default.removeItem(at: rawChunkURL)
+            return
+        }
+        #endif
 
         // Transcribe the completed chunk async
         let chunkOffset = chunkTiming.startTimeSeconds
@@ -1096,12 +1152,20 @@ final class MeetingSession {
         }
     }
 
-    private func rotateSystemChunkOnQueue() {
-        guard capturePhase.acceptsSamples else { return }
+    private func rotateSystemChunkOnQueue(atPauseBoundary: Bool = false) {
+        guard atPauseBoundary || captureLifecycle.acceptsLiveSamples else { return }
         guard let chunkURL = systemChunkRecorder?.rotateFile(),
               let chunkTiming = systemChunkTimingTracker.rotate() else {
             return
         }
+
+        #if DEBUG
+        if let testingConsumeChunk {
+            testingConsumeChunk("system", chunkURL, chunkTiming)
+            try? FileManager.default.removeItem(at: chunkURL)
+            return
+        }
+        #endif
 
         let chunkOffset = chunkTiming.startTimeSeconds
         let chunkDuration = chunkTiming.durationSeconds
@@ -1237,15 +1301,18 @@ final class MeetingSession {
         }
     }
 
-    private func enqueueRealtimeMicSamples(_ rawSamples: [Int16]) {
+    private func enqueueRealtimeMicSamples(_ audio: MicrophoneCaptureAudio) {
+        let rawSamples = audio.samples
         guard !rawSamples.isEmpty else { return }
 
-        chunkRotationQueue.async { [weak self] in
-            guard let self, self.capturePhase.acceptsSamples else { return }
+        captureLifecycle.enqueueMicrophoneSamples(audio, on: chunkRotationQueue) { [weak self] in
+            guard let self else { return }
 
-            let healthSnapshot = self.micHealthTracker.noteRawMicSamples(rawSamples)
-            self.onMicHealthChanged?(healthSnapshot)
-            self.micRecoveryCoordinator.process(healthSnapshot)
+            if self.capturePhase.acceptsSamples {
+                let healthSnapshot = self.micHealthTracker.noteRawMicSamples(rawSamples)
+                self.onMicHealthChanged?(healthSnapshot)
+                self.micRecoveryCoordinator.process(healthSnapshot)
+            }
 
             let floatSamples = rawSamples.map { Float($0) / 32767.0 }
 
@@ -1265,8 +1332,8 @@ final class MeetingSession {
     private func enqueueRealtimeSystemSamples(_ samples: [Int16]) {
         guard !samples.isEmpty else { return }
 
-        chunkRotationQueue.async { [weak self] in
-            guard let self, self.capturePhase.acceptsSamples else { return }
+        captureLifecycle.enqueueSystemSamples(on: chunkRotationQueue) { [weak self] in
+            guard let self else { return }
 
             let healthSnapshot = self.micHealthTracker.noteSystemSamples(samples)
             self.onMicHealthChanged?(healthSnapshot)
