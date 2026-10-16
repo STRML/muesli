@@ -16,9 +16,10 @@ struct MLXAsrModel: Sendable {
 ///
 /// - One window runs at a time; later callers wait in FIFO order (dictation behind a meeting
 ///   chunk). `inFlightWindowCount` is readable without entering the actor, for a UI notice.
-/// - Each window runs in a Task this actor owns, so cancelling the caller, `shutdown()` or
-///   deleting the model stops the decode within one token. Weights are released only after
-///   that decode has exited.
+/// - Each window runs on its own thread (a multi-second synchronous decode must not hold a
+///   cooperative-pool thread), with a cancellation token the decode loop checks every token.
+///   Cancelling the caller, `shutdown()` or deleting the model stops the decode within one
+///   token. Weights are released only after that decode has exited.
 /// - A generation counter, as in `BodhanTranscriber`, stops a load or window that finishes
 ///   after `shutdown()` from restoring stale state.
 /// - The MLX cache is cleared after every window. System memory pressure unloads the model
@@ -63,7 +64,7 @@ actor MLXAsrTranscriber {
     private var loadingModel: MLXAsrModel?
     private var loadTask: Task<any MLXAsrRuntime, Error>?
     private var warmupTask: Task<Void, Error>?
-    private var inFlightTask: Task<MLXAsrDecodeResult, Error>?
+    private var inFlightToken: MLXAsrCancellation.Token?
     private var generation = 0
     private var hasCompletedWarmup = false
     private var completedWindows = 0
@@ -124,13 +125,13 @@ actor MLXAsrTranscriber {
         let expectedGeneration = generation
         let seconds = Double(samples.count) / Double(Self.sampleRate)
         let maxTokens = MLXAsrDecodeGuard.maxTokens(forChunkSeconds: seconds)
-        let task = Task.detached(priority: Task.currentPriority) {
-            try active.transcribe(samples: samples, language: language, maxTokens: maxTokens)
-        }
-        inFlightTask = task
+        let token = MLXAsrCancellation.Token()
+        inFlightToken = token
         let result: MLXAsrDecodeResult
         do {
-            result = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            result = try await Self.runOnDedicatedThread(token: token) {
+                try active.transcribe(samples: samples, language: language, maxTokens: maxTokens)
+            }
         } catch {
             finishWindow(runtime: active, expectedGeneration: expectedGeneration)
             throw error
@@ -160,11 +161,11 @@ actor MLXAsrTranscriber {
         generation += 1
         loadTask?.cancel(); loadTask = nil; loadingModel = nil
         warmupTask?.cancel(); warmupTask = nil
-        inFlightTask?.cancel()
+        inFlightToken?.cancel()
         let stale = runtime
         runtime = nil; model = nil; hasCompletedWarmup = false; unloadAfterWindow = false
         // A running window still holds the runtime; it unloads when it exits.
-        if inFlightTask == nil { stale?.unload() }
+        if inFlightToken == nil { stale?.unload() }
     }
 
     // MARK: - Serialization gate
@@ -270,8 +271,29 @@ actor MLXAsrTranscriber {
 
     // MARK: - Window and pressure bookkeeping
 
+    /// Runs `body` on a new thread and resumes with its result. Cancelling the awaiting Task
+    /// cancels `token`, which the decode loop reads on that thread.
+    private static func runOnDedicatedThread(
+        token: MLXAsrCancellation.Token,
+        _ body: @escaping @Sendable () throws -> MLXAsrDecodeResult
+    ) async throws -> MLXAsrDecodeResult {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let thread = Thread {
+                    continuation.resume(with: Result { try MLXAsrCancellation.withToken(token, body) })
+                }
+                thread.name = "muesli.mlxasr.decode"
+                thread.qualityOfService = .userInitiated
+                thread.stackSize = 16 * 1024 * 1024  // MLX graph evaluation recurses deeply
+                thread.start()
+            }
+        } onCancel: {
+            token.cancel()
+        }
+    }
+
     private func finishWindow(runtime finished: any MLXAsrRuntime, expectedGeneration: Int) {
-        inFlightTask = nil
+        inFlightToken = nil
         memory.clearCache()
         // shutdown() ran while the decode was still going and left the unload to us.
         if expectedGeneration != generation { finished.unload() }

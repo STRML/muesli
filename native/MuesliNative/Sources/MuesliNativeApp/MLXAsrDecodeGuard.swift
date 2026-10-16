@@ -10,6 +10,35 @@ enum MLXAsrStopReason: String, Sendable, Equatable {
     case repetition
 }
 
+/// Cancellation for a decode that runs on a dedicated thread, outside any Swift Task.
+///
+/// `MLXAsrTranscriber` runs each window on its own thread so a multi-second synchronous
+/// decode never holds a cooperative-pool thread. `Task.isCancelled` is not visible there,
+/// so the transcriber installs a token on the thread and `MLXAsrDecodeGuard.decode` reads it.
+enum MLXAsrCancellation {
+    final class Token: @unchecked Sendable {
+        private let lock = NSLock()
+        private var flag = false
+        func cancel() { lock.lock(); flag = true; lock.unlock() }
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+    }
+
+    private static let threadKey = "muesli.mlxasr.cancellationToken"
+
+    /// Runs `body` with `token` visible to `isCancelled` on the current thread.
+    static func withToken<T>(_ token: Token, _ body: () throws -> T) rethrows -> T {
+        let dictionary = Thread.current.threadDictionary
+        dictionary[threadKey] = token
+        defer { dictionary.removeObject(forKey: threadKey) }
+        return try body()
+    }
+
+    /// True when the current Task or the current thread's token has been cancelled.
+    static var isCancelled: Bool {
+        Task.isCancelled || (Thread.current.threadDictionary[threadKey] as? Token)?.isCancelled == true
+    }
+}
+
 /// What a guarded decode loop produced, as token ids.
 struct MLXAsrDecodeOutcome: Sendable, Equatable {
     let tokens: [Int]
@@ -82,13 +111,14 @@ enum MLXAsrDecodeGuard {
     }
 
     /// Runs `nextToken` until it returns `nil` (end of sequence), the cap is reached or the
-    /// repetition guard fires. Checks `Task.isCancelled` before every token.
+    /// repetition guard fires. Checks `MLXAsrCancellation.isCancelled` (the Task, or the
+    /// transcriber's per-thread token) before every token.
     static func decode(maxTokens: Int, nextToken: () throws -> Int?) throws -> MLXAsrDecodeOutcome {
         guard maxTokens > 0 else { return MLXAsrDecodeOutcome(tokens: [], stopReason: .tokenCap) }
         var tokens: [Int] = []
         tokens.reserveCapacity(min(maxTokens, 1_024))
         while true {
-            try Task.checkCancellation()
+            if MLXAsrCancellation.isCancelled { throw CancellationError() }
             guard let token = try nextToken() else {
                 return MLXAsrDecodeOutcome(tokens: tokens, stopReason: .endOfSequence)
             }

@@ -29,7 +29,8 @@ protocol MLXAsrRuntime: AnyObject, Sendable {
     /// Transcribes one window of 16 kHz mono samples (at most 28 s). Synchronous.
     ///
     /// Drive the token loop with `MLXAsrDecodeGuard.decode(maxTokens:nextToken:)` so the cap,
-    /// the repetition guard and the per-token `Task.isCancelled` check apply. Throw
+    /// the repetition guard and the per-token cancellation check apply. The call runs on a dedicated
+    /// thread, so `Task.isCancelled` is not visible; only the guard loop sees the cancel token. Throw
     /// `CancellationError` (the guard loop does) when cancelled; never return partial text.
     /// - Parameters:
     ///   - language: model-specific language hint, `nil` for automatic.

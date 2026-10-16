@@ -115,7 +115,7 @@ struct MLXAsrLifecycleTests {
         let runtime = StubMLXAsrRuntime(name: "rt", log: log) { _, index in
             if index == 0 {
                 entered.set()
-                release.wait()
+                _ = release.wait(timeout: .now() + 20)
             }
             return StubMLXAsrRuntime.text("window \(index)")
         }
@@ -202,12 +202,13 @@ struct MLXAsrLifecycleTests {
         let entered = Flag()
         let runtime = StubMLXAsrRuntime(name: "rt", log: log) { _, _ in
             entered.set()
-            release.wait()
+            _ = release.wait(timeout: .now() + 20)
             return StubMLXAsrRuntime.text("finished chunk")
         }
         let model = Support.model()
         let transcriber = Support.transcriber { _, _, _ in runtime }
         let window = Task { try await transcriber.transcribeWindow(samples(seconds: 5), model: model, language: nil) }
+        defer { release.signal() }
         #expect(await Support.waitUntil { entered.isSet })
 
         await transcriber.noteMemoryPressure()

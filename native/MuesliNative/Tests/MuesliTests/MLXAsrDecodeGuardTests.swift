@@ -138,6 +138,33 @@ struct MLXAsrDecodeGuardTests {
         }
     }
 
+    @Test("A cancellation token on a plain thread stops the loop the same way")
+    func tokenCancellationOnDedicatedThread() async {
+        let token = MLXAsrCancellation.Token()
+        let outcome: Result<Int, Error> = await withCheckedContinuation { continuation in
+            let thread = Thread {
+                continuation.resume(returning: Result {
+                    try MLXAsrCancellation.withToken(token) {
+                        var pulled = 0
+                        _ = try MLXAsrDecodeGuard.decode(maxTokens: 1_000_000) {
+                            pulled += 1
+                            if pulled == 5 { token.cancel() }
+                            return pulled
+                        }
+                        return pulled
+                    }
+                })
+            }
+            thread.start()
+        }
+        do {
+            _ = try outcome.get()
+            Issue.record("Expected cancellation")
+        } catch {
+            #expect(error is CancellationError)
+        }
+    }
+
     @Test("Errors thrown by the model step propagate unchanged")
     func modelErrorsPropagate() {
         struct StepFailure: Error, Equatable {}
