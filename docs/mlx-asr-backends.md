@@ -77,11 +77,18 @@ mechanism, the policy or UI half arrives with the RAM gate and the wiring.
 
 ## Runtime contract for a model port
 
-A port implements `MLXAsrRuntime`: `warmup()`, `transcribe(samples:language:maxTokens:)`
-and `unload()`. `transcribe` is synchronous and is called from one Task at a time.
-It should drive its token loop with `MLXAsrDecodeGuard.decode(maxTokens:nextToken:)`
-so the cap, repetition guard and per-token cancellation check come for free.
-`MLXAsrTranscriber.loader(store:makeRuntime:)` covers download plus construction.
+A port registers an `MLXAsrModel`: an `MLXAsrModelStore` (its pinned `MLXAsrModelSpec`) and
+a `makeRuntime` closure. The runtime implements `MLXAsrRuntime`: `load()`, `warmup()`,
+`transcribe(samples:language:maxTokens:)` and `unload()`.
+
+- `transcribe` is synchronous and is called from one Task at a time, never during `unload()`.
+  Drive the token loop with `MLXAsrDecodeGuard.decode(maxTokens:nextToken:)` so the cap,
+  repetition guard and per-token cancellation check come for free. `nextToken` returns
+  `nil` at end of sequence.
+- Mark the class `@unchecked Sendable`. Release weights in `deinit` as well as `unload()`.
+- `MLXAsrTranscriber.downloadingLoader` (the default) downloads and verifies the model,
+  calls `makeRuntime`, then `load()`. Tests inject their own loader.
+- Callers use `MLXAsrChunkRunner` for audio, not the transcriber directly.
 
 ## Not done here
 
