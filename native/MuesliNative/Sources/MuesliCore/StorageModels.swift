@@ -643,6 +643,36 @@ public struct InsightsDailyActivity: Codable, Sendable, Equatable, Identifiable 
     }
 }
 
+/// The transcription engine another device (the iPhone app) reports in a synced record's
+/// `engineIdentifier`. The Mac stores it as the dictation's model attribution under `backend`.
+public enum SyncedEngine {
+    /// `transcription_backend` value for dictations whose engine was reported by another device.
+    public static let backend = "synced"
+
+    /// The reported identifier, or nil when absent. iOS writes "icloud" for records it imported
+    /// from iCloud itself, which names no engine.
+    public static func identifier(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty, trimmed != "icloud" else { return nil }
+        return trimmed
+    }
+
+    /// Mirrors the iOS app's `TranscriptionDisplayName`; unknown identifiers show as-is.
+    public static func displayName(for identifier: String) -> String {
+        switch identifier {
+        case "fluidaudio-parakeet-v3", "parakeet-v3": "Parakeet v3"
+        case "parakeet-tdt-ctc-110m": "Parakeet 110M"
+        case "parakeet-realtime-eou-120m": "Parakeet Realtime"
+        case "whisper-tiny-en": "Whisper Tiny"
+        case "whisper-small-en": "Whisper Small"
+        case "whisper-medium-en": "Whisper Medium"
+        case "whisper-large-turbo": "Whisper Turbo"
+        case "remote-custom-llm": "Remote (your server)"
+        default: identifier
+        }
+    }
+}
+
 /// Local attribution captured with the successful transcription, before cleanup.
 public struct DictationModelIdentity: Sendable, Equatable {
     public let backend: String

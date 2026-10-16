@@ -2503,11 +2503,13 @@ public final class DictationStore {
         return result
     }
 
-    /// Reads attribution in the same SQLite snapshot as the cached totals. Old and
-    /// remotely synced records remain explicitly unattributed; never infer a model.
+    /// Reads attribution in the same SQLite snapshot as the cached totals. Old records and
+    /// synced records whose device reported no engine remain unattributed; never infer a model.
     private func insightsUsage(db: OpaquePointer?, sinceDay: String?, byModel: Bool) throws -> [InsightsUsage] {
         let key = byModel
-            ? "CASE WHEN NULLIF(TRIM(d.transcription_model), '') IS NULL THEN 'unknown' ELSE COALESCE(d.transcription_backend, '') || ':' || d.transcription_model || CASE WHEN NULLIF(d.transcription_endpoint, '') IS NULL THEN '' ELSE ':' || d.transcription_endpoint END END"
+            // Synced engines group by display name: iOS reports aliases ("parakeet-v3",
+            // "fluidaudio-parakeet-v3") for one engine.
+            ? "CASE WHEN NULLIF(TRIM(d.transcription_model), '') IS NULL THEN 'unknown' WHEN d.transcription_backend = '\(SyncedEngine.backend)' THEN '\(SyncedEngine.backend):' || COALESCE(NULLIF(TRIM(d.transcription_model_name), ''), d.transcription_model) ELSE COALESCE(d.transcription_backend, '') || ':' || d.transcription_model || CASE WHEN NULLIF(d.transcription_endpoint, '') IS NULL THEN '' ELSE ':' || d.transcription_endpoint END END"
             : "CASE WHEN NULLIF(TRIM(d.target_app_bundle_id), '') IS NOT NULL THEN 'bundle:' || TRIM(d.target_app_bundle_id) WHEN NULLIF(TRIM(d.target_app_name), '') IS NOT NULL THEN 'name:' || LOWER(TRIM(d.target_app_name)) ELSE 'unknown' END"
         let name = byModel
             ? "COALESCE(NULLIF(TRIM(d.transcription_model_name), ''), NULLIF(TRIM(d.transcription_model), ''), 'Not recorded')"
@@ -4032,7 +4034,7 @@ public final class DictationStore {
         let dictationSQL = """
         SELECT cloud_record_name, raw_text, app_context, timestamp, started_at, ended_at,
                duration_seconds, word_count, source, updated_at, deleted_at, cloud_change_tag,
-               cloud_system_fields
+               cloud_system_fields, transcription_backend, transcription_model
         FROM dictations
         WHERE cloud_record_name IN (\(placeholders))
         """
@@ -4608,7 +4610,7 @@ public final class DictationStore {
         let dictationSQL = """
         SELECT cloud_record_name, raw_text, app_context, timestamp, started_at, ended_at,
                duration_seconds, word_count, source, updated_at, deleted_at, cloud_change_tag,
-               cloud_system_fields
+               cloud_system_fields, transcription_backend, transcription_model
         FROM dictations
         WHERE sync_dirty = 1 AND cloud_record_name IS NOT NULL
         ORDER BY updated_at DESC, id DESC
@@ -4730,7 +4732,7 @@ public final class DictationStore {
         let dictationSQL = """
         SELECT cloud_record_name, raw_text, app_context, timestamp, started_at, ended_at,
                duration_seconds, word_count, source, updated_at, deleted_at, cloud_change_tag,
-               cloud_system_fields
+               cloud_system_fields, transcription_backend, transcription_model
         FROM dictations
         WHERE cloud_record_name IS NOT NULL
         ORDER BY updated_at DESC, id DESC
@@ -5230,7 +5232,7 @@ public final class DictationStore {
         let updatedAt = dateFromUnixColumn(statement, index: 9) ?? endedAt ?? createdAt
         let localSource = normalizedSourceColumn(from: statement, index: 8)
         let source = cloudSyncDeviceSource(localSource)
-        return SyncTextRecord(
+        var record = SyncTextRecord(
             id: recordName,
             kind: .dictation,
             text: stringColumn(statement, index: 1),
@@ -5246,6 +5248,11 @@ public final class DictationStore {
             cloudChangeTag: optionalStringColumn(statement, index: 11),
             cloudSystemFields: optionalDataColumn(statement, index: 12)
         )
+        // Re-uploading a phone dictation must carry its engine; an absent field clears it in iCloud.
+        if optionalStringColumn(statement, index: 13) == SyncedEngine.backend {
+            record.engineIdentifier = optionalStringColumn(statement, index: 14)
+        }
+        return record
     }
 
     private func makeSyncMeetingRecord(_ statement: OpaquePointer?) -> SyncTextRecord? {
@@ -5406,9 +5413,10 @@ public final class DictationStore {
         INSERT INTO dictations (
             timestamp, duration_seconds, raw_text, app_context, word_count, source,
             started_at, ended_at, updated_at, deleted_at, cloud_record_name,
-            cloud_change_tag, cloud_system_fields, last_synced_at, sync_dirty
+            cloud_change_tag, cloud_system_fields, last_synced_at, sync_dirty,
+            transcription_backend, transcription_model, transcription_model_name
         )
-        VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(cloud_record_name) DO UPDATE SET
             timestamp = excluded.timestamp,
             duration_seconds = excluded.duration_seconds,
@@ -5422,7 +5430,10 @@ public final class DictationStore {
             cloud_change_tag = excluded.cloud_change_tag,
             cloud_system_fields = excluded.cloud_system_fields,
             last_synced_at = excluded.last_synced_at,
-            sync_dirty = 0
+            sync_dirty = 0,
+            transcription_backend = COALESCE(excluded.transcription_backend, dictations.transcription_backend),
+            transcription_model = COALESCE(excluded.transcription_model, dictations.transcription_model),
+            transcription_model_name = COALESCE(excluded.transcription_model_name, dictations.transcription_model_name)
         WHERE excluded.updated_at > dictations.updated_at
            OR (excluded.updated_at = dictations.updated_at AND dictations.sync_dirty = 0)
         """
@@ -5446,6 +5457,11 @@ public final class DictationStore {
         bindOptionalText(record.cloudChangeTag, at: 11, statement: statement)
         bindOptionalBlob(record.cloudSystemFields, at: 12, statement: statement)
         sqlite3_bind_double(statement, 13, Date().timeIntervalSince1970)
+        // Records without an engine (including the Mac's own echoes) keep the local attribution.
+        let engine = SyncedEngine.identifier(record.engineIdentifier)
+        bindOptionalText(engine.map { _ in SyncedEngine.backend }, at: 14, statement: statement)
+        bindOptionalText(engine, at: 15, statement: statement)
+        bindOptionalText(engine.map(SyncedEngine.displayName(for:)), at: 16, statement: statement)
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw lastError(db)
         }

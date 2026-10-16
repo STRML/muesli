@@ -591,7 +591,7 @@ struct ModelsView: View {
 
             if showExperimental {
                 VStack(spacing: MuesliTheme.spacing12) {
-                    ForEach(BackendOption.experimental, id: \.model) { option in
+                    ForEach(BackendOption.offeredExperimental(), id: \.model) { option in
                         if !appState.selectedPostProcessorBackend.isCompatible(with: option) {
                             modelCard(
                                 option: option,
@@ -1920,7 +1920,7 @@ struct ModelsView: View {
         }
         if appState.selectedBackend == option {
             let fallback = downloadedModels
-                .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option }) }
+                .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option && $0.isCompatible() }) }
                 .first ?? (option == .parakeetUnified ? .parakeetMultilingual : .parakeetUnified)
             controller.selectBackend(fallback)
         }

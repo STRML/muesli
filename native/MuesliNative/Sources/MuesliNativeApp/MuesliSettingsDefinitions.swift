@@ -111,6 +111,18 @@ extension MuesliController {
             }
         }
 
+        // Analytics consent is the user's call, so it is manual-only (never voice).
+        add("share_usage_analytics", "Share anonymous usage analytics",
+            [Choice(id: "on", label: "On"), Choice(id: "off", label: "Off")],
+            read: { $0.shareUsageAnalytics ? "on" : "off" },
+            voiceRestriction: "Analytics sharing can only be changed manually in Settings.",
+            unavailable: { value in
+                value == "on" && !TelemetryRuntimeConfiguration.buildHasAnalyticsDestination()
+                    ? "This build has no analytics destination, so there is nothing to share." : nil
+            }) { value in
+            self.setShareUsageAnalytics(value == "on")
+        }
+
         // These delete user files, so they are manual-only (never voice).
         let recordingsManualOnly = "Recording storage settings delete audio files and can only be changed manually in Settings."
         add("recordings_budget", "Recordings storage budget",
@@ -270,6 +282,7 @@ extension MuesliController {
                 guard let option = backends.first(where: { backendID($0) == value }), option.isDownloaded else {
                     return "Download this dictation model from Models first."
                 }
+                if let reason = option.incompatibilityReason() { return reason }
                 if !TranscriptCleanupBackendOption.resolved(self.config.postProcessorBackend).isCompatible(with: option) {
                     return "This model conflicts with the selected cleanup backend. Change cleanup first."
                 }
@@ -381,7 +394,10 @@ extension MuesliController {
         }
         add("dictation_fallback_model", "Hosted dictation fallback model", backends.filter(\.supportsHostedDictationFallback).map { .init(id: backendID($0), label: $0.label) },
             read: { $0.sttBackend + ":" + $0.sttModel }, unavailable: { value in
-                backends.first(where: { backendID($0) == value })?.isDownloaded == true ? nil : "Download this model first."
+                guard let option = backends.first(where: { backendID($0) == value }), option.isDownloaded else {
+                    return "Download this model first."
+                }
+                return option.incompatibilityReason()
             }) { value in
             if let option = backends.first(where: { backendID($0) == value }) { self.selectBackend(option) }
         }

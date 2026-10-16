@@ -208,6 +208,20 @@ struct BackendOption: Equatable {
         .senseVoiceSmall, .gemma4E2BLiteRT, .gemma4E4BLiteRT, .qwen3Asr,
     ]
 
+    /// Experimental models the Models tab offers on this macOS version. Models that need a newer
+    /// macOS stay listed with their reason. Models known not to load on this one are hidden unless
+    /// downloaded, so the card can explain why and offer Delete.
+    static func offeredExperimental(
+        currentOSVersion: OperatingSystemVersion = Self.currentOSVersion,
+        isDownloaded: (BackendOption) -> Bool = { $0.isDownloaded }
+    ) -> [BackendOption] {
+        experimental.filter { option in
+            guard let ceiling = option.unsupportedFromOSMajorVersion,
+                  currentOSVersion.majorVersion >= ceiling else { return true }
+            return isDownloaded(option)
+        }
+    }
+
     /// Native streaming backends used by low-latency product surfaces.
     /// Meeting-only helpers such as Parakeet Realtime EOU are managed by their
     /// dedicated model store and displayed alongside these options in Models.
@@ -330,7 +344,24 @@ struct BackendOption: Equatable {
         }
     }
 
+    /// First macOS major version on which this model is known not to load, or nil if none.
+    var unsupportedFromOSMajorVersion: Int? {
+        switch backend {
+        case "qwen":
+            // The Qwen3 ASR 0.6B CoreML export fails to load on macOS 27.0.1: the stateful decoder
+            // hits an `mps_spi.sdpa` mask mismatch (mask 1x1x1x53 vs key cache length 0) and the
+            // ANE/CPU fallback returns error -14. It needs a re-export. Only 27.0.1 was observed;
+            // 26.x is unconfirmed, so the model stays offered there.
+            return 27
+        default:
+            return nil
+        }
+    }
+
     func isCompatible(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> Bool {
+        if let ceiling = unsupportedFromOSMajorVersion, currentOSVersion.majorVersion >= ceiling {
+            return false
+        }
         let minimum = minimumOSVersion
         return (currentOSVersion.majorVersion, currentOSVersion.minorVersion, currentOSVersion.patchVersion)
             >= (minimum.majorVersion, minimum.minorVersion, minimum.patchVersion)
@@ -339,6 +370,9 @@ struct BackendOption: Equatable {
     /// Applies even to installed models; download state does not establish OS compatibility.
     func incompatibilityReason(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> String? {
         guard !isCompatible(currentOSVersion: currentOSVersion) else { return nil }
+        if let ceiling = unsupportedFromOSMajorVersion, currentOSVersion.majorVersion >= ceiling {
+            return "\(label) does not load on macOS \(ceiling) or later yet. Choose another model."
+        }
         let minimum = minimumOSVersion
         let required = minimum.minorVersion == 0 ? "\(minimum.majorVersion)" : Self.label(for: minimum)
         return "\(label) requires macOS \(required) or later (you're on macOS \(Self.label(for: currentOSVersion)))."
@@ -2220,6 +2254,8 @@ struct AppConfig: Codable {
     var customTranscriptCleanupPrompts: [CustomTranscriptCleanupPrompt] = []
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     var enableScreenContext: Bool = false
+    /// Opt-in for TelemetryDeck usage signals; off until the user turns it on in Settings.
+    var shareUsageAnalytics: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
     /// Enables the explicitly selected live meeting transcription mode.
@@ -2401,6 +2437,7 @@ struct AppConfig: Codable {
         case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case enableScreenContext = "enable_screen_context"
+        case shareUsageAnalytics = "share_usage_analytics"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
@@ -2684,6 +2721,7 @@ struct AppConfig: Codable {
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
+        shareUsageAnalytics = (try? c.decode(Bool.self, forKey: .shareUsageAnalytics)) ?? defaults.shareUsageAnalytics
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
         enableLiveStreamingPartials = (try? c.decode(Bool.self, forKey: .enableLiveStreamingPartials)) ?? defaults.enableLiveStreamingPartials

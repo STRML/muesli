@@ -2,7 +2,6 @@ import AppKit
 import AVFoundation
 import SwiftUI
 import MuesliCore
-import TelemetryDeck
 
 private struct MicrophoneOption: Identifiable {
     let uid: String?
@@ -549,7 +548,7 @@ struct SettingsView: View {
             .onChange(of: syncQRCodePresentationPhase) { _, phase in
                 guard phase == .dismiss else { return }
                 isShowingIPhoneBridgeQRCode = false
-                TelemetryDeck.signal("bridge_qr_auto_dismissed", parameters: ["platform": "macos_settings"])
+                MuesliTelemetry.signal("bridge_qr_auto_dismissed", parameters: ["platform": "macos_settings"])
             }
             .sheet(isPresented: $isCleanupPromptManagerPresented) {
                 TranscriptCleanupPromptsManagerView(
@@ -739,6 +738,15 @@ struct SettingsView: View {
 
             permissionsSection
 
+            settingsSection("Privacy") {
+                settingsRow(
+                    "Share anonymous usage analytics",
+                    description: "Sends feature-usage counts and allowlisted failure categories to TelemetryDeck. Never audio, transcripts, notes, or keys. Off by default."
+                ) {
+                    settingsControl("share_usage_analytics")
+                }
+            }
+
             settingsSection("Data") {
                 HStack(spacing: MuesliTheme.spacing12) {
                     compactActionButton("Clear dictation history", role: .destructive) {
@@ -875,7 +883,7 @@ struct SettingsView: View {
     private func showSyncSetupQRCode(source: String) {
         isShowingIPhoneBridgeQRCode = true
         controller.beginIPhoneBridgeDeviceDiscovery()
-        TelemetryDeck.signal("bridge_qr_shown", parameters: ["platform": source])
+        MuesliTelemetry.signal("bridge_qr_shown", parameters: ["platform": source])
     }
 
     private var syncFlowAction: ICloudSyncFlowAction {

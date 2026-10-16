@@ -97,18 +97,21 @@ requirement.
 
 ## Telemetry in Development
 
-Use `scripts/dev-test.sh` for local app testing. It routes anonymous telemetry
-to the dedicated `MuesliDev` TelemetryDeck app and labels every signal with
-`muesli.channel=dev`; named lanes A, B, and C use the same dev destination with
-their own bundle IDs. This keeps contributor and maintainer test traffic out of
-the production and preprod TelemetryDeck apps.
+Build scripts compile no TelemetryDeck app ID unless `MUESLI_ENABLE_TELEMETRY=1`
+is set, and even then the app sends nothing until the user turns on "Share
+anonymous usage analytics" in Settings (off by default). With the variable set,
+`scripts/dev-test.sh` routes anonymous telemetry to the dedicated `MuesliDev`
+TelemetryDeck app and labels every signal with `muesli.channel=dev`; named lanes
+A, B, and C use the same dev destination with their own bundle IDs. This keeps
+contributor and maintainer test traffic out of the production and preprod
+TelemetryDeck apps.
 
 Direct SwiftPM or otherwise unconfigured source builds leave telemetry
 disabled. Do not enable production or preprod telemetry for local testing, and
 do not hardcode TelemetryDeck app IDs in application code or new scripts. Build
 scripts that need telemetry routing must use the centralized public identifiers
-in `scripts/muesli_telemetry_channels.sh` and select the appropriate non-production
-channel explicitly.
+and `muesli_telemetry_build_env` in `scripts/muesli_telemetry_channels.sh` and
+select the appropriate non-production channel explicitly.
 
 New telemetry events must remain anonymous and must not include audio,
 transcripts, meeting or calendar titles, clipboard or screen contents, API

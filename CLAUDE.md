@@ -13,10 +13,10 @@ Local-first macOS app for **dictation** and **meeting transcription** on Apple S
 - **Meeting export:** Export notes or transcript as PDF (paginated US Letter) or Markdown via `MeetingExporter.swift`
 - **Screen context:** Accessibility API captures app name + text around cursor for dictation context-awareness (opt-in, off by default)
 - **ASR models:** Parakeet v3/v2, Whisper Tiny/Small/Medium/Large Turbo, Cohere Transcribe, Nemotron 3.5 Multilingual, SenseVoice Small, Qwen3 ASR, Bodhan Core and Flex (each with FP16/INT8 weights)
-- **3 summarization backends:** OpenAI API key, OpenRouter API key, ChatGPT OAuth (subscription-based)
+- **8 summarization backends** (`MeetingSummaryBackendOption.all`): ChatGPT OAuth (default), OpenAI API key, Anthropic API key, Claude Code (local `claude` CLI, listed only when installed), OpenRouter, Ollama, LM Studio, Custom LLM (OpenAI or Anthropic format)
 - **Camera-based meeting detection:** Requires mic + camera + recognized meeting app (camera alone won't trigger)
 - **Join & Transcribe:** Extract meeting URLs from calendar events (Zoom, Meet, Teams, Webex, Chime, FaceTime), split button with "Join & Transcribe" / "Join Only" / "Transcribe Only", platform icons in notifications
-- **Google Calendar integration:** Coming Up section, status bar, pre-meeting countdowns, event-driven notifications via `EKEventStoreChangedNotification`
+- **Calendar integration (EventKit only):** Coming Up section, status bar, pre-meeting countdowns, event-driven notifications via `EKEventStoreChangedNotification`. Google and other accounts reach Muesli through macOS Calendar; the direct Google OAuth/API code (`GoogleCalendarAuthManager`, `GoogleCalendarClient`) is not called from anywhere
 - **Meeting templates:** Built-in and custom templates for structured meeting notes
 
 ## Building
@@ -48,33 +48,24 @@ SwiftPM can write build artifacts to `native/MuesliNative/.build` inside the act
 
 - Explicit `MUESLI_SWIFTPM_SCRATCH_PATH` wins.
 - `MUESLI_SWIFTPM_SCRATCH_CHANNEL` overrides the channel segment under the resolved cache root.
-- `MUESLI_EXTERNAL_SPM_CACHE_ROOT` overrides the default `/Volumes/MuesliBuildCache/muesli-spm` external cache root.
-- If `/Volumes/MuesliBuildCache/muesli-spm` is mounted, scripts use that external APFS cache.
-- Otherwise scripts fall back to `~/Library/Caches/muesli-spm`.
+- `MUESLI_EXTERNAL_SPM_CACHE_ROOT` opts into another cache root, used only when that directory exists.
+- Otherwise scripts use `~/Library/Caches/muesli-spm`, the canonical maintainer cache. The eSSD sparse bundle and `/Volumes/MuesliBuildCache` are retired (see `AGENTS.md`); do not attach or create external volumes.
 - `MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1` intentionally opts out and uses SwiftPM's package-local `.build`; this takes precedence over all scratch path settings.
-
-The preferred local cache is an APFS sparse bundle stored on the external SSD at `/Volumes/eSSD/MuesliBuildCache.sparsebundle`. Mount it before build-heavy local work:
-
-```bash
-hdiutil attach /Volumes/eSSD/MuesliBuildCache.sparsebundle
-```
-
-That sparse-bundle path is the maintainer's local SSD path. Contributors can substitute their own volume path or skip the attach step; scripts fall back to `~/Library/Caches/muesli-spm` when the external cache is not mounted.
 
 Default script channels:
 
 ```bash
-./scripts/dev-test.sh                 # /Volumes/MuesliBuildCache/muesli-spm/worktrees/<worktree>/dev when mounted
-./scripts/build_native_app.sh release # /Volumes/MuesliBuildCache/muesli-spm/release when mounted
-./scripts/release-preprod.sh          # /Volumes/MuesliBuildCache/muesli-spm/preprod when mounted
-./scripts/release-alpha.sh            # /Volumes/MuesliBuildCache/muesli-spm/alpha when mounted
+./scripts/dev-test.sh                 # ~/Library/Caches/muesli-spm/worktrees/<worktree>/dev
+./scripts/build_native_app.sh release # ~/Library/Caches/muesli-spm/release
+./scripts/release-preprod.sh          # ~/Library/Caches/muesli-spm/preprod
+./scripts/release-alpha.sh            # ~/Library/Caches/muesli-spm/alpha
 ```
 
 For parallel PR/worktree work, use isolated paths:
 
 ```bash
-MUESLI_SWIFTPM_SCRATCH_PATH="/Volumes/MuesliBuildCache/muesli-spm/worktrees/pr182/dev" ./scripts/dev-test.sh
-swift test --package-path native/MuesliNative --scratch-path "/Volumes/MuesliBuildCache/muesli-spm/worktrees/pr182/test"
+MUESLI_SWIFTPM_SCRATCH_PATH="$HOME/Library/Caches/muesli-spm/worktrees/pr182/dev" ./scripts/dev-test.sh
+swift test --package-path native/MuesliNative --scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/pr182/test"
 ```
 
 The build script passes the resolved path to SwiftPM as `--scratch-path`, so multiple worktrees do not each grow their own `.build`. Caveat: do not run concurrent builds from different worktrees into the same scratch path; use separate paths per channel, agent, or simultaneous build. Deleting a scratch path only removes rebuildable SwiftPM artifacts, not installed apps or app data. Set `MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1` only when you intentionally want package-local `.build`.
@@ -92,7 +83,7 @@ Each lane installs a separate app bundle under `/Applications/`, keeps a separat
 
 ### Tests
 ```bash
-swift test --package-path native/MuesliNative    # 1,148 @Test declarations across 120 suites
+swift test --package-path native/MuesliNative    # 3,148 @Test declarations, 261 @Suite-annotated types (2026-10-16)
 ```
 
 ### Onboarding testing
@@ -114,11 +105,11 @@ Note: config JSON uses snake_case keys (`has_completed_onboarding`, not `hasComp
 ## CI/CD Pipeline
 
 ### Pull Requests
-- **CI workflow** (`.github/workflows/ci.yml`): macOS 15 runners
+- **CI workflow** (`.github/workflows/ci.yml`): macOS 26 runners for Swift jobs, Ubuntu for script checks
   - `changes` → `build` → `cli-smoke` → `ci-gate` (required check)
 - **Claude Code Review** — reviews every PR automatically
 - **Greptile** — reviews every PR automatically
-- **Vercel** — scoped to `site/` only
+- **Vercel** — `vercel.json` deploys `main` with no build command (there is no `site/` directory)
 - **Concurrency** — stale CI runs auto-cancelled on new pushes
 
 ### Releases
@@ -137,7 +128,7 @@ Note: config JSON uses snake_case keys (`has_completed_onboarding`, not `hasComp
 
 ```
 native/MuesliNative/Sources/
-├── MuesliNativeApp/              # Main app (~50 Swift files)
+├── MuesliNativeApp/              # Main app (265 Swift files)
 │   ├── MuesliController.swift    # Central orchestrator — dictation, meetings, onboarding, state
 │   ├── TranscriptionRuntime.swift # Routes to ASR backends, post-processing, VAD + diarization
 │   ├── FluidAudioBackend.swift   # Parakeet TDT on ANE
@@ -149,8 +140,8 @@ native/MuesliNative/Sources/
 │   ├── OnboardingView.swift      # 7-step onboarding with real permission polling + dictation test
 │   ├── OnboardingProgress.swift  # Crash-safe onboarding state persistence
 │   ├── MeetingSession.swift      # Meeting lifecycle + diarization + screen context
-│   ├── MeetingSummaryClient.swift # OpenAI / OpenRouter / ChatGPT summarization
-│   ├── SystemAudioRecorder.swift # ScreenCaptureKit SCStream for system audio
+│   ├── MeetingSummaryClient.swift # Summaries for all 8 backends (ChatGPT, OpenAI, Anthropic, Claude Code, OpenRouter, Ollama, LM Studio, Custom LLM)
+│   ├── SystemAudioRecorder.swift # ScreenCaptureKit fallback for system audio (CoreAudioSystemRecorder is the default)
 │   ├── ChatGPTAuthManager.swift  # OAuth PKCE + WHAM API
 │   ├── HotkeyMonitor.swift       # Global hotkey detection (modifier keys)
 │   ├── MeetingDetector.swift     # Camera + mic + app detection for meetings
@@ -168,10 +159,27 @@ native/MuesliNative/Sources/
 - **Database:** `~/Library/Application Support/{AppName}/muesli.db` (SQLite WAL)
 - **Models:** `~/Library/Application Support/FluidAudio/Models/` (shared across app identities)
 - **Onboarding progress:** `~/Library/Application Support/{AppName}/onboarding-progress.json` (deleted on completion)
-- **ChatGPT tokens:** macOS Keychain (`com.muesli.app.chatgpt-auth`)
+- **ChatGPT tokens:** `~/Library/Application Support/{AppName}/chatgpt-auth.json`
 - **Whisper models:** `~/.cache/muesli/models/`
 
 `{AppName}` is `Muesli` for production, `MuesliDev` for dev, `MuesliCanary` for alpha — controlled by `MuesliSupportDirectoryName` in Info.plist.
+
+## Network Activity
+
+Keep `docs/privacy.html` in step with this list.
+
+**On by default, no user content:**
+- Model downloads from `assets.muesli.works` (checksum-pinned mirror for some Parakeet and WhisperKit variants, `MuesliCore/ManagedASRModelDownloads.swift`) and `huggingface.co` plus its CDN (everything else). The chosen model downloads during onboarding; FluidAudio diarizer/VAD models download at launch for meeting users when missing. Opening the Models tab with Nemotron installed queries the Hugging Face API for updates.
+- Sparkle update checks against `SUFeedURL` (`SUEnableAutomaticChecks=true` in the plist suppresses Sparkle's permission prompt; dev and alpha builds have an empty feed).
+- `NSApplication.registerForRemoteNotifications()` on every launch (`AppDelegate.swift`), even with iCloud sync off; it only registers in builds with an `aps-environment` entitlement.
+- `claude auth status` when the Claude Code option is shown and a `claude` binary exists (`MuesliCore/ClaudeCodeSummarizer.swift`).
+
+**On by default, sends content to the configured summary backend:**
+- Meeting summaries and titles (backend defaults to ChatGPT; nothing is sent until sign-in).
+- Folder suggestions (`auto_classify_meetings=true`): title, participant names, a notes prefix, and the folder tree after a meeting no rule matches.
+- Browser call participant names (`read_call_participants=true`): read locally through Accessibility, then included in summary and folder-suggestion prompts.
+
+**Off by default:** TelemetryDeck analytics (the build needs `MUESLI_ENABLE_TELEMETRY=1` to compile an app ID in, and the user must turn on "Share anonymous usage analytics"), iCloud sync, hosted dictation, hosted cleanup and Quill, Ask Meetings (per message), computer use.
 
 ## macOS Permissions
 
@@ -180,17 +188,19 @@ native/MuesliNative/Sources/
 | Microphone | Dictation + meeting mic | AVAudioRecorder, AVAudioEngine |
 | Accessibility | Paste text + screen context capture | CGEvent Cmd+V, AXUIElement |
 | Input Monitoring | Hotkey detection | NSEvent global monitors |
-| Screen Recording | System audio capture | ScreenCaptureKit SCStream |
+| System Audio | System audio capture (default, `use_core_audio_tap=true`) | Core Audio process tap |
+| Screen Recording | ScreenCaptureKit system-audio fallback, meeting screen context and OCR, computer-use screenshots | ScreenCaptureKit, `CGPreflightScreenCaptureAccess` |
 | Camera (implicit) | Meeting detection | CoreMediaIO property listeners |
-| Calendar (optional) | Upcoming meetings | EKEventStore, Google Calendar API |
+| Calendar (optional) | Upcoming meetings | EKEventStore |
+| Contacts (optional) | Picking meeting participants from Contacts, saving a new contact | CNContactStore |
 
-**Critical:** Accessibility permission requires an app restart to take effect. The onboarding flow handles this with an automatic restart after the hotkey configuration step.
+**Critical:** Accessibility permission requires an app restart to take effect. The onboarding flow handles this with an automatic restart after the permissions step when the use case includes dictation or voice notes (`OnboardingFlow.permissionAdvanceAction`).
 
-**Important:** `CGWindowListCreateImage` (screenshots) conflicts with active `SCStream` sessions — causes `RPDaemonProxy: connection INTERRUPTED` and breaks system audio capture. Never take screenshots during meeting recording. See `Context/handoff-2026-04-16-coreaudio-tap-migration.md` for the planned fix.
+**Important:** `CGWindowListCreateImage` (screenshots) conflicts with active `SCStream` sessions — causes `RPDaemonProxy: connection INTERRUPTED` and breaks system audio capture. This only applies to the ScreenCaptureKit fallback (`use_core_audio_tap=false`); with the default Core Audio tap, meetings take OCR screenshots (`MeetingSession.swift` passes `useOCR: config.useCoreAudioTap`).
 
 ## Onboarding Flow
 
-7 steps: Welcome → Model → Permissions → Hotkey → **[app restart]** → Dictation Test → Meeting Summaries → Google Calendar
+7 steps: Welcome → Model → Hotkey → Permissions → **[app restart]** → Dictation Test → Meeting Summaries → Calendar (macOS Calendar access)
 
 Key implementation details:
 - Real OS permission polling every 1s (not fake timers) via `AXIsProcessTrusted()`, `CGPreflightListenEventAccess()`, etc.
@@ -213,9 +223,9 @@ Key implementation details:
 - Stored in existing `app_context` column in `dictations` table
 
 **Meetings:** `MeetingScreenContextCollector` (actor) — periodic AX capture every 60s:
-- Uses same `DictationContextCapture.capture()` (no screenshots — `CGWindowListCreateImage` conflicts with `SCStream`)
+- Uses same `DictationContextCapture.capture()`, plus OCR screenshots (`ScreenContextCapture.captureOnce()`) when the Core Audio tap is in use
 - Deduplicated, aggregated, injected into meeting summary prompt as "Visual context" section
-- OCR-based capture (`ScreenContextCapture.captureOnce()`) exists in code but is unused until CoreAudio migration
+- Starts only when `enableScreenContext` is on and Screen Recording access is already granted
 
 ## Meeting Export
 
@@ -239,13 +249,13 @@ Key implementation details:
 Event-driven architecture for meeting notifications:
 
 - **Primary trigger:** `EKEventStoreChangedNotification` — macOS pushes calendar changes (add/move/delete) instantly via `NotificationCenter`. Immune to App Nap timer suspension in LSUIElement apps.
-- **Fallback:** 60s `Timer` polls Google Calendar API (sync token for efficiency) and checks the 5-minute notification window for time-based triggers.
+- **Fallback:** 60s `Timer` re-reads EventKit and checks the 5-minute notification window for time-based triggers.
 - **Dedup:** Composite key `id|startDate` — rescheduled events generate fresh notifications. Stale entries pruned hourly.
 - **Per-event timers:** `meetingStartingNowTimers: [String: Timer]` — concurrent events get independent "starting now" timers.
 - **Suppression:** After user acts on a calendar notification (Join Only, Dismiss), mic/camera detection is suppressed for the remaining event duration.
-- **Meeting URL extraction:** EventKit (`event.url`, `location`, `notes` via regex) + Google Calendar API (`hangoutLink`, `conferenceData.entryPoints[type=video]`). `mergeEvents` backfills Google URL when EventKit duplicate has none.
+- **Meeting URL extraction:** EventKit (`event.url`, `location`, `notes` via regex).
 
-**macOS 26 App Nap behavior (LSUIElement apps):** All timer mechanisms (`Timer.scheduledTimer`, `DispatchSourceTimer`, `Task.sleep`, `Thread.sleep`, `DispatchQueue.asyncAfter`, POSIX `nanosleep`) get suspended by aggressive power management. Only `NotificationCenter` observers (system IPC) are immune. The 60s fallback timer may not fire reliably — `EKEventStoreChangedNotification` is the critical path. Users with Google Calendar synced to macOS Calendar (System Settings > Internet Accounts) get reliable notifications via EventKit. OAuth-only users depend on the 60s timer.
+**macOS 26 App Nap behavior (LSUIElement apps):** All timer mechanisms (`Timer.scheduledTimer`, `DispatchSourceTimer`, `Task.sleep`, `Thread.sleep`, `DispatchQueue.asyncAfter`, POSIX `nanosleep`) get suspended by aggressive power management. Only `NotificationCenter` observers (system IPC) are immune. The 60s fallback timer may not fire reliably — `EKEventStoreChangedNotification` is the critical path. Google and other accounts must be added to macOS Calendar (System Settings > Internet Accounts) to appear at all.
 
 ## Known Limitations
 
@@ -253,15 +263,14 @@ Event-driven architecture for meeting notifications:
 - **Qwen3 ASR:** 2-3s latency (autoregressive decoder). First run after launch has ~30s CoreML compilation warmup.
 - **ChatGPT OAuth:** Uses reverse-engineered WHAM API. Could break if OpenAI changes the API.
 - **Speaker diarization:** The transcript labels come from a post-processing pass that runs after the meeting stops. The optional `enable_live_speaker_labels` setting (off by default) also shows provisional "Speaker N" labels for system audio in the Live tab while recording, using FluidAudio LS-EEND (`LiveSpeakerLabelSession`). They are Live-tab only: crash-recovery checkpoints keep "Others" and the Stop-time pass overwrites everything. The model downloads when the setting is turned on; meetings load it from the local cache and never touch the network.
-- **Screen context OCR disabled during meetings:** `CGWindowListCreateImage` conflicts with `SCStream`. AX-based context used instead. Planned fix: migrate to CoreAudio tap for system audio (see `Context/handoff-2026-04-16-coreaudio-tap-migration.md`).
+- **Screen context OCR on the ScreenCaptureKit fallback:** `CGWindowListCreateImage` conflicts with `SCStream`, so meetings recorded with `use_core_audio_tap=false` use AX-only context.
 - **NSSavePanel:** Must use `beginSheetModal(for:)` in SwiftUI, never `runModal()`. `NSAttributedString(html:)` deadlocks on main thread — build attributed strings manually.
 - **App restart during onboarding:** Uses `exit(0)` via detached shell. `NSApp.terminate(nil)` inside SwiftUI animation context can crash.
-- **macOS 26 App Nap:** LSUIElement apps have all timers suspended by aggressive power management. Calendar notifications rely on `EKEventStoreChangedNotification` (immune). The 60s Google Calendar poll timer may not fire. See Calendar Notification Pipeline section.
+- **macOS 26 App Nap:** LSUIElement apps have all timers suspended by aggressive power management. Calendar notifications rely on `EKEventStoreChangedNotification` (immune). The 60s calendar refresh timer may not fire. See Calendar Notification Pipeline section.
 - **"Meeting starting now" after Join Only/Dismiss:** The scheduled timer is not cancelled when the user clicks Join Only or Dismiss on the "Upcoming meeting" notification. A redundant "Meeting starting now" fires at event start time. Fix: pass notification key into `handleUpcomingMeeting` so callbacks can cancel it.
 
 ## Upcoming Work
 
 1. **Cancel "starting now" timer on Join Only/Dismiss** — Pass notification key into `handleUpcomingMeeting` so `onJoinOnly`/`onDismiss` callbacks can cancel `meetingStartingNowTimers[key]`.
-2. **CoreAudio tap migration** — Replace ScreenCaptureKit with CoreAudio aggregate device for system audio. Unblocks OCR during meetings + friendlier "System Audio" permission (not "Screen Recording"). See `Context/handoff-2026-04-16-coreaudio-tap-migration.md`.
-3. **Google OAuth verification** — Pending Google approval (~4 weeks from April 12). Once approved, embed credentials with `verified: true`.
-4. **Post-processor fine-tune** — Collect `postproc-pairs.jsonl` from canary testers, train v3 model for better implicit list formatting.
+2. **Google Calendar direct integration** — The OAuth/API code exists but nothing calls it; calendar data comes only from EventKit. Either wire it up (it needs verified Google credentials) or delete it.
+3. **Post-processor fine-tune** — Collect `postproc-pairs.jsonl` from canary testers, train v3 model for better implicit list formatting.
