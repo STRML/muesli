@@ -1918,7 +1918,7 @@ struct ModelsView: View {
         }
         if appState.selectedBackend == option {
             let fallback = downloadedModels
-                .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option }) }
+                .compactMap { model in BackendOption.all.first(where: { $0.model == model && $0 != option && $0.isCompatible() }) }
                 .first ?? (option == .parakeetUnified ? .parakeetMultilingual : .parakeetUnified)
             controller.selectBackend(fallback)
         }

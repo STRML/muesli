@@ -379,7 +379,10 @@ extension MuesliController {
         }
         add("dictation_fallback_model", "Hosted dictation fallback model", backends.filter(\.supportsHostedDictationFallback).map { .init(id: backendID($0), label: $0.label) },
             read: { $0.sttBackend + ":" + $0.sttModel }, unavailable: { value in
-                backends.first(where: { backendID($0) == value })?.isDownloaded == true ? nil : "Download this model first."
+                guard let option = backends.first(where: { backendID($0) == value }), option.isDownloaded else {
+                    return "Download this model first."
+                }
+                return option.incompatibilityReason()
             }) { value in
             if let option = backends.first(where: { backendID($0) == value }) { self.selectBackend(option) }
         }

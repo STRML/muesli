@@ -209,10 +209,16 @@ struct BackendOption: Equatable {
     ]
 
     /// Experimental models the Models tab offers on this macOS version. Models that need a newer
-    /// macOS stay listed with their reason; models known not to load on this one are hidden.
-    static func offeredExperimental(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> [BackendOption] {
+    /// macOS stay listed with their reason. Models known not to load on this one are hidden unless
+    /// downloaded, so the card can explain why and offer Delete.
+    static func offeredExperimental(
+        currentOSVersion: OperatingSystemVersion = Self.currentOSVersion,
+        isDownloaded: (BackendOption) -> Bool = { $0.isDownloaded }
+    ) -> [BackendOption] {
         experimental.filter { option in
-            option.unsupportedFromOSMajorVersion.map { currentOSVersion.majorVersion < $0 } ?? true
+            guard let ceiling = option.unsupportedFromOSMajorVersion,
+                  currentOSVersion.majorVersion >= ceiling else { return true }
+            return isDownloaded(option)
         }
     }
 

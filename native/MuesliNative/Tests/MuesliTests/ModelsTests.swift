@@ -129,10 +129,13 @@ struct BackendOptionTests {
     @Test("Qwen3 ASR is offered through macOS 26 and hidden from macOS 27, where it fails to load")
     func qwen3AsrHiddenFromMacOS27() {
         let macOS27 = OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 1)
-        #expect(BackendOption.offeredExperimental(currentOSVersion: Self.macOS26).contains(.qwen3Asr))
-        #expect(!BackendOption.offeredExperimental(currentOSVersion: macOS27).contains(.qwen3Asr))
-        #expect(BackendOption.offeredExperimental(currentOSVersion: macOS27)
+        let notDownloaded: (BackendOption) -> Bool = { _ in false }
+        #expect(BackendOption.offeredExperimental(currentOSVersion: Self.macOS26, isDownloaded: notDownloaded).contains(.qwen3Asr))
+        #expect(BackendOption.offeredExperimental(currentOSVersion: macOS27, isDownloaded: notDownloaded)
             == BackendOption.experimental.filter { $0 != .qwen3Asr })
+        // A downloaded copy stays listed so its card can show the reason and offer Delete.
+        #expect(BackendOption.offeredExperimental(currentOSVersion: macOS27, isDownloaded: { $0 == .qwen3Asr })
+            .contains(.qwen3Asr))
 
         #expect(BackendOption.qwen3Asr.isCompatible(currentOSVersion: Self.macOS26))
         #expect(!BackendOption.qwen3Asr.isCompatible(currentOSVersion: macOS27))
@@ -142,7 +145,8 @@ struct BackendOptionTests {
 
     @Test("experimental models that need a newer macOS stay listed with their reason")
     func experimentalListKeepsMinimumOSGatedModels() {
-        #expect(BackendOption.offeredExperimental(currentOSVersion: Self.macOS14) == BackendOption.experimental)
+        #expect(BackendOption.offeredExperimental(currentOSVersion: Self.macOS14, isDownloaded: { _ in false })
+            == BackendOption.experimental)
     }
 
     @Test(

@@ -664,23 +664,29 @@ public final class MuesliController: NSObject {
         self.openRouterAuth = openRouterAuth ?? .shared
         self.openRouterModelCatalogClient = openRouterModelCatalogClient
         var loadedConfig = configStore.load()
-        let loadedBackend = BackendOption.all.first(where: {
+        let savedBackend = BackendOption.all.first(where: {
             $0.backend == loadedConfig.sttBackend && $0.model == loadedConfig.sttModel
         }) ?? .whisper
+        // A model saved on an older macOS that this one cannot load (Qwen3 ASR on 27) is replaced.
+        let loadedBackend = savedBackend.isCompatible() ? savedBackend : BackendOption.onboardingDefault
+        if loadedBackend != savedBackend {
+            loadedConfig.sttBackend = loadedBackend.backend
+            loadedConfig.sttModel = loadedBackend.model
+        }
         var loadedPostProcessorBackend = TranscriptCleanupBackendOption.resolved(loadedConfig.postProcessorBackend)
-        var repairedCleanupConfiguration = false
+        var repairedConfiguration = loadedBackend != savedBackend
         if loadedPostProcessorBackend == .local,
            !PostProcessorOption.resolve(id: loadedConfig.activePostProcessorId).isCompatible(with: loadedBackend) {
             loadedConfig.enablePostProcessor = false
-            repairedCleanupConfiguration = true
+            repairedConfiguration = true
         }
         if !loadedPostProcessorBackend.isCompatible(with: loadedBackend) {
             loadedPostProcessorBackend = .local
             loadedConfig.postProcessorBackend = loadedPostProcessorBackend.backend
             loadedConfig.enablePostProcessor = false
-            repairedCleanupConfiguration = true
+            repairedConfiguration = true
         }
-        if repairedCleanupConfiguration {
+        if repairedConfiguration {
             configStore.save(loadedConfig)
         }
         self.runtime = runtime
@@ -3007,6 +3013,8 @@ public final class MuesliController: NSObject {
         makePrimaryDictationModel: Bool
     ) {
         guard ensureNoMeetingRetranscription() else { return }
+        // Every picker funnels here; a model this macOS cannot load must never become active.
+        guard option.isCompatible() else { return }
         let replacesGemmaCleanup = !selectedPostProcessorBackend.isCompatible(with: option)
         let hasLocalCleanupModel = PostProcessorOption.runtimeOption(id: config.activePostProcessorId) != nil
         updateConfig {
