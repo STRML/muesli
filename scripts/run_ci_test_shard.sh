@@ -65,6 +65,9 @@ case "${shard}" in
       BodhanBackendTests
       BodhanArtifactValidationTests
       BodhanLifecycleTests
+      MLXAsrDecodeGuardTests
+      MLXAsrModelStoreTests
+      MLXAsrLifecycleTests
       DictationBackendPreparationTests
       ContributionMilestoneTests
       ShutdownDeadlineTests
@@ -175,6 +178,7 @@ case "${shard}" in
       MeetingProcessingStageTests
       MeetingRecordingWriterTests
       MeetingRecordingTranscriberTests
+      MLXAsrChunkRunnerTests
       MeetingResumePolicyTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
