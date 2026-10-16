@@ -24,89 +24,55 @@ enum LiveTranscriptCopyContent {
     }
 }
 
-struct LiveTranscriptBubble: View {
-    let speaker: String?
-    let timestamp: String?
-    let lines: [String]
-    let isUser: Bool
-    let isPartial: Bool
+/// One speaker turn as flowing text under a quiet header line. The committed text and the
+/// still-changing tail share one font and size, so firming a tail up only changes its color.
+struct LiveTranscriptParagraphView: View, Equatable {
+    let paragraph: LiveTranscriptParagraph
     var onOpen: (() -> Void)? = nil
-    @State private var isHovered = false
-    @State private var didCopy = false
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.paragraph == rhs.paragraph }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            if isUser { Spacer(minLength: 40) }
-            if isUser { copyButton }
-            VStack(alignment: .leading, spacing: 2) {
-                if let speaker {
-                    Text(speaker + (timestamp.map { "  \($0)" } ?? ""))
-                        .font(MuesliTheme.font(size: 10, weight: .medium))
-                        .foregroundStyle(MuesliTheme.textTertiary)
-                }
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(MuesliTheme.font(size: 13))
-                        .italic(isPartial)
-                        .foregroundStyle(isPartial ? MuesliTheme.textSecondary : MuesliTheme.textPrimary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+        if paragraph.isBoundary {
+            HStack(spacing: MuesliTheme.spacing8) {
+                Rectangle().fill(MuesliTheme.surfaceBorder).frame(height: 1)
+                Text("Resumed")
+                    .font(MuesliTheme.font(size: 10, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                Rectangle().fill(MuesliTheme.surfaceBorder).frame(height: 1)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(bubbleBackground)
-            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            .overlay {
-                RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
-                    .strokeBorder(
-                        isPartial ? MuesliTheme.surfaceBorder : committedBorder,
-                        style: StrokeStyle(lineWidth: 1, dash: isPartial ? [4, 3] : [])
-                    )
+            .padding(.vertical, MuesliTheme.spacing8)
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                if let speaker = paragraph.speaker {
+                    Text(speaker + (paragraph.timestamp.map { "  \($0)" } ?? ""))
+                        .font(MuesliTheme.font(size: 10, weight: .medium))
+                        .foregroundStyle(paragraph.isUser ? MuesliTheme.accent : MuesliTheme.textTertiary)
+                }
+                Text(flowingText)
+                    .font(MuesliTheme.font(size: 13))
+                    .lineSpacing(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, MuesliTheme.spacing8)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(paragraph.isUser ? MuesliTheme.accent.opacity(0.5) : MuesliTheme.surfaceBorder)
+                    .frame(width: 2)
             }
             .contentShape(Rectangle())
             .onTapGesture { onOpen?() }
-            if !isUser { copyButton }
-            if !isUser { Spacer(minLength: 40) }
-        }
-        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
-        .onHover { isHovered = $0 }
-    }
-
-    private var copyButton: some View {
-        Button(action: copyMessage) {
-            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(didCopy ? MuesliTheme.success : MuesliTheme.textSecondary)
-                .frame(width: 18, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Copy message")
-        .opacity(isHovered ? 1 : 0)
-        .allowsHitTesting(isHovered)
-        .accessibilityHidden(!isHovered)
-    }
-
-    private func copyMessage() {
-        let text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        didCopy = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-            didCopy = false
         }
     }
 
-    private var bubbleBackground: Color {
-        if isPartial {
-            return isUser ? MuesliTheme.accent.opacity(0.06) : MuesliTheme.surfacePrimary.opacity(0.5)
-        }
-        return isUser ? MuesliTheme.accent.opacity(0.15) : MuesliTheme.surfacePrimary
-    }
-
-    private var committedBorder: Color {
-        isUser ? MuesliTheme.accent.opacity(0.2) : MuesliTheme.surfaceBorder
+    private var flowingText: AttributedString {
+        var committed = AttributedString(paragraph.committed)
+        committed.foregroundColor = MuesliTheme.textPrimary
+        guard !paragraph.tail.isEmpty else { return committed }
+        var tail = AttributedString((paragraph.committed.isEmpty ? "" : " ") + paragraph.tail)
+        tail.foregroundColor = MuesliTheme.textTertiary
+        return committed + tail
     }
 }
 
@@ -117,6 +83,7 @@ final class LiveTranscriptPresentationModel {
     var partialYou = ""
     var partialOthers = ""
     var messages: [TranscriptChatMessage] = []
+    private(set) var paragraphs: [LiveTranscriptParagraph] = []
 
     func update(transcript: String, partialYou: String, partialOthers: String) {
         guard self.transcript != transcript ||
@@ -137,6 +104,9 @@ final class LiveTranscriptPresentationModel {
         }
         self.partialYou = partialYou
         self.partialOthers = partialOthers
+        paragraphs = LiveTranscriptParagraphs.build(
+            messages: messages, partialYou: partialYou, partialOthers: partialOthers
+        )
     }
 
     func reset() {
@@ -144,6 +114,7 @@ final class LiveTranscriptPresentationModel {
         partialYou = ""
         partialOthers = ""
         messages = []
+        paragraphs = []
     }
 }
 
@@ -157,6 +128,15 @@ struct LiveTranscriptFollowState: Equatable {
     static let bottomTolerance: CGFloat = 24
 
     var shouldFollowNewContent: Bool { isAtBottom }
+
+    /// The single source of truth for the "Scroll to bottom" pill: shown exactly while
+    /// auto-scroll is paused.
+    var showsScrollToBottomToast: Bool { !isAtBottom }
+
+    /// The reader asked to jump back: re-pin before scrolling so the next caption follows.
+    mutating func tapScrollToBottom() {
+        isAtBottom = true
+    }
 
     /// A provisional tail that is non-empty and differs from the last one. Only then does a
     /// follower scroll: whitespace-only churn and a tail that went empty need no scroll.
@@ -192,9 +172,7 @@ struct LiveTranscriptFeedView: View {
     static let bottomAnchorID = "liveTranscriptBottom"
     static let scrollSpace = "liveTranscriptScroll"
 
-    let messages: [TranscriptChatMessage]
-    let partialYou: String
-    let partialOthers: String
+    let paragraphs: [LiveTranscriptParagraph]
     var horizontalPadding: CGFloat
     var topPadding: CGFloat
     var bottomPadding: CGFloat
@@ -203,52 +181,18 @@ struct LiveTranscriptFeedView: View {
     /// `LiveTranscriptFeedView.scrollSpace`. Reports `.infinity` while the marker is not loaded.
     var onBottomMarkerChange: ((CGFloat) -> Void)? = nil
 
-    private var trimmedPartialYou: String {
-        partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var trimmedPartialOthers: String {
-        partialOthers.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 6) {
-            if messages.isEmpty && trimmedPartialYou.isEmpty && trimmedPartialOthers.isEmpty {
+        LazyVStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+            if paragraphs.isEmpty {
                 Text("Waiting for speech…")
                     .font(MuesliTheme.body())
                     .foregroundStyle(MuesliTheme.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, MuesliTheme.spacing8)
             } else {
-                ForEach(messages) { message in
-                    LiveTranscriptBubble(
-                        speaker: message.speaker,
-                        timestamp: message.timestamp,
-                        lines: [message.text],
-                        isUser: message.isUser,
-                        isPartial: false,
-                        onOpen: onOpen
-                    )
-                }
-                if !trimmedPartialOthers.isEmpty {
-                    LiveTranscriptBubble(
-                        speaker: "Others",
-                        timestamp: nil,
-                        lines: [trimmedPartialOthers],
-                        isUser: false,
-                        isPartial: true,
-                        onOpen: onOpen
-                    )
-                }
-                if !trimmedPartialYou.isEmpty {
-                    LiveTranscriptBubble(
-                        speaker: "You",
-                        timestamp: nil,
-                        lines: [trimmedPartialYou],
-                        isUser: true,
-                        isPartial: true,
-                        onOpen: onOpen
-                    )
+                ForEach(paragraphs) { paragraph in
+                    LiveTranscriptParagraphView(paragraph: paragraph, onOpen: onOpen)
+                        .equatable()
                 }
                 Color.clear
                     .frame(height: 1)
@@ -295,9 +239,7 @@ struct LiveTranscriptView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LiveTranscriptFeedView(
-                        messages: presentation.messages,
-                        partialYou: presentation.partialYou,
-                        partialOthers: presentation.partialOthers,
+                        paragraphs: presentation.paragraphs,
                         horizontalPadding: MuesliTheme.spacing16,
                         topPadding: 44,
                         bottomPadding: MuesliTheme.spacing8,
@@ -330,16 +272,12 @@ struct LiveTranscriptView: View {
                         partialYou: partialYou,
                         partialOthers: partialOthers
                     )
-                    guard followsNewLines else { return }
-                    DispatchQueue.main.async {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
-                        }
-                    }
+                    if followsNewLines { scrollToBottom(proxy) }
                 }
-                // A reader at the bottom follows a growing tail, which keeps the new lines from
-                // pushing the marker out of view and ending the follow. A reader who scrolled up
-                // is left alone: the follow decision is read before the new lines lay out.
+                // Partials grow the open paragraph in place. A reader at the bottom follows a
+                // growing tail, which keeps the new lines from pushing the marker out of view and
+                // ending the follow. A reader who scrolled up is left alone: the follow decision
+                // is read before the new lines lay out.
                 .onChange(of: partialYou) { old, new in
                     let followsNewLines = follow.shouldFollowNewContent
                     presentation.update(
@@ -372,6 +310,7 @@ struct LiveTranscriptView: View {
                         proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
                     }
                 }
+                .overlay(alignment: .bottom) { scrollToBottomToast(proxy) }
             }
 
             Button(action: copyTranscript) {
@@ -414,5 +353,36 @@ struct LiveTranscriptView: View {
                 proxy.scrollTo(LiveTranscriptFeedView.bottomAnchorID, anchor: .bottom)
             }
         }
+    }
+
+    /// Visible exactly while auto-scroll is paused. Only the pill itself takes hits, so the
+    /// transcript underneath keeps scrolling normally.
+    private func scrollToBottomToast(_ proxy: ScrollViewProxy) -> some View {
+        ZStack {
+            if follow.showsScrollToBottomToast {
+                Button {
+                    follow.tapScrollToBottom()
+                    scrollToBottom(proxy)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("Scroll to bottom")
+                            .font(MuesliTheme.font(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .padding(.horizontal, MuesliTheme.spacing12)
+                    .frame(height: 28)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(Capsule())
+                    .overlay { Capsule().strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1) }
+                    .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, MuesliTheme.spacing12)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: follow.showsScrollToBottomToast)
     }
 }

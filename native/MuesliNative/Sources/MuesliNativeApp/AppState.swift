@@ -174,6 +174,8 @@ final class AppState {
     var meetingsNavigationState: MeetingsNavigationState = .browser
     var meetingDetailReturnDestination: MeetingDetailReturnDestination = .meetings
     var meetingNotesFocusRequest = 0
+    /// Lives here, not in the detail view, so remounting the view cannot forget a tab pick.
+    @ObservationIgnored var liveTabAutoSelect = LiveTabAutoSelect()
     var isMeetingTemplatesManagerPresented: Bool = false
     var dictationStats: DictationStats = DictationStats(
         totalWords: 0, totalSessions: 0, averageWordsPerSession: 0,

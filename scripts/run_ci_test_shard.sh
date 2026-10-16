@@ -79,6 +79,9 @@ case "${shard}" in
       CotypistHistoryTests
       CotypistSetupGuideLayoutTests
       CotypistModelComparisonTests
+      LiveTranscriptParagraphsTests
+      LiveTranscriptScrollToBottomToastTests
+      LiveTabAutoSelectTests
     )
     ;;
   dictation-transcription)

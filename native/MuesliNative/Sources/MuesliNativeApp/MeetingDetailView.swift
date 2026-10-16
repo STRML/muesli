@@ -189,18 +189,22 @@ struct MeetingDetailView: View {
                     }
                 }
                 .onAppear {
+                    selectLiveTabIfRecordingStarted(meeting)
                     threadContext = controller.meetingThreadContext(for: meeting.id)
                     if controller.canUseSummaryProvider(.openRouter) {
                         controller.loadOpenRouterModels(.text)
                     }
                 }
                 .onChange(of: meeting.id) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: meeting.status) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: appState.meetingNotesFocusRequest) { _, _ in
+                    appState.liveTabAutoSelect.noteUserPick(meetingID: meeting.id)
                     recordingMode = .notes
                 }
                 .onChange(of: meeting.manualNotes) { _, _ in
@@ -806,10 +810,20 @@ struct MeetingDetailView: View {
         return target
     }
 
+    private func selectLiveTabIfRecordingStarted(_ meeting: MeetingRecord) {
+        let isRecording = meeting.status == .recording && showsManualNotesEditor(for: meeting)
+        if appState.liveTabAutoSelect.shouldSelectLive(meetingID: meeting.id, isRecording: isRecording) {
+            recordingMode = .live
+        }
+    }
+
     private var recordingModePicker: some View {
         HStack(spacing: 24) {
             ForEach([RecordingContentMode.notes, .live], id: \.self) { mode in
-                Button { recordingMode = mode } label: {
+                Button {
+                    if let id = meeting?.id { appState.liveTabAutoSelect.noteUserPick(meetingID: id) }
+                    recordingMode = mode
+                } label: {
                     Text(mode == .notes ? "Notes" : "Live")
                         .foregroundStyle(recordingMode == mode ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
                         .padding(.vertical, 8)

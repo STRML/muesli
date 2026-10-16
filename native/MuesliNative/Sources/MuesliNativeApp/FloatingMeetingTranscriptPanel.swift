@@ -243,18 +243,6 @@ private struct FloatingMeetingTranscriptPanelView: View {
     let onDismiss: () -> Void
     let onTogglePause: () -> Void
 
-    private var partialYou: String {
-        model.presentation.partialYou.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var partialOthers: String {
-        model.presentation.partialOthers.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var messages: [TranscriptChatMessage] {
-        model.presentation.messages
-    }
-
     private var copyText: String {
         LiveTranscriptCopyContent.text(
             transcript: model.presentation.transcript,
@@ -346,9 +334,7 @@ private struct FloatingMeetingTranscriptPanelView: View {
     private var transcript: some View {
         ScrollView {
             LiveTranscriptFeedView(
-                messages: messages,
-                partialYou: partialYou,
-                partialOthers: partialOthers,
+                paragraphs: model.presentation.paragraphs,
                 horizontalPadding: MuesliTheme.spacing12,
                 topPadding: MuesliTheme.spacing8,
                 bottomPadding: MuesliTheme.spacing8,
