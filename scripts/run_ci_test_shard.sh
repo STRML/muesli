@@ -207,6 +207,11 @@ case "${shard}" in
       TranscriptFormatterTests
       MeetingSummaryBackendTests
       MeetingResummarizationPolicyTests
+      LateSummaryPolicyTests
+      MeetingSummaryStageGateTests
+      ResumeAvailabilityPolicyTests
+      ResumeStartFailureStoreTests
+      ResumeWhileSummarizingControllerTests
       MeetingTemplateResolutionTests
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests
