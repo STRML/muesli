@@ -152,7 +152,9 @@ echo "  Tests passed."
 
 # --- Step 2: Build and sign ---
 echo "[2/10] Building and signing (version: ${VERSION})..."
+muesli_telemetry_build_env "$MUESLI_TELEMETRYDECK_DEV_APP_ID" canary
 ALPHA_BUILD_ENV=(
+  "${MUESLI_TELEMETRY_BUILD_ENV[@]}"
   MUESLI_BUILD_VERSION="$VERSION"
   "${BUILD_ENV[@]}"
   MUESLI_APP_NAME=MuesliCanary
@@ -160,8 +162,6 @@ ALPHA_BUILD_ENV=(
   MUESLI_DISPLAY_NAME=MuesliCanary
   MUESLI_SUPPORT_DIR_NAME=MuesliCanary
   MUESLI_SPARKLE_FEED_URL=""
-  MUESLI_TELEMETRYDECK_APP_ID="$MUESLI_TELEMETRYDECK_DEV_APP_ID"
-  MUESLI_TELEMETRY_CHANNEL="canary"
 )
 echo "y" | env "${ALPHA_BUILD_ENV[@]}" "$ROOT/scripts/build_native_app.sh" > /dev/null
 echo "  Installed to $APP_DIR"

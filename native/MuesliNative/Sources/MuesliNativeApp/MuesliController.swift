@@ -3353,6 +3353,12 @@ public final class MuesliController: NSObject {
         }
     }
 
+    /// Re-initializes TelemetryDeck so the choice applies now, not at next launch.
+    func setShareUsageAnalytics(_ enabled: Bool) {
+        updateConfig { $0.shareUsageAnalytics = enabled }
+        TelemetryBootstrap.start(userConsented: enabled)
+    }
+
     func setPostProcessorEnabled(_ enabled: Bool) {
         guard !enabled || selectedPostProcessorBackend.isCompatible(with: selectedBackend) else {
             updateConfig { $0.enablePostProcessor = false }

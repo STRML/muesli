@@ -15,11 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     func applicationDidFinishLaunching(_ notification: Notification) {
         installStandardEditMenu()
 
-        let runtimeTelemetry = TelemetryRuntimeConfiguration.current()
-        let telemetryConfig = TelemetryDeck.Config(appID: runtimeTelemetry.sdkAppID)
-        telemetryConfig.analyticsDisabled = !runtimeTelemetry.isEnabled
-        telemetryConfig.defaultParameters = { runtimeTelemetry.defaultParameters }
-        TelemetryDeck.initialize(config: telemetryConfig)
+        // Consent is read before anything can signal; the controller loads the same config later.
+        let runtimeTelemetry = TelemetryBootstrap.start(userConsented: ConfigStore().load().shareUsageAnalytics)
         if runtimeTelemetry.isEnabled {
             TelemetryDeck.signal("app.launched")
         }

@@ -1943,6 +1943,8 @@ struct AppConfig: Codable {
     var customTranscriptCleanupPrompts: [CustomTranscriptCleanupPrompt] = []
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
     var enableScreenContext: Bool = false
+    /// Opt-in for TelemetryDeck usage signals; off until the user turns it on in Settings.
+    var shareUsageAnalytics: Bool = false
     var enableDictationOCRContext: Bool = false
     var useCoreAudioTap: Bool = true
     /// Enables the explicitly selected live meeting transcription mode.
@@ -2123,6 +2125,7 @@ struct AppConfig: Codable {
         case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
         case enableScreenContext = "enable_screen_context"
+        case shareUsageAnalytics = "share_usage_analytics"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
@@ -2403,6 +2406,7 @@ struct AppConfig: Codable {
             postProcessorSystemPrompt = defaults.postProcessorSystemPrompt
         }
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
+        shareUsageAnalytics = (try? c.decode(Bool.self, forKey: .shareUsageAnalytics)) ?? defaults.shareUsageAnalytics
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
         enableLiveStreamingPartials = (try? c.decode(Bool.self, forKey: .enableLiveStreamingPartials)) ?? defaults.enableLiveStreamingPartials

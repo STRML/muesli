@@ -66,13 +66,49 @@ struct TelemetryRuntimeConfigurationTests {
         }
     }
 
-    private func makeConfiguration(appID: String?, channel: String?) -> TelemetryRuntimeConfiguration {
+    @Test("a compiled-in app ID sends nothing until the user opts in")
+    func requiresUserConsent() {
+        let configuration = makeConfiguration(appID: validAppID, channel: "production", userConsented: false)
+
+        #expect(!configuration.isEnabled)
+        #expect(configuration.appID.isEmpty)
+        #expect(configuration.sdkAppID == TelemetryRuntimeConfiguration.disabledSDKAppID)
+        #expect(configuration.channel == .unconfigured)
+    }
+
+    @Test("opting in does nothing when the build has no app ID")
+    func consentWithoutAppIDStaysDisabled() {
+        let configuration = makeConfiguration(appID: nil, channel: nil, userConsented: true)
+
+        #expect(!configuration.isEnabled)
+        #expect(configuration.sdkAppID == TelemetryRuntimeConfiguration.disabledSDKAppID)
+    }
+
+    @Test("analytics consent defaults off and round-trips through config JSON")
+    func consentSettingDefaultsOff() throws {
+        let fresh = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(fresh.shareUsageAnalytics == false)
+
+        var config = AppConfig()
+        config.shareUsageAnalytics = true
+        let data = try JSONEncoder().encode(config)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["share_usage_analytics"] as? Bool == true)
+        #expect(try JSONDecoder().decode(AppConfig.self, from: data).shareUsageAnalytics == true)
+    }
+
+    private func makeConfiguration(
+        appID: String?,
+        channel: String?,
+        userConsented: Bool = true
+    ) -> TelemetryRuntimeConfiguration {
         var dictionary: [String: Any] = [:]
         dictionary[TelemetryRuntimeConfiguration.appIDInfoKey] = appID
         dictionary[TelemetryRuntimeConfiguration.channelInfoKey] = channel
         return TelemetryRuntimeConfiguration.resolve(
             infoDictionary: dictionary,
-            bundleIdentifier: "com.muesli.test"
+            bundleIdentifier: "com.muesli.test",
+            userConsented: userConsented
         )
     }
 }
