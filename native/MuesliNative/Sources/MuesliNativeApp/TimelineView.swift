@@ -72,7 +72,7 @@ struct TimelineView: View {
     }
 
     private var filterBar: some View {
-        HStack(spacing: MuesliTheme.spacing12) {
+        WrappingHStack(spacing: MuesliTheme.spacing12, lineSpacing: MuesliTheme.spacing8) {
             RecordOriginPicker(selection: Binding(
                 get: { appState.timelineOriginFilter },
                 set: { controller.filterTimeline(origin: $0) }
@@ -85,9 +85,9 @@ struct TimelineView: View {
                 )
                 .featureTourTarget(.timelineApplications)
             }
-            Spacer(minLength: 0)
             dateFilterMenu
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var dateFilterMenu: some View {
@@ -236,51 +236,46 @@ private struct TimelineMeetingRow: View {
     @State private var isHovered = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: MuesliTheme.spacing20) {
-            Text(TimelineView.formatTime(record.startTime))
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(MuesliTheme.textTertiary)
-                .frame(width: 80, alignment: .leading)
-                .padding(.top, 2)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: MuesliTheme.spacing20) {
+                timeText
+                    .frame(width: 80, alignment: .leading)
+                    .padding(.top, 2)
 
-            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                HStack(spacing: MuesliTheme.spacing8) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.accent)
-                        .accessibilityLabel("Meeting")
-
-                    Text(record.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(MuesliTheme.textPrimary)
-                        .lineLimit(1)
-
-                    Text(record.status.displayLabel)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(record.status.displayColor)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(record.status.displayColor.opacity(0.12))
-                        .clipShape(Capsule())
-
-                    if let label = SyncOriginDisplay.badgeLabel(forMeetingSource: record.source) {
-                        SyncOriginBadge(label: label)
-                    } else {
-                        SyncOriginBadge(label: "Mac", help: "Recorded on this Mac")
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        meetingIcon
+                        titleText
+                            .lineLimit(1)
+                            .frame(minWidth: 0, idealWidth: 180, alignment: .leading)
+                        statusBadge
+                        originBadge
+                        Spacer(minLength: 0)
+                        durationText
                     }
-
-                    Spacer(minLength: 0)
-
-                    Text(Self.formatDuration(record.durationSeconds))
-                        .font(MuesliTheme.caption())
-                        .foregroundStyle(MuesliTheme.textTertiary)
+                    previewLabel
                 }
+            }
 
-                Text(previewText)
-                    .font(MuesliTheme.callout())
-                    .foregroundStyle(MuesliTheme.textSecondary)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // A narrow pane: the time and length share a line, the title gets the full width, and the
+            // badges wrap under it.
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                HStack {
+                    timeText
+                    Spacer(minLength: 0)
+                    durationText
+                }
+                HStack(alignment: .firstTextBaseline, spacing: MuesliTheme.spacing8) {
+                    meetingIcon
+                    titleText
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                WrappingHStack(spacing: MuesliTheme.spacing8, lineSpacing: 4) {
+                    statusBadge
+                    originBadge
+                }
+                previewLabel
             }
         }
         .padding(.horizontal, MuesliTheme.spacing20)
@@ -299,6 +294,61 @@ private struct TimelineMeetingRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Open meeting")
+    }
+
+    private var timeText: some View {
+        Text(TimelineView.formatTime(record.startTime))
+            .font(.system(size: 13, weight: .medium, design: .monospaced))
+            .foregroundStyle(MuesliTheme.textTertiary)
+            .fixedSize()
+    }
+
+    private var meetingIcon: some View {
+        Image(systemName: "person.2.fill")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(MuesliTheme.accent)
+            .accessibilityLabel("Meeting")
+    }
+
+    private var titleText: some View {
+        Text(record.title)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(MuesliTheme.textPrimary)
+    }
+
+    private var statusBadge: some View {
+        Text(record.status.displayLabel)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(record.status.displayColor)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(record.status.displayColor.opacity(0.12))
+            .clipShape(Capsule())
+            .fixedSize()
+    }
+
+    @ViewBuilder
+    private var originBadge: some View {
+        if let label = SyncOriginDisplay.badgeLabel(forMeetingSource: record.source) {
+            SyncOriginBadge(label: label)
+        } else {
+            SyncOriginBadge(label: "Mac", help: "Recorded on this Mac")
+        }
+    }
+
+    private var durationText: some View {
+        Text(Self.formatDuration(record.durationSeconds))
+            .font(MuesliTheme.caption())
+            .foregroundStyle(MuesliTheme.textTertiary)
+            .fixedSize()
+    }
+
+    private var previewLabel: some View {
+        Text(previewText)
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textSecondary)
+            .lineLimit(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var previewText: String {

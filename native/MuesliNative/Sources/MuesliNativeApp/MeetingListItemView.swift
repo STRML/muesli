@@ -90,7 +90,7 @@ struct MeetingListItemView: View {
                 }
             }
 
-            HStack(spacing: MuesliTheme.spacing4) {
+            WrappingHStack(spacing: MuesliTheme.spacing4, lineSpacing: 2) {
                 if record.status != .completed {
                     statusBadge
                     Text("\u{2022}")

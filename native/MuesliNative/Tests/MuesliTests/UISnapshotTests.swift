@@ -82,6 +82,13 @@ struct UISnapshotTests {
         try classification.recordSuggestion(meetingID: unfiled, candidate: .init(
             folderID: v12.id, source: .series, confidence: 0.9, reason: "Same recurring series as 4 meetings in V12"))
 
+        let spoken = Date().addingTimeInterval(-3_600)
+        try store.insertDictation(
+            text: "Remind me to send the revised term sheet to the lender once legal signs off on the covenant language, and copy the fund controller.",
+            durationSeconds: 9, source: "dictation", targetAppName: "Notes", targetAppBundleID: "com.apple.Notes",
+            startedAt: spoken, endedAt: spoken.addingTimeInterval(9)
+        )
+
         controller.syncAppState()
         controller.refreshFolderSuggestionInbox()
         return Fixture(controller: controller, store: store, rush: rush, legal: legal, privateMeeting: secret, normalMeeting: normal)
@@ -114,6 +121,39 @@ struct UISnapshotTests {
         let f = try makeFixture()
         f.controller.appState.selectedTab = .meetings
         try render(FolderInboxView(appState: f.controller.appState, controller: f.controller), width: 900, height: 420, name: "03-inbox")
+    }
+
+    /// The widest a view asks to be when it is offered `width`. A page that asks for more than it
+    /// is offered is wider than its window, and clips on both sides.
+    private func demandedWidth<V: View>(of view: V, offered width: CGFloat) -> CGFloat {
+        NSHostingController(rootView: view).sizeThatFits(in: CGSize(width: width, height: 800)).width
+    }
+
+    @Test("meeting list and inbox stay inside a narrow pane")
+    func narrowPane() throws {
+        let f = try makeFixture()
+        f.controller.appState.selectedTab = .meetings
+        try render(MeetingsView(appState: f.controller.appState, controller: f.controller), width: 240, height: 800, name: "06-meetings-list-narrow")
+        try render(FolderInboxView(appState: f.controller.appState, controller: f.controller), width: 240, height: 800, name: "07-inbox-narrow")
+        #expect(demandedWidth(of: MeetingsView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+        #expect(demandedWidth(of: FolderInboxView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+    }
+
+    @Test("timeline and dictations stay inside a narrow pane")
+    func narrowTimelineAndDictations() throws {
+        let f = try makeFixture()
+        f.controller.appState.selectedTab = .timeline
+        // Showing the iCloud banner in a window sends telemetry, which needs the app's setup. Render
+        // the pages without it, and measure the banner on its own below (measuring never shows it).
+        f.controller.appState.config.showIOSCompanionPrompt = false
+        try render(TimelineView(appState: f.controller.appState, controller: f.controller), width: 240, height: 2200, name: "08-timeline-narrow")
+        try render(DictationsView(appState: f.controller.appState, controller: f.controller), width: 240, height: 900, name: "09-dictations-narrow")
+        #expect(demandedWidth(of: TimelineView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+        #expect(demandedWidth(of: DictationsView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+
+        f.controller.appState.config.showIOSCompanionPrompt = true
+        #expect(demandedWidth(of: IPhoneBridgeCard(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
+        #expect(demandedWidth(of: TimelineView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
     }
 
     @Test("settings: private meetings, auto export and folder suggestions")
