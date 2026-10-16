@@ -234,6 +234,7 @@ struct ResumeWhileSummarizingControllerTests {
 
         #expect(gate.isCancelled)
         #expect(controller.hasDeferredResume(meetingID: id))
+        #expect(controller.resumeAvailability(for: row) == .disabled(reason: MeetingResumePolicy.resumePendingReason))
         let after = try #require(try store.meeting(id: id))
         #expect(after.status == .processing)
         #expect(after.rawTranscript == "Prior transcript")

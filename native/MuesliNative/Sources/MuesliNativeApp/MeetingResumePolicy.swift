@@ -22,6 +22,8 @@ enum MeetingResumePolicy {
     static let retranscriptionDisabledReason =
         "Resume is unavailable while a recording is being re-transcribed. Cancel or wait for it to finish."
 
+    static let resumePendingReason = "Resuming as soon as the transcript is saved."
+
     /// What the Resume control does for a row right now. `hasActiveFinalization` is true while the
     /// post-Stop pipeline (transcript finalize, then summary) for this row is still running.
     static func availability(

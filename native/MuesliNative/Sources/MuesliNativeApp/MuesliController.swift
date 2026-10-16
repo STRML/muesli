@@ -6033,8 +6033,15 @@ public final class MuesliController: NSObject {
         resummaryRuns[meeting.id] = (runToken, run)
     }
 
+    /// Nil only when the row is gone. A failed read must not look like a deleted row, or a good
+    /// summary would be discarded silently; the write that follows reports the real error.
     private func currentMeetingStatus(id: Int64) -> MeetingStatus? {
-        (try? dictationStore.meeting(id: id))?.status
+        do {
+            return try dictationStore.meeting(id: id)?.status
+        } catch {
+            fputs("[muesli-native] failed to read status for meeting \(id): \(error)\n", stderr)
+            return .completed
+        }
     }
 
     func cancelMeetingRetranscription(id: Int64) {
@@ -7349,6 +7356,9 @@ public final class MuesliController: NSObject {
         // The meeting being stopped may still be retiring its capture; that must not hide Resume on it.
         let otherRecordingActive = isStartingMeetingRecording
             || (isMeetingRecording() && meetingCapture?.id != meeting.id)
+        if deferredResumeMeetingIDs.contains(meeting.id) {
+            return .disabled(reason: MeetingResumePolicy.resumePendingReason)
+        }
         return MeetingResumePolicy.availability(
             status: meeting.status,
             isRetranscriptionRunning: !meetingRetranscriptionTasks.isEmpty,
@@ -7434,6 +7444,7 @@ public final class MuesliController: NSObject {
             gate.cancel()
             deferredResumeMeetingIDs.insert(meetingID)
             setMeetingProcessingStatus("Finishing the transcript, then resuming")
+            syncAppState()
             return
         }
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
@@ -8704,6 +8715,12 @@ public final class MuesliController: NSObject {
                 }
                 MuesliTelemetry.signal("meeting.completed")
 
+                if resumeRequested, failedLiveMeetingID != nil {
+                    self.presentErrorAlert(
+                        title: "Resume cancelled",
+                        message: "The meeting could not be finalized, so it was not resumed."
+                    )
+                }
                 if resumeRequested, failedLiveMeetingID == nil, let liveMeetingID {
                     self.updateMeetingNotificationVisibility()
                     self.startDeferredResume(meetingID: liveMeetingID)
@@ -8731,7 +8748,7 @@ public final class MuesliController: NSObject {
             guard !self.isMeetingRecording(), !self.isStartingMeetingRecording else {
                 self.presentErrorAlert(
                     title: "Resume failed",
-                    message: "Another recording is active. The transcript was saved without a summary; use Re-summarize on the meeting once recording ends."
+                    message: "Another recording is active, or the audio device is still busy. The transcript was saved without a summary; use Re-summarize on the meeting, or resume it again once recording ends."
                 )
                 return
             }
