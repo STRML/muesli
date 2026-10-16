@@ -148,7 +148,7 @@
   <h2>AI Providers You Choose</h2>
   <p>Meeting summaries, meeting titles, folder suggestions, and Ask Meetings use the meeting summary backend. The choices are:</p>
   <ul>
-    <li><strong>ChatGPT</strong> (the default) &mdash; sign in with your ChatGPT account; requests go to <code>chatgpt.com</code>. Nothing is sent until you sign in.</li>
+    <li><strong>ChatGPT</strong> (the default) &mdash; sign in with your ChatGPT account. Sign-in and token refresh go to <code>auth.openai.com</code>; requests go to <code>chatgpt.com</code>. Nothing is sent until you sign in.</li>
     <li><strong>OpenAI</strong> &mdash; your API key; requests go to <code>api.openai.com</code>.</li>
     <li><strong>Anthropic</strong> &mdash; your API key; requests go to <code>api.anthropic.com</code>.</li>
     <li><strong>Claude Code</strong> &mdash; Muesli runs your installed <code>claude</code> tool and passes it the transcript; that tool decides where it sends it.</li>
@@ -167,7 +167,7 @@
   <ul>
     <li><strong>Hosted dictation</strong> &mdash; with OpenAI selected, microphone audio streams to OpenAI's Realtime transcription API; with OpenRouter selected, the finished recording is uploaded to the transcription model you pick.</li>
     <li><strong>AI transcript cleanup and Quill</strong> &mdash; use on-device models by default. With a hosted backend selected, the dictated or selected text (and app context, if on) is sent to it.</li>
-    <li><strong>Computer use</strong> &mdash; when you turn on its shortcut, your spoken command, a screenshot of the frontmost window, and that window's accessibility text go to the planner model (ChatGPT unless you choose a local planner).</li>
+    <li><strong>Computer use</strong> &mdash; when you turn on its shortcut, your spoken command, a screenshot of the frontmost window, and that window's accessibility text go to the planner model (ChatGPT unless you choose a local planner). The planner can also ask for the text of the current browser page and the titles of open browser tabs, which are then sent to it.</li>
   </ul>
   <p>Each provider's own privacy policy governs what it does with the data.</p>
 
@@ -186,7 +186,7 @@
   </ul>
 
   <h2>Anonymous Usage Analytics</h2>
-  <p>Muesli can send usage signals to <a href="https://telemetrydeck.com">TelemetryDeck</a>, only if you turn on "Share anonymous usage analytics" in Settings &gt; General &gt; Privacy. It is off by default, and builds made without an analytics ID record no usage signals. When on, signals record feature use (for example, that a dictation or meeting completed and which backend ran) and, after a hard failure, an allowlisted diagnostic category, workflow stage, transcription backend and model, and a random incident ID. They never include audio, transcripts, notes, titles, keys, or file paths. The TelemetryDeck SDK adds to each signal a hashed random install ID, a session ID, the app version and build, the macOS version, device model and architecture, screen resolution, language, locale, region, time zone, and color scheme. See <a href="https://telemetrydeck.com/privacy">TelemetryDeck's privacy page</a> for how it handles that data.</p>
+  <p>Muesli can send usage signals to <a href="https://telemetrydeck.com">TelemetryDeck</a>, only if you turn on "Share anonymous usage analytics" in Settings &gt; General &gt; Privacy. It is off by default, and builds made without an analytics ID record no usage signals. When on, signals record feature use (for example, that a dictation or meeting completed and which backend ran) and, after a hard failure, an allowlisted diagnostic category, workflow stage, transcription backend and model, and a random incident ID. They never include audio, transcripts, notes, titles, keys, or file paths. The TelemetryDeck SDK (version 2.11.0) adds its default metadata to each signal: a hashed random install ID, a session ID, the app version and build, the macOS version, device model and architecture, screen resolution, language, locale, region, time zone, color scheme, the calendar day, week, month and hour the signal was sent, and the macOS Reduce Motion and Invert Colors settings. See <a href="https://telemetrydeck.com/privacy">TelemetryDeck's privacy page</a> for how it handles that data.</p>
 
   <h2>Open Source</h2>
   <p>Muesli's source code is publicly available on <a href="https://github.com/Muesli-HQ/muesli">GitHub</a> under the MIT license, so every statement here can be checked against the code.</p>
