@@ -218,6 +218,22 @@ struct MLXAsrModelStoreTests {
         #expect(allRequests.allSatisfy { !$0.contains("/resolve/main/") })
     }
 
+    @Test("A rate limit or timeout status is a retryable download error, not an unavailable model", arguments: [429, 408])
+    func transientHTTPStatusIsNotUnavailable(status: Int) async throws {
+        let fixture = try Fixture(); defer { fixture.cleanUp() }
+        let store = fixture.store(revision: Fixture.revision("a"), files: payload)
+        StubHub.reset(statusOverride: status)
+        do {
+            try await store.download()
+            Issue.record("Download unexpectedly succeeded")
+        } catch let error as ModelDownloadError {
+            guard case .invalidHTTPStatus(status, _) = error else { Issue.record("Unexpected \(error)"); return }
+        } catch {
+            Issue.record("Expected the coordinator's error to pass through, got \(error)")
+        }
+        #expect(!store.isDownloaded)
+    }
+
     @Test("A manifest without a pinned 40-character revision is rejected before any request",
           arguments: ["main", "", "v1.0", "abc123", String(repeating: "g", count: 40)])
     func unpinnedRevisionRejected(revision: String) async throws {

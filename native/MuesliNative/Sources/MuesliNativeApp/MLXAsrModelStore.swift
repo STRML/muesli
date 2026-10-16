@@ -179,10 +179,10 @@ struct MLXAsrModelStore: Sendable {
     // MARK: - Private
 
     /// Errors that mean "the pinned bytes are not there" become `modelUnavailable`.
-    /// Network and disk errors pass through so the UI can offer a retry.
+    /// Network, disk, rate-limit (429) and timeout (408) errors pass through so the UI can offer a retry.
     private static func map(_ error: ModelDownloadError, name: String) -> Error {
         switch error {
-        case .invalidHTTPStatus(let status, _) where (400..<500).contains(status):
+        case .invalidHTTPStatus(let status, _) where [401, 403, 404, 410, 451].contains(status):
             return MLXAsrModelStoreError.modelUnavailable(name)
         case .checksumMismatch, .sizeMismatch, .invalidContentLength:
             return MLXAsrModelStoreError.modelUnavailable(name)
