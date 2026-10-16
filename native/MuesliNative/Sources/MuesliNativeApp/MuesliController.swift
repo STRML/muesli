@@ -3718,9 +3718,8 @@ public final class MuesliController: NSObject {
 
     func signOutChatGPT() {
         chatGPTAuth.signOut()
-        if selectedMeetingSummaryBackend == .chatGPT {
-            selectMeetingSummaryBackend(.openAI)
-        }
+        // Keep the summary backend: switching it would send the next meeting to a provider
+        // the user never chose. The next summary reports ChatGPT as not signed in instead.
         syncAppState()
     }
 
@@ -3774,10 +3773,8 @@ public final class MuesliController: NSObject {
 
         clearOpenRouterTranscriptionCatalog()
 
-        if selectedMeetingSummaryBackend == .openRouter {
-            // Match ChatGPT sign-out: move summaries to the existing API-key fallback.
-            selectMeetingSummaryBackend(.openAI)
-        }
+        // The summary backend stays OpenRouter (as with ChatGPT sign-out), so the next summary
+        // reports OpenRouter as not configured instead of going to another provider.
         if selectedPostProcessorBackend == .hosted(.openRouter) {
             // Reuse the cleanup selector so local-model availability and the
             // enabled state are normalized exactly as for a manual switch.
@@ -5259,24 +5256,12 @@ public final class MuesliController: NSObject {
             config.enableComputerUsePlanner = true
             config.onboardingUseCase = onboardingUseCase.rawValue
             config.enablePushToTalk = onboardingUseCase.includesPushToTalk
-            if let summaryBackend {
-                config.meetingSummaryBackend = summaryBackend.backend
-            }
-            if let anthropicWorkspaceID {
-                config.anthropicWorkspaceID = anthropicWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            if let apiKey, !apiKey.isEmpty {
-                if summaryBackend == .openAI {
-                    config.openAIAPIKey = apiKey
-                } else if summaryBackend == .anthropic {
-                    config.anthropicAPIKey = apiKey
-                } else if summaryBackend == .openRouter,
-                          shouldRetainLegacyOpenRouterKey {
-                    // ConfigStore retries the migration and preserves this
-                    // fallback if protected credential storage remains unavailable.
-                    config.openRouterAPIKey = apiKey
-                }
-            }
+            config.applyOnboardingSummaryChoice(
+                summaryBackend,
+                apiKey: apiKey,
+                anthropicWorkspaceID: anthropicWorkspaceID,
+                retainLegacyOpenRouterKey: shouldRetainLegacyOpenRouterKey
+            )
         }
         selectBackend(backend)
         hotkeyMonitor.configure(hotkey)
