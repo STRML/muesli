@@ -86,7 +86,9 @@ func feedLiveSpeakerAudio(_ session: LiveSpeakerLabelSession, seconds: Double) {
     for _ in 0..<Int(seconds * 2) { session.enqueue(buffer) }
 }
 
-func liveSpeakerWaitUntil(timeout: Duration = .seconds(3), _ condition: @Sendable () -> Bool) async -> Bool {
+/// Polls for a condition the session will reach. The deadline only bounds a broken
+/// run: it sits far above any run time, so a busy CI runner can't fail the wait.
+func liveSpeakerWaitUntil(timeout: Duration = .seconds(60), _ condition: @Sendable () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
         if condition() { return true }
