@@ -5573,7 +5573,7 @@ public final class DictationStore {
         let sql = """
         UPDATE meetings
         SET sync_dirty = 1, updated_at = MAX(updated_at, ?) + 0.001,
-            cloud_change_tag = ?, cloud_system_fields = ?
+            cloud_change_tag = COALESCE(?, cloud_change_tag), cloud_system_fields = COALESCE(?, cloud_system_fields)
         WHERE id = ?
         """
         var statement: OpaquePointer?
