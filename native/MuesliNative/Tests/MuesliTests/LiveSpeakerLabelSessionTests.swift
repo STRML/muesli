@@ -171,12 +171,20 @@ struct LiveSpeakerLabelSessionTests {
 
     @Test("odd-sized system buffers reach the engine as whole 100 ms blocks; stop flushes the remainder")
     func engineOnlySeesWholeBlocks() async {
-        let engine = ScriptedLiveSpeakerEngine { _ in 1 }
-        let sut = session { engine }
+        // The 100 s of audio arrives far faster than real time. Hold the engine until it
+        // has all been queued, so every run sees the worst case a loaded machine
+        // produces, and keep the backlog limit above it so the run can't overflow.
+        var limits = Session.Limits()
+        limits.maxBacklogSeconds = 120
+        let gate = DispatchSemaphore(value: 0)
+        let engine = ScriptedLiveSpeakerEngine(gate: gate) { _ in 1 }
+        let sut = session(limits: limits) { engine }
         #expect(await liveSpeakerWaitUntil { sut.status == .running })
 
         let odd = [Float](repeating: 0.1, count: 1_601)
         for _ in 0..<1_000 { sut.enqueue(odd) }
+        // At most one process call per 1,600 samples, plus the stop flush.
+        for _ in 0...1_000 { gate.signal() }
         let whole = (1_000 * 1_601) / 1_600 * 1_600
         #expect(await liveSpeakerWaitUntil { engine.totalSamplesSeen == whole })
         #expect(engine.calledWithPartialBlock == 0)
