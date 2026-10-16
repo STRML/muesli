@@ -221,6 +221,7 @@ case "${shard}" in
       LiveStudioSummaryTests
       MeetingVaultExporterTests
       PrivateMeetingCLISyncTests
+      PrivateMeetingICloudRemovalTests
       PrivateMeetingChatTests
       PrivateMeetingExportTests
       PrivateMeetingPolicyTests

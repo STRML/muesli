@@ -6619,6 +6619,7 @@ public final class MuesliController: NSObject {
 
     func moveFolder(id: Int64, toParent newParentID: Int64?) {
         try? dictationStore.moveFolder(id: id, toParent: newParentID)
+        scheduleICloudSyncAfterLocalChange()
         scheduleVaultExport()
         syncAppState()
     }
@@ -6627,12 +6628,14 @@ public final class MuesliController: NSObject {
         guard let folderID = try? dictationStore.createFolder(name: name) else { return }
         try? dictationStore.moveMeeting(id: meetingID, toFolder: folderID)
         scheduleVaultExport(meetingID: meetingID)
+        scheduleICloudSyncAfterLocalChange()
         recordFolderMove(meetingID: meetingID, toFolder: folderID)
         syncAppState()
     }
 
     func deleteFolder(id: Int64) {
         try? dictationStore.deleteFolder(id: id)
+        scheduleICloudSyncAfterLocalChange()
         if appState.selectedFolderID == id {
             appState.selectedFolderID = nil
         }
@@ -6667,6 +6670,7 @@ public final class MuesliController: NSObject {
         if let existing = try? dictationStore.meetingByCalendarOccurrence(occurrence) {
             if let folderID {
                 try? dictationStore.moveMeeting(id: existing.id, toFolder: folderID)
+                scheduleICloudSyncAfterLocalChange()
             }
             syncAppState()
             fputs("[muesli-native] calendar event already exists as meeting \(existing.id), moved to folder\n", stderr)
@@ -6699,6 +6703,7 @@ public final class MuesliController: NSObject {
 
     func moveMeeting(id: Int64, toFolder folderID: Int64?) {
         try? dictationStore.moveMeeting(id: id, toFolder: folderID)
+        scheduleICloudSyncAfterLocalChange()
         scheduleVaultExport(meetingID: id)
         recordFolderMove(meetingID: id, toFolder: folderID)
         syncAppState()
@@ -6735,6 +6740,7 @@ public final class MuesliController: NSObject {
         } catch {
             presentErrorAlert(title: "Couldn't Update Privacy", message: error.localizedDescription)
         }
+        scheduleICloudSyncAfterLocalChange()
         scheduleVaultExport(meetingID: id)
         syncAppState()
     }
@@ -6745,6 +6751,7 @@ public final class MuesliController: NSObject {
         } catch {
             presentErrorAlert(title: "Couldn't Update Privacy", message: error.localizedDescription)
         }
+        scheduleICloudSyncAfterLocalChange()
         scheduleVaultExport()
         syncAppState()
     }
