@@ -4,19 +4,48 @@ import Foundation
 /// stages run to completion. Once cancelled, `run` never hands back a result, even one that
 /// finished at the same instant, so a late summary cannot be written over a resumed meeting.
 final class MeetingSummaryStageGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var cancelled = false
-    private var inFlight: [UUID: Task<Void, Never>] = [:]
-
-    var isCancelled: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return cancelled
+    private struct State {
+        var cancelled = false
+        var inFlight: [UUID: @Sendable () -> Void] = [:]
     }
 
-    func cancel() {}
+    private let state = NSLock()
+    private var guarded = State()
 
-    /// Runs `work`; returns nil when the gate was cancelled before or while it ran.
+    var isCancelled: Bool {
+        state.withLock { guarded.cancelled }
+    }
+
+    /// Marks the gate cancelled and cancels any stage already running under it.
+    func cancel() {
+        let running = state.withLock { () -> [@Sendable () -> Void] in
+            guarded.cancelled = true
+            return Array(guarded.inFlight.values)
+        }
+        running.forEach { $0() }
+    }
+
+    /// Runs `work`; returns nil when the gate was cancelled before or while it ran. A failure that
+    /// lands after cancellation is swallowed: the caller no longer cares about the outcome.
     func run<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) async throws -> T? {
-        try await work()
+        guard !isCancelled else { return nil }
+        let id = UUID()
+        let task = Task { try await work() }
+        let alreadyCancelled = state.withLock { () -> Bool in
+            guarded.inFlight[id] = { task.cancel() }
+            return guarded.cancelled
+        }
+        if alreadyCancelled { task.cancel() }
+        let result = await withTaskCancellationHandler {
+            await task.result
+        } onCancel: {
+            task.cancel()
+        }
+        let wasCancelled = state.withLock { () -> Bool in
+            guarded.inFlight[id] = nil
+            return guarded.cancelled
+        }
+        if wasCancelled { return nil }
+        return try result.get()
     }
 }

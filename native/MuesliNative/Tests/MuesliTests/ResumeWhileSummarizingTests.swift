@@ -67,10 +67,18 @@ struct LateSummaryPolicyTests {
 
     @Test("R3: a summary that finishes after the row is recording or processing is dropped")
     func dropsWhenRowMoved() {
-        for status in [MeetingStatus.recording, .processing, .failed, .noteOnly] {
+        for status in [MeetingStatus.recording, .processing] {
             #expect(!MeetingResumePolicy.shouldPersistSummary(rowStatus: status, wasCancelled: false))
         }
         #expect(!MeetingResumePolicy.shouldPersistSummary(rowStatus: nil, wasCancelled: false))
+    }
+
+    @Test("summaries still land on note-only and failed rows, which users can summarize today")
+    func stillPersistsOnNoteOnlyAndFailed() {
+        for status in [MeetingStatus.noteOnly, .failed] {
+            #expect(MeetingResumePolicy.shouldPersistSummary(rowStatus: status, wasCancelled: false))
+            #expect(MeetingResumePolicy.shouldSurfaceSummaryFailure(rowStatus: status, wasCancelled: false))
+        }
     }
 
     @Test("R2: a cancelled summary never persists, even on a completed row")
