@@ -734,6 +734,9 @@ final class MeetingSession {
         fputs("[meeting] recording discarded\n", stderr)
     }
 
+    /// Lets the controller drop this session's title and summary LLM stages when a Resume supersedes the pass.
+    let summaryGate = MeetingSummaryStageGate()
+
     func stop(onRecordingReady: ((URL?, Error?) async -> Void)? = nil) async throws -> MeetingSessionResult {
         onProgress?(.stoppingCapture)
         let shutdown = captureLifecycle.requestStop()
@@ -965,11 +968,9 @@ final class MeetingSession {
             generatedTitle = calendarTitle
         } else if nothingToSummarize {
             generatedTitle = title
-        } else if let autoTitle = await MeetingSummaryClient.generateTitle(
+        } else if let autoTitle = await generateTitleUnlessSuperseded(
             transcript: rawTranscript,
-            manualNotes: titleManualNotes,
-            config: config,
-            isPrivateMeeting: await isPrivateMeetingProvider?() ?? false
+            manualNotes: titleManualNotes
         ),
            !autoTitle.isEmpty {
             generatedTitle = autoTitle
@@ -990,18 +991,28 @@ final class MeetingSession {
             formattedNotes = MeetingSummaryClient.emptyRecordingNotes
         } else {
             do {
-                formattedNotes = try await MeetingSummaryClient.summarize(
-                    transcript: rawTranscript,
-                    meetingTitle: generatedTitle,
-                    config: config,
-                    template: templateSnapshot,
-                    existingNotes: nil,
-                    manualNotesToRetain: manualNotes,
-                    participantNames: participantNames,
-                    visualContext: visualContext.isEmpty ? nil : visualContext,
-                    previousMeetingNotes: previousMeetingNotes,
-                    isPrivateMeeting: await isPrivateMeetingProvider?() ?? false
-                )
+                let isPrivate = await isPrivateMeetingProvider?() ?? false
+                let summaryConfig = config
+                let summaryTemplate = templateSnapshot
+                let summaryPreviousNotes = previousMeetingNotes
+                let summaryVisualContext = visualContext.isEmpty ? nil : visualContext
+                let summarized = try await summaryGate.run {
+                    try await MeetingSummaryClient.summarize(
+                        transcript: rawTranscript,
+                        meetingTitle: generatedTitle,
+                        config: summaryConfig,
+                        template: summaryTemplate,
+                        existingNotes: nil,
+                        manualNotesToRetain: manualNotes,
+                        participantNames: participantNames,
+                        visualContext: summaryVisualContext,
+                        previousMeetingNotes: summaryPreviousNotes,
+                        isPrivateMeeting: isPrivate
+                    )
+                }
+                // Dropped on purpose (a Resume superseded this pass): the controller keeps the
+                // transcript and regenerates notes for the whole meeting on the next Stop.
+                formattedNotes = summarized ?? ""
             } catch {
                 fputs("[meeting] summary generation failed: \(error.localizedDescription)\n", stderr)
                 formattedNotes = MeetingSummaryClient.summaryFailureNotes(
@@ -1045,6 +1056,21 @@ final class MeetingSession {
             templateSnapshot: templateSnapshot,
             visualContext: visualContext.isEmpty ? nil : visualContext
         )
+    }
+
+    /// Nil when the title stage was superseded by a Resume or the model produced none.
+    private func generateTitleUnlessSuperseded(transcript: String, manualNotes: String?) async -> String? {
+        let isPrivate = await isPrivateMeetingProvider?() ?? false
+        let titleConfig = config
+        let generated = try? await summaryGate.run {
+            await MeetingSummaryClient.generateTitle(
+                transcript: transcript,
+                manualNotes: manualNotes,
+                config: titleConfig,
+                isPrivateMeeting: isPrivate
+            )
+        }
+        return generated ?? nil
     }
 
     static func calendarTitleCandidate(originalTitle: String, calendarEventID: String?) -> String? {

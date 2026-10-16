@@ -7,10 +7,59 @@ import MuesliCore
 /// Resume is intentionally age-independent: users may continue transcribing into
 /// an older meeting artifact when that is the right product-level grouping.
 enum MeetingResumePolicy {
-    /// Only finalized meetings can be resumed. Active, processing, note-only, and
-    /// failed rows have separate lifecycle actions.
+    /// Finalized meetings and ones still processing after Stop can be resumed.
+    /// Active, note-only, and failed rows have separate lifecycle actions.
     static func canResume(status: MeetingStatus) -> Bool {
-        status == .completed
+        status == .completed || status == .processing
+    }
+
+    enum Availability: Equatable {
+        case hidden
+        case disabled(reason: String)
+        case enabled
+    }
+
+    static let retranscriptionDisabledReason =
+        "Resume is unavailable while a recording is being re-transcribed. Cancel or wait for it to finish."
+
+    static let resumePendingReason = "Resuming as soon as the transcript is saved."
+
+    /// What the Resume control does for a row right now. `hasActiveFinalization` is true while the
+    /// post-Stop pipeline (transcript finalize, then summary) for this row is still running.
+    static func availability(
+        status: MeetingStatus,
+        isRetranscriptionRunning: Bool,
+        isAnotherRecordingActive: Bool,
+        hasActiveFinalization: Bool
+    ) -> Availability {
+        guard !isAnotherRecordingActive, canResume(status: status) else { return .hidden }
+        if isRetranscriptionRunning { return .disabled(reason: retranscriptionDisabledReason) }
+        if status == .processing && !hasActiveFinalization { return .hidden }
+        return .enabled
+    }
+
+    /// Summary results land on a row only while it is not being recorded or finalized. A row that
+    /// has since been resumed (recording), is mid-finalize, or was deleted keeps whatever it has.
+    static func shouldPersistSummary(rowStatus: MeetingStatus?, wasCancelled: Bool) -> Bool {
+        !wasCancelled && !isBusyWithRecording(rowStatus)
+    }
+
+    /// A summary failure is only worth showing when the row is not being recorded or finalized.
+    static func shouldSurfaceSummaryFailure(rowStatus: MeetingStatus?, wasCancelled: Bool) -> Bool {
+        !wasCancelled && rowStatus != .recording && rowStatus != .processing
+    }
+
+    private static func isBusyWithRecording(_ status: MeetingStatus?) -> Bool {
+        status == nil || status == .recording || status == .processing
+    }
+
+    /// Whether the resumed stop must run the summary again. New speech always does; so does a
+    /// transcript whose summary was cancelled before it ever produced notes.
+    static func needsSummaryRegeneration(hasNewContent: Bool, existingNotes: String?, combinedTranscript: String) -> Bool {
+        if hasNewContent { return true }
+        let notesAreBlank = (existingNotes ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasTranscript = !combinedTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return notesAreBlank && hasTranscript
     }
 
     /// A resumed meeting that began from a calendar event keeps the call-ended warning that a
