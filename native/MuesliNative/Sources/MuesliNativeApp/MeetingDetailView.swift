@@ -105,6 +105,7 @@ struct MeetingDetailView: View {
     @State private var pendingTemplateID: String
     @State private var documentMode: MeetingDocumentMode
     @State private var recordingMode: RecordingContentMode = .notes
+    @State private var liveTabAutoSelect = LiveTabAutoSelect()
     @State private var titleSaveTask: DispatchWorkItem?
     @State private var notesSaveTask: DispatchWorkItem?
     @State private var transcriptSaveTask: DispatchWorkItem?
@@ -177,15 +178,18 @@ struct MeetingDetailView: View {
                 }
                 .background(MuesliTheme.backgroundBase)
                 .onAppear {
+                    selectLiveTabIfRecordingStarted(meeting)
                     threadContext = controller.meetingThreadContext(for: meeting.id)
                     if controller.canUseSummaryProvider(.openRouter) {
                         controller.loadOpenRouterModels(.text)
                     }
                 }
                 .onChange(of: meeting.id) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: meeting.status) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: appState.meetingNotesFocusRequest) { _, _ in
@@ -759,8 +763,21 @@ struct MeetingDetailView: View {
         return target
     }
 
+    private func selectLiveTabIfRecordingStarted(_ meeting: MeetingRecord) {
+        let isRecording = meeting.status == .recording && showsManualNotesEditor(for: meeting)
+        if liveTabAutoSelect.shouldSelectLive(meetingID: meeting.id, isRecording: isRecording) {
+            recordingMode = .live
+        }
+    }
+
     private var recordingModePicker: some View {
-        Picker("", selection: $recordingMode) {
+        Picker("", selection: Binding(
+            get: { recordingMode },
+            set: { newMode in
+                if let id = meeting?.id { liveTabAutoSelect.noteUserPick(meetingID: id) }
+                recordingMode = newMode
+            }
+        )) {
             Text("Notes").tag(RecordingContentMode.notes)
             Text("Live").tag(RecordingContentMode.live)
         }
