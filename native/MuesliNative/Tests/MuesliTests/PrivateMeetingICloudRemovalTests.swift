@@ -281,6 +281,65 @@ struct PrivateMeetingICloudRemovalTests {
         #expect(local.title == "Counsel call")
     }
 
+    /// A content record for this meeting as another device would have saved it after `after`.
+    private func newerRemoteContent(_ tombstone: SyncTextRecord, after: Date) -> CKRecord {
+        MuesliICloudSyncEngine.syncZoneCloudRecord(from: SyncTextRecord(
+            id: tombstone.id, kind: .meeting, title: "Counsel call", text: "settlement terms discussed",
+            source: "ios", meetingStatus: .completed, createdAt: tombstone.createdAt,
+            updatedAt: after.addingTimeInterval(60), startedAt: tombstone.startedAt,
+            endedAt: tombstone.endedAt, durationSeconds: 60, wordCount: 3, isDeleted: false
+        ))
+    }
+
+    @Test("a tombstone save that loses a conflict to newer server content is retried as a tombstone")
+    func tombstoneConflictWithNewerServerContentRetries() async throws {
+        let store = try makeStore()
+        let id = try completedMeeting(store)
+        let synced = try sync(store)
+        try store.setMeetingPrivate(id: id, isPrivate: true)
+        let tombstone = try #require(try store.textRecordsNeedingSync().first { $0.id == synced.id })
+        let server = newerRemoteContent(tombstone, after: tombstone.updatedAt)
+        let client = MuesliICloudSyncEngine.syncZoneCloudRecord(from: tombstone)
+        let error = CKError(.serverRecordChanged, userInfo: [
+            CKRecordChangedErrorServerRecordKey: server,
+            CKRecordChangedErrorClientRecordKey: client,
+        ])
+        let state = PendingState()
+        let engine = MuesliCKSyncEngine(store: store)
+
+        try await engine.handleSentRecordChanges(
+            savedRecords: [],
+            failedRecordSaves: [MuesliCKSyncFailedRecordSave(record: client, error: error)],
+            state: state
+        )
+
+        try expectLocalContentIntact(store, id: id)
+        let retry = try store.textRecordsNeedingSync().first { $0.id == synced.id }
+        expectContentFreeTombstone(retry, id: synced.id)
+        #expect((retry?.updatedAt ?? .distantPast) > (server["updatedAt"] as? Date ?? .distantFuture))
+    }
+
+    @Test("newer content fetched for a private meeting is refused and re-tombstoned")
+    func newerFetchedContentIsRetombstoned() async throws {
+        let store = try makeStore()
+        let id = try completedMeeting(store)
+        let synced = try sync(store)
+        try store.setMeetingPrivate(id: id, isPrivate: true)
+        let tombstone = try #require(try store.textRecordsNeedingSync().first { $0.id == synced.id })
+        #expect(try store.markTextRecordSynced(
+            kind: .meeting, recordName: tombstone.id, changeTag: "tag-2",
+            systemFields: Data([0x02]), recordUpdatedAt: tombstone.updatedAt
+        ))
+        let fetched = newerRemoteContent(tombstone, after: tombstone.updatedAt)
+
+        try await MuesliCKSyncEngine(store: store).handleFetchedRecords([fetched], state: PendingState())
+
+        try expectLocalContentIntact(store, id: id)
+        let retry = try store.textRecordsNeedingSync().first { $0.id == synced.id }
+        expectContentFreeTombstone(retry, id: synced.id)
+        #expect((retry?.updatedAt ?? .distantPast) > (fetched["updatedAt"] as? Date ?? .distantFuture))
+    }
+
     // Row: delete fails offline -> retried by the engine's normal pending mechanism.
     @Test("a tombstone save that fails offline stays pending and dirty")
     func offlineTombstoneFailureRetries() async throws {

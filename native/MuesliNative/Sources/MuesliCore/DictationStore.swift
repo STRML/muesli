@@ -5482,6 +5482,9 @@ public final class DictationStore {
         // it, or anything else fetched for that record, would overwrite the local meeting.
         if let localID = try liveMeetingID(recordName: record.id, db: db),
            try isMeetingPrivate(id: localID, db: db) {
+            if !record.isDeleted {
+                try requeuePrivateTombstone(meetingID: localID, over: record, db: db)
+            }
             return false
         }
         if let localUpdatedAt = try localUpdatedAt(table: "meetings", recordName: record.id, db: db),
@@ -5561,6 +5564,30 @@ public final class DictationStore {
         let trimmed = followUpRecordName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty, trimmed != recordName else { return nil }
         return trimmed
+    }
+
+    /// CloudKit holds content for a meeting that is private here: another device saved over the
+    /// tombstone, or a tombstone save lost a conflict to it. Queue the tombstone again, newer than
+    /// that content and based on its server version, so the next save replaces it.
+    private func requeuePrivateTombstone(meetingID: Int64, over remote: SyncTextRecord, db: OpaquePointer?) throws {
+        let sql = """
+        UPDATE meetings
+        SET sync_dirty = 1, updated_at = MAX(updated_at, ?) + 0.001,
+            cloud_change_tag = ?, cloud_system_fields = ?
+        WHERE id = ?
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, remote.updatedAt.timeIntervalSince1970)
+        bindOptionalText(remote.cloudChangeTag, at: 2, statement: statement)
+        bindOptionalBlob(remote.cloudSystemFields, at: 3, statement: statement)
+        sqlite3_bind_int64(statement, 4, meetingID)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
     }
 
     private func liveMeetingID(recordName: String, db: OpaquePointer?) throws -> Int64? {
