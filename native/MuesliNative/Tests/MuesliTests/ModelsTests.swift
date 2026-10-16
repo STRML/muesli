@@ -126,6 +126,25 @@ struct BackendOptionTests {
         #expect(reason?.contains("macOS 26") == true)
     }
 
+    @Test("Qwen3 ASR is offered through macOS 26 and hidden from macOS 27, where it fails to load")
+    func qwen3AsrHiddenFromMacOS27() {
+        let macOS27 = OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 1)
+        #expect(BackendOption.offeredExperimental(currentOSVersion: Self.macOS26).contains(.qwen3Asr))
+        #expect(!BackendOption.offeredExperimental(currentOSVersion: macOS27).contains(.qwen3Asr))
+        #expect(BackendOption.offeredExperimental(currentOSVersion: macOS27)
+            == BackendOption.experimental.filter { $0 != .qwen3Asr })
+
+        #expect(BackendOption.qwen3Asr.isCompatible(currentOSVersion: Self.macOS26))
+        #expect(!BackendOption.qwen3Asr.isCompatible(currentOSVersion: macOS27))
+        let reason = BackendOption.qwen3Asr.incompatibilityReason(currentOSVersion: macOS27)
+        #expect(reason?.contains("does not load on macOS 27") == true)
+    }
+
+    @Test("experimental models that need a newer macOS stay listed with their reason")
+    func experimentalListKeepsMinimumOSGatedModels() {
+        #expect(BackendOption.offeredExperimental(currentOSVersion: Self.macOS14) == BackendOption.experimental)
+    }
+
     @Test(
         "baseline backends are compatible on supported macOS 14 versions",
         arguments: [

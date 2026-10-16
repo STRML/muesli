@@ -276,6 +276,7 @@ extension MuesliController {
                 guard let option = backends.first(where: { backendID($0) == value }), option.isDownloaded else {
                     return "Download this dictation model from Models first."
                 }
+                if let reason = option.incompatibilityReason() { return reason }
                 if !TranscriptCleanupBackendOption.resolved(self.config.postProcessorBackend).isCompatible(with: option) {
                     return "This model conflicts with the selected cleanup backend. Change cleanup first."
                 }
