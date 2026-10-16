@@ -1772,6 +1772,32 @@ extension AppConfig {
         if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
     }
 
+    /// Writes the summary provider picked during onboarding, with its key. A nil choice
+    /// changes nothing, so an already configured backend and its credentials stay as they are.
+    mutating func applyOnboardingSummaryChoice(
+        _ choice: MeetingSummaryBackendOption?,
+        apiKey: String?,
+        anthropicWorkspaceID: String?,
+        retainLegacyOpenRouterKey: Bool
+    ) {
+        if let choice {
+            meetingSummaryBackend = choice.backend
+        }
+        if choice == .anthropic, let anthropicWorkspaceID {
+            self.anthropicWorkspaceID = anthropicWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let apiKey, !apiKey.isEmpty else { return }
+        if choice == .openAI {
+            openAIAPIKey = apiKey
+        } else if choice == .anthropic {
+            anthropicAPIKey = apiKey
+        } else if choice == .openRouter, retainLegacyOpenRouterKey {
+            // ConfigStore retries the migration and preserves this
+            // fallback if protected credential storage remains unavailable.
+            openRouterAPIKey = apiKey
+        }
+    }
+
     /// Remembers (or, with nil, clears) the folder picked for an upcoming meeting, and drops
     /// choices for meetings that started more than a week ago.
     mutating func planFolder(_ folderID: Int64?, for occurrenceKey: String, startTime: Date, now: Date = Date()) {

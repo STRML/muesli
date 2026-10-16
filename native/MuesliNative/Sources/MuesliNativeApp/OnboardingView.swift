@@ -13,6 +13,9 @@ struct OnboardingView: View {
     @State private var selectedBackend: BackendOption
     @State private var selectedCohereLanguage: CohereTranscribeLanguage
     @State private var summaryBackend: MeetingSummaryBackendOption = .chatGPT
+    /// Set only by a user action on the summary step (tab, sign-in, typed key). Onboarding
+    /// writes the summary backend only when this is true.
+    @State private var summaryBackendPicked = false
     @State private var apiKey = ""
     @State private var anthropicWorkspaceID = ""
     @State private var isSigningInChatGPT = false
@@ -327,6 +330,7 @@ struct OnboardingView: View {
                     if summaryBackend == .claudeCode && claudeCodeAuthStatus != .signedIn {
                         summaryBackend = .chatGPT
                     }
+                    summaryBackendPicked = false
                     goToNextStep()
                 }
                 onboardingButton("Continue", enabled: summaryBackend != .claudeCode || claudeCodeAuthStatus == .signedIn) {
@@ -1682,30 +1686,24 @@ struct OnboardingView: View {
 
             HStack(spacing: 0) {
                 providerTab("ChatGPT", selected: summaryBackend == .chatGPT) {
-                    summaryBackend = .chatGPT
-                    apiKey = ""
+                    pickSummaryBackend(.chatGPT)
                 }
                 providerTab("OpenAI", selected: summaryBackend == .openAI) {
-                    summaryBackend = .openAI
-                    apiKey = ""
+                    pickSummaryBackend(.openAI)
                 }
                 providerTab("Anthropic", selected: summaryBackend == .anthropic) {
-                    summaryBackend = .anthropic
-                    apiKey = ""
+                    pickSummaryBackend(.anthropic)
                 }
                 if ClaudeCodeSummarizer.executableURL(configuredPath: appState.config.claudeCodeExecutablePath) != nil {
                     providerTab("Claude Code", selected: summaryBackend == .claudeCode) {
-                        summaryBackend = .claudeCode
-                        apiKey = ""
+                        pickSummaryBackend(.claudeCode)
                     }
                 }
                 providerTab("OpenRouter", selected: summaryBackend == .openRouter) {
-                    summaryBackend = .openRouter
-                    apiKey = ""
+                    pickSummaryBackend(.openRouter)
                 }
                 providerTab("Ollama", selected: summaryBackend == .ollama) {
-                    summaryBackend = .ollama
-                    apiKey = ""
+                    pickSummaryBackend(.ollama)
                 }
             }
             .background(MuesliTheme.backgroundRaised)
@@ -1747,7 +1745,8 @@ struct OnboardingView: View {
                         isSigningInChatGPT = true
                         chatGPTSignInError = nil
                         Task {
-                            let error = await controller.signInWithChatGPT()
+                            let error = await controller.signInWithChatGPT(selectMeetingSummaryBackend: false)
+                            if error == nil { summaryBackendPicked = true }
                             isSigningInChatGPT = false
                             chatGPTSignInDone = ChatGPTAuthManager.shared.isAuthenticated
                             chatGPTSignInError = error
@@ -1884,7 +1883,8 @@ struct OnboardingView: View {
                         apiKey = ""
                         isEnteringOpenRouterAPIKey = false
                         Task {
-                            let error = await controller.signInWithOpenRouter()
+                            let error = await controller.signInWithOpenRouter(selectMeetingSummaryBackend: false)
+                            if error == nil { summaryBackendPicked = true }
                             isSigningInOpenRouter = false
                             openRouterSignInDone = OpenRouterAuthManager.shared.isAuthenticated
                             openRouterSignInError = error
@@ -1916,7 +1916,7 @@ struct OnboardingView: View {
                         PastableSecureField(
                             text: apiKey,
                             placeholder: "sk-or-...",
-                            onChange: { apiKey = $0 }
+                            onChange: { enterSummaryAPIKey($0) }
                         )
                         .frame(width: 320, height: 28)
                     }
@@ -1942,7 +1942,7 @@ struct OnboardingView: View {
                     PastableSecureField(
                         text: apiKey,
                         placeholder: summaryBackend == .anthropic ? "sk-ant-api..." : "sk-...",
-                        onChange: { apiKey = $0 }
+                        onChange: { enterSummaryAPIKey($0) }
                     )
                     .frame(width: 320, height: 28)
 
@@ -1994,6 +1994,7 @@ struct OnboardingView: View {
         )
         if status == .unavailable {
             summaryBackend = .chatGPT
+            summaryBackendPicked = false
         } else {
             claudeCodeAuthStatus = status
         }
@@ -2434,10 +2435,29 @@ struct OnboardingView: View {
             cohereLanguage: selectedCohereLanguage,
             hotkey: selectedHotkey,
             onboardingUseCase: selectedUseCase,
-            summaryBackend: summaryBackend,
+            summaryBackend: persistedSummaryBackend,
             apiKey: withKey ? apiKey : nil,
-            anthropicWorkspaceID: summaryBackend == .anthropic ? anthropicWorkspaceID : nil
+            anthropicWorkspaceID: persistedSummaryBackend == .anthropic ? anthropicWorkspaceID : nil
         )
+    }
+
+    private var persistedSummaryBackend: MeetingSummaryBackendOption? {
+        OnboardingFlow.summaryBackendToPersist(
+            selection: summaryBackend,
+            userPicked: summaryBackendPicked,
+            claudeCodeReady: claudeCodeAuthStatus == .signedIn
+        )
+    }
+
+    private func pickSummaryBackend(_ option: MeetingSummaryBackendOption) {
+        summaryBackend = option
+        summaryBackendPicked = true
+        apiKey = ""
+    }
+
+    private func enterSummaryAPIKey(_ key: String) {
+        apiKey = key
+        if !key.isEmpty { summaryBackendPicked = true }
     }
 }
 
