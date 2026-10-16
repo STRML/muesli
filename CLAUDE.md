@@ -194,13 +194,13 @@ Keep `docs/privacy.html` in step with this list.
 | Calendar (optional) | Upcoming meetings | EKEventStore |
 | Contacts (optional) | Picking meeting participants from Contacts, saving a new contact | CNContactStore |
 
-**Critical:** Accessibility permission requires an app restart to take effect. The onboarding flow handles this with an automatic restart after the hotkey configuration step.
+**Critical:** Accessibility permission requires an app restart to take effect. The onboarding flow handles this with an automatic restart after the permissions step when the use case includes dictation or voice notes (`OnboardingFlow.permissionAdvanceAction`).
 
 **Important:** `CGWindowListCreateImage` (screenshots) conflicts with active `SCStream` sessions — causes `RPDaemonProxy: connection INTERRUPTED` and breaks system audio capture. This only applies to the ScreenCaptureKit fallback (`use_core_audio_tap=false`); with the default Core Audio tap, meetings take OCR screenshots (`MeetingSession.swift` passes `useOCR: config.useCoreAudioTap`).
 
 ## Onboarding Flow
 
-7 steps: Welcome → Model → Permissions → Hotkey → **[app restart]** → Dictation Test → Meeting Summaries → Calendar (macOS Calendar access)
+7 steps: Welcome → Model → Hotkey → Permissions → **[app restart]** → Dictation Test → Meeting Summaries → Calendar (macOS Calendar access)
 
 Key implementation details:
 - Real OS permission polling every 1s (not fake timers) via `AXIsProcessTrusted()`, `CGPreflightListenEventAccess()`, etc.
