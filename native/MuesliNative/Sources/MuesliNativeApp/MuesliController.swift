@@ -3714,9 +3714,8 @@ public final class MuesliController: NSObject {
 
     func signOutChatGPT() {
         chatGPTAuth.signOut()
-        if selectedMeetingSummaryBackend == .chatGPT {
-            selectMeetingSummaryBackend(.openAI)
-        }
+        // Keep the summary backend: switching it would send the next meeting to a provider
+        // the user never chose. The next summary reports ChatGPT as not signed in instead.
         syncAppState()
     }
 
@@ -3770,10 +3769,8 @@ public final class MuesliController: NSObject {
 
         clearOpenRouterTranscriptionCatalog()
 
-        if selectedMeetingSummaryBackend == .openRouter {
-            // Match ChatGPT sign-out: move summaries to the existing API-key fallback.
-            selectMeetingSummaryBackend(.openAI)
-        }
+        // The summary backend stays OpenRouter (as with ChatGPT sign-out), so the next summary
+        // reports OpenRouter as not configured instead of going to another provider.
         if selectedPostProcessorBackend == .hosted(.openRouter) {
             // Reuse the cleanup selector so local-model availability and the
             // enabled state are normalized exactly as for a manual switch.
