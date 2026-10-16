@@ -225,6 +225,11 @@ case "${shard}" in
       SpeakerAttributionTests
       MeetingSummaryBackendTests
       MeetingResummarizationPolicyTests
+      LateSummaryPolicyTests
+      MeetingSummaryStageGateTests
+      ResumeAvailabilityPolicyTests
+      ResumeStartFailureStoreTests
+      ResumeWhileSummarizingControllerTests
       MeetingTemplateResolutionTests
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests

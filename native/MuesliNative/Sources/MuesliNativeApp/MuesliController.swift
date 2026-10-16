@@ -665,6 +665,12 @@ public final class MuesliController: NSObject {
     private var isTerminatingAfterMeetingConfirmation = false
     private var backgroundMeetingProcessingCount = 0
     private var meetingRetranscriptionTasks: [Int64: Task<Void, Never>] = [:]
+    /// Post-Stop pipelines still running per meeting row, with the gate that can drop their LLM stages.
+    private var meetingFinalizationGates: [Int64: MeetingSummaryStageGate] = [:]
+    /// Rows whose Resume was tapped mid-finalization; the resume starts once the transcript is saved.
+    private var deferredResumeMeetingIDs: Set<Int64> = []
+    /// Manual re-summarize runs, so Resume can cancel the one for its row.
+    private var resummaryRuns: [Int64: (token: UUID, task: Task<Void, Never>)] = [:]
     private var isShuttingDown = false
     private var modelFileMutationTokens: Set<UUID> = []
     private var meetingProcessingStages: [UUID: MeetingProcessingStage] = [:]
@@ -6157,8 +6163,12 @@ public final class MuesliController: NSObject {
             return
         }
         let openRouterKey = openRouterAuth.resolvedAPIKey(legacyAPIKey: summaryConfig.openRouterAPIKey)
-        Task { [weak self] in
+        let runToken = UUID()
+        let run = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.resummaryRuns[meeting.id]?.token == runToken { self.resummaryRuns[meeting.id] = nil }
+            }
             let plan = MeetingResummarizationPolicy.plan(for: meeting)
             let participantNames = await self.summaryParticipantNames(meetingID: meeting.id)
             do {
@@ -6172,6 +6182,12 @@ public final class MuesliController: NSObject {
                     participantNames: participantNames,
                     openRouterAPIKeyOverride: openRouterKey
                 )
+                // Check and write with no suspension between them: a Resume that started while the
+                // model was answering must not have its row overwritten by this late result.
+                guard MeetingResumePolicy.shouldPersistSummary(
+                    rowStatus: self.currentMeetingStatus(id: meeting.id),
+                    wasCancelled: Task.isCancelled
+                ) else { throw CancellationError() }
                 do {
                     try self.dictationStore.updateMeetingSummary(
                         id: meeting.id,
@@ -6192,11 +6208,30 @@ public final class MuesliController: NSObject {
                     completion(.success(()))
                 }
             } catch {
-                fputs("[muesli-native] failed to generate or persist meeting summary: \(error.localizedDescription)\n", stderr)
+                // A summary superseded by Resume ends quietly; the recording owns the row now.
+                let surface = !(error is CancellationError) && MeetingResumePolicy.shouldSurfaceSummaryFailure(
+                    rowStatus: self.currentMeetingStatus(id: meeting.id),
+                    wasCancelled: Task.isCancelled
+                )
+                if surface {
+                    fputs("[muesli-native] failed to generate or persist meeting summary: \(error.localizedDescription)\n", stderr)
+                }
                 await MainActor.run {
-                    completion(.failure(error))
+                    completion(.failure(surface ? error : CancellationError()))
                 }
             }
+        }
+        resummaryRuns[meeting.id] = (runToken, run)
+    }
+
+    /// Nil only when the row is gone. A failed read must not look like a deleted row, or a good
+    /// summary would be discarded silently; the write that follows reports the real error.
+    private func currentMeetingStatus(id: Int64) -> MeetingStatus? {
+        do {
+            return try dictationStore.meeting(id: id)?.status
+        } catch {
+            fputs("[muesli-native] failed to read status for meeting \(id): \(error)\n", stderr)
+            return .completed
         }
     }
 
@@ -7445,9 +7480,45 @@ public final class MuesliController: NSObject {
         startMeetingRecordingFromEntryPoint(title: "Meeting", folderID: folderID)
     }
 
+    /// What the Resume control should show for `meeting` right now.
+    func resumeAvailability(for meeting: MeetingRecord) -> MeetingResumePolicy.Availability {
+        // The meeting being stopped may still be retiring its capture; that must not hide Resume on it.
+        let otherRecordingActive = isStartingMeetingRecording
+            || (isMeetingRecording() && meetingCapture?.id != meeting.id)
+        if deferredResumeMeetingIDs.contains(meeting.id) {
+            return .disabled(reason: MeetingResumePolicy.resumePendingReason)
+        }
+        return MeetingResumePolicy.availability(
+            status: meeting.status,
+            isRetranscriptionRunning: !meetingRetranscriptionTasks.isEmpty,
+            isAnotherRecordingActive: otherRecordingActive,
+            hasActiveFinalization: meetingFinalizationGates[meeting.id] != nil
+        )
+    }
+
     /// Whether a finished meeting can be resumed right now (used to gate the UI control too).
     func canResumeFinishedMeeting(_ meeting: MeetingRecord) -> Bool {
-        meetingRetranscriptionTasks.isEmpty && MeetingResumePolicy.canResume(status: meeting.status)
+        resumeAvailability(for: meeting) == .enabled
+    }
+
+    /// Registers the post-Stop pipeline for `meetingID` so Resume can supersede its summary.
+    func trackMeetingFinalization(meetingID: Int64, gate: MeetingSummaryStageGate) {
+        meetingFinalizationGates[meetingID] = gate
+    }
+
+    /// Drops the registration; returns true when a Resume was deferred behind it and must start now.
+    func finishMeetingFinalizationTracking(meetingID: Int64) -> Bool {
+        meetingFinalizationGates[meetingID] = nil
+        return deferredResumeMeetingIDs.remove(meetingID) != nil
+    }
+
+    func hasDeferredResume(meetingID: Int64) -> Bool {
+        deferredResumeMeetingIDs.contains(meetingID)
+    }
+
+    /// Cancels a manual re-summarize for `meetingID`; its late result is discarded.
+    func cancelInFlightResummary(meetingID: Int64) {
+        resummaryRuns[meetingID]?.task.cancel()
     }
 
     /// Whether `meeting` can spawn a follow-up meeting right now (also gates the UI control).
@@ -7495,8 +7566,18 @@ public final class MuesliController: NSObject {
     /// scaffolding but skips `createLiveMeeting` and reuses the existing meeting id.
     /// Named distinctly from `MeetingSession.resume()` (the in-session un-pause).
     func resumeFinishedMeeting(meetingID: Int64) {
-        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
         guard let meeting = meeting(id: meetingID), canResumeFinishedMeeting(meeting) else { return }
+        // Stop is still finalizing this row. Drop its summary now, let the transcript land (the
+        // resume snapshot needs a completed row), then start; see `finishMeetingFinalizationTracking`.
+        if let gate = meetingFinalizationGates[meetingID] {
+            gate.cancel()
+            deferredResumeMeetingIDs.insert(meetingID)
+            setMeetingProcessingStatus("Finishing the transcript, then resuming")
+            syncAppState()
+            return
+        }
+        guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
+        cancelInFlightResummary(meetingID: meetingID)
         guard let meetingBackend = normalizeMeetingTranscriptionSelectionForAvailability() else {
             presentErrorAlert(
                 title: "Resume failed",
@@ -8622,6 +8703,12 @@ public final class MuesliController: NSObject {
         meetingMonitor.suppressWhileActive()
         meetingMonitor.refreshState()
 
+        let summaryGate = sessionToStop.summaryGate
+        if let liveMeetingID {
+            trackMeetingFinalization(meetingID: liveMeetingID, gate: summaryGate)
+            syncAppState()
+        }
+
         Task { [weak self] in
             guard let self else { return }
             var meetingTitle = "Meeting"
@@ -8669,7 +8756,10 @@ public final class MuesliController: NSObject {
                         self.attachEarlyMeetingRecording(id: id, path: path)
                     }
                 }
-                let result = await self.mergedResumeResult(for: stopped, meetingID: liveMeetingID)
+                let result = await self.mergedResumeResult(for: stopped, meetingID: liveMeetingID, gate: summaryGate)
+                // Blank notes mean a Resume dropped the summary. Persist the transcript without
+                // completion side effects; the resumed recording's Stop summarizes the whole meeting.
+                let summaryDropped = result.formattedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 meetingResult = result
                 meetingTitle = result.title
                 await MainActor.run {
@@ -8683,7 +8773,14 @@ public final class MuesliController: NSObject {
                     preparedRecordingSave = await self.prepareMeetingRecordingSave(for: result, saveDecision: recordingSaveDecision)
                 }
                 let persistenceResult = try await MainActor.run {
-                    try self.persistCompletedMeetingResultAndDispatchHook(
+                    if summaryDropped {
+                        return try self.persistCompletedMeetingResult(
+                            result,
+                            existingMeetingID: liveMeetingID,
+                            preparedRecordingSave: preparedRecordingSave
+                        )
+                    }
+                    return try self.persistCompletedMeetingResultAndDispatchHook(
                         result,
                         existingMeetingID: liveMeetingID,
                         preparedRecordingSave: preparedRecordingSave
@@ -8726,6 +8823,7 @@ public final class MuesliController: NSObject {
                 }
             }
             await MainActor.run {
+                let resumeRequested = liveMeetingID.map { self.finishMeetingFinalizationTracking(meetingID: $0) } ?? false
                 self.removeMeetingProcessing(processingID: processingID)
                 self.backgroundMeetingProcessingCount -= 1
                 if let failedLiveMeetingID {
@@ -8744,12 +8842,44 @@ public final class MuesliController: NSObject {
                 }
                 TelemetryDeck.signal("meeting.completed")
 
+                if resumeRequested, failedLiveMeetingID != nil {
+                    self.presentErrorAlert(
+                        title: "Resume cancelled",
+                        message: "The meeting could not be finalized, so it was not resumed."
+                    )
+                }
+                if resumeRequested, failedLiveMeetingID == nil, let liveMeetingID {
+                    self.updateMeetingNotificationVisibility()
+                    self.startDeferredResume(meetingID: liveMeetingID)
+                    return
+                }
                 self.enqueueOrShowMeetingCompletionNotification(
                     meetingID: completedMeetingID,
                     title: meetingTitle
                 )
                 self.updateMeetingNotificationVisibility()
             }
+        }
+    }
+
+    /// Starts the Resume the user tapped while this row was still finalizing. Capture teardown can
+    /// outlast the pipeline by a moment, so wait (bounded) for the audio device before resuming.
+    private func startDeferredResume(meetingID: Int64) {
+        Task { @MainActor [weak self] in
+            var waited = 0
+            while let self, self.isStoppingMeetingRecording, waited < 150 {
+                try? await Task.sleep(for: .milliseconds(200))
+                waited += 1
+            }
+            guard let self else { return }
+            guard !self.isMeetingRecording(), !self.isStartingMeetingRecording else {
+                self.presentErrorAlert(
+                    title: "Resume failed",
+                    message: "Another recording is active, or the audio device is still busy. The transcript was saved without a summary; use Re-summarize on the meeting, or resume it again once recording ends."
+                )
+                return
+            }
+            self.resumeFinishedMeeting(meetingID: meetingID)
         }
     }
 
@@ -8924,7 +9054,8 @@ public final class MuesliController: NSObject {
     /// failure restore.
     private func mergedResumeResult(
         for result: MeetingSessionResult,
-        meetingID: Int64?
+        meetingID: Int64?,
+        gate: MeetingSummaryStageGate
     ) async -> MeetingSessionResult {
         guard let meetingID,
               let prior = pendingResumePriorTranscript[meetingID] else {
@@ -8946,7 +9077,12 @@ public final class MuesliController: NSObject {
             new: result.visualContext
         )
 
-        guard MeetingResumePolicy.hasNewTranscriptContent(prior: prior, new: result.rawTranscript) else {
+        let hasNewContent = MeetingResumePolicy.hasNewTranscriptContent(prior: prior, new: result.rawTranscript)
+        guard MeetingResumePolicy.needsSummaryRegeneration(
+            hasNewContent: hasNewContent,
+            existingNotes: originalMeeting?.formattedNotes,
+            combinedTranscript: combined
+        ), !gate.isCancelled else {
             return result.overriding(
                 startTime: originalStart,
                 durationSeconds: accumulatedDuration,
@@ -8959,16 +9095,21 @@ public final class MuesliController: NSObject {
         let participantNames = await summaryParticipantNames(meetingID: meetingID)
         let regeneratedNotes: String
         do {
-            regeneratedNotes = try await MeetingSummaryClient.summarize(
-                transcript: combined,
-                meetingTitle: result.title,
-                config: config,
-                template: result.templateSnapshot,
-                existingNotes: nil,
-                manualNotesToRetain: manualNotes,
-                participantNames: participantNames,
-                visualContext: mergedVisualContext
-            )
+            let summaryConfig = config
+            let summarized = try await gate.run {
+                try await MeetingSummaryClient.summarize(
+                    transcript: combined,
+                    meetingTitle: result.title,
+                    config: summaryConfig,
+                    template: result.templateSnapshot,
+                    existingNotes: nil,
+                    manualNotesToRetain: manualNotes,
+                    participantNames: participantNames,
+                    visualContext: mergedVisualContext
+                )
+            }
+            // Superseded by a Resume: keep the notes the row already has.
+            regeneratedNotes = summarized ?? originalMeeting?.formattedNotes ?? ""
         } catch {
             fputs("[muesli-native] resume summary regeneration failed: \(error.localizedDescription)\n", stderr)
             regeneratedNotes = MeetingSummaryClient.summaryFailureNotes(

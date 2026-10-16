@@ -879,6 +879,8 @@ struct MeetingDetailView: View {
                 syncPendingTemplateSelectionIfNeeded(
                     for: controller.meeting(id: meeting.id) ?? meeting
                 )
+                // A summary cancelled by Resume is not an error.
+                guard !(error is CancellationError) else { return }
                 summaryErrorMessage = error.localizedDescription
             }
         }
@@ -1246,23 +1248,31 @@ struct MeetingDetailView: View {
                 statusChip(for: meeting)
                 deleteButton
             }
+        } else if meeting.status == .processing {
+            HStack(spacing: MuesliTheme.spacing8) {
+                statusChip(for: meeting)
+                resumeChooserIfAvailable(for: meeting)
+            }
         } else {
             statusChip(for: meeting)
         }
     }
 
-    /// The resume control only makes sense on a finished meeting when no other
-    /// recording/editing workflow is active.
+    /// Resume stays on screen for a finished or finalizing meeting (including while it is being
+    /// summarized). The controller hides it only while a recording is active or starting, and the
+    /// control is disabled, with a tooltip saying why, while re-transcription or editing blocks it.
     @ViewBuilder
     private func resumeChooserIfAvailable(for meeting: MeetingRecord) -> some View {
-        if controller.canResumeFinishedMeeting(meeting),
-           !appState.isMeetingRecording,
-           !appState.isMeetingStarting,
-           !isEditingNotes,
-           !isEditingTranscript,
-           !isSummarizing,
-           !isRetranscribing {
-            resumeRecordingButton(for: meeting)
+        switch controller.resumeAvailability(for: meeting) {
+        case .hidden:
+            EmptyView()
+        case .disabled(let reason):
+            resumeRecordingButton(for: meeting, disabledReason: reason)
+        case .enabled:
+            let editingReason = (isEditingNotes || isEditingTranscript)
+                ? "Finish editing before resuming this meeting."
+                : nil
+            resumeRecordingButton(for: meeting, disabledReason: editingReason)
         }
     }
 
@@ -1544,7 +1554,7 @@ struct MeetingDetailView: View {
     /// (Not `Menu(primaryAction:)` — with a plain custom label on macOS the
     /// chevron segment doesn't render, leaving the menu unreachable.)
     @ViewBuilder
-    private func resumeRecordingButton(for meeting: MeetingRecord) -> some View {
+    private func resumeRecordingButton(for meeting: MeetingRecord, disabledReason: String? = nil) -> some View {
         HStack(spacing: 1) {
             Button {
                 controller.resumeFinishedMeeting(meetingID: meeting.id)
@@ -1561,7 +1571,7 @@ struct MeetingDetailView: View {
                 .background(MuesliTheme.accent)
             }
             .buttonStyle(.plain)
-            .help("Resume recording")
+            .help(disabledReason ?? "Resume recording")
 
             Menu {
                 Button {
@@ -1574,6 +1584,7 @@ struct MeetingDetailView: View {
                 } label: {
                     Label("Start a follow-up", systemImage: "arrow.turn.down.right")
                 }
+                .disabled(!controller.canStartFollowUpMeeting(meeting))
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
@@ -1585,8 +1596,10 @@ struct MeetingDetailView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: true, vertical: false)
-            .help("Resume recording, or start a follow-up meeting")
+            .help(disabledReason ?? "Resume recording, or start a follow-up meeting")
         }
+        .disabled(disabledReason != nil)
+        .opacity(disabledReason == nil ? 1 : 0.5)
         .fixedSize()
         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         .overlay(
@@ -2119,6 +2132,7 @@ struct MeetingDetailView: View {
                     syncLocalState(with: refreshed)
                 }
             case .failure(let error):
+                guard !(error is CancellationError) else { return }
                 summaryErrorMessage = error.localizedDescription
             }
         }
