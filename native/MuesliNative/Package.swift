@@ -41,6 +41,11 @@ let package = Package(
                 "MuesliCore",
                 .product(name: "AIElementsSwift", package: "AIElementsSwift"),
                 .product(name: "MLX", package: "mlx-swift"),
+                // MLXNN, MLXFast and MLXFFT come from the same exact-pinned mlx-swift as MLX.
+                // The MLX ASR model ports (see docs/mlx-asr-backends.md) build on them.
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "MLXFFT", package: "mlx-swift"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "LLM", package: "LLM.swift"),
                 .target(name: "CLiteRTLM_mac", condition: .when(platforms: [.macOS])),
