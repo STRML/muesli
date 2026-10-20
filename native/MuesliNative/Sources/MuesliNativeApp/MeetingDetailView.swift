@@ -1109,7 +1109,9 @@ struct MeetingDetailView: View {
             Text(label)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textSecondary)
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, 6)
         .background(MuesliTheme.surfacePrimary)
