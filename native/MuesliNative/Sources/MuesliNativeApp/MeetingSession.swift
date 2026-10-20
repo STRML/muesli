@@ -424,7 +424,12 @@ final class MeetingSession {
             setupRetainedRecordingWriterIfNeeded()
             // Created before the first system sample so its clock matches the chunk timing.
             liveSpeakerSessionStorage.withLock {
-                $0 = Self.makeLiveSpeakerSession(config: config, factory: LiveSpeakerModelStore.loadEngine)
+                $0 = Self.makeLiveSpeakerSession(
+                    config: config,
+                    inPerson: inPerson,
+                    modelAvailable: inPerson && LiveSpeakerModelStore.isDownloaded(),
+                    factory: LiveSpeakerModelStore.loadEngine
+                )
             }
         }
         try await captureLifecycle.start()
@@ -499,12 +504,16 @@ final class MeetingSession {
         }
     }
 
-    /// Returns nil when live speaker labels are off for this meeting's config snapshot.
+    /// Returns nil when live speaker labels are off for this meeting. In-person
+    /// meetings label live by default, but only from a model already on disk: a
+    /// meeting never downloads anything, so a missing model means no session.
     static func makeLiveSpeakerSession(
         config: AppConfig,
+        inPerson: Bool = false,
+        modelAvailable: Bool = true,
         factory: @escaping LiveSpeakerLabelSession.EngineFactory
     ) -> LiveSpeakerLabelSession? {
-        guard config.enableLiveSpeakerLabels else { return nil }
+        guard inPerson ? modelAvailable : config.enableLiveSpeakerLabels else { return nil }
         return LiveSpeakerLabelSession(factory: factory)
     }
 
@@ -520,6 +529,20 @@ final class MeetingSession {
             labels.append(await session.label(start: segment.start, end: segment.end))
         }
         return labels
+    }
+
+    /// Display labels for committed in-person mic segments. nil (today's "You")
+    /// whenever the session cannot give real labels: none, still loading, or
+    /// failed, including a failure while this batch waited. A range with no
+    /// detected voice reads as the undiarized speaker, like the final pass.
+    static func liveMicDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?
+    ) async -> [String]? {
+        guard let session, session.isLabeling else { return nil }
+        guard let labels = await liveDisplaySpeakers(for: segments, using: session),
+              session.isLabeling else { return nil }
+        return labels.map { $0 == LiveSpeakerLabeler.fallbackLabel ? InPersonMeeting.undiarizedSpeaker : $0 }
     }
 
     private func liveSpeakerSession() -> LiveSpeakerLabelSession? {
@@ -631,6 +654,10 @@ final class MeetingSession {
             retainedRecordingWriter = try MeetingRecordingWriter(micOnly: inPerson)
         }
         try await captureLifecycle.start()
+    }
+
+    func testingInstallLiveSpeakerSession(_ session: LiveSpeakerLabelSession?) {
+        liveSpeakerSessionStorage.withLock { $0 = session }
     }
 
     func testingPipelineBarrier(_ inspect: () -> Void = {}) { chunkRotationQueue.sync(execute: inspect) }
@@ -1186,7 +1213,10 @@ final class MeetingSession {
                 guard self.micChunkCollector.retire(id: retireID, segments: resolvedSegments) else { return }
                 self.commitMicPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
-                self.onChunkTranscribed?(resolvedSegments, "You", nil)
+                let displaySpeakers = self.inPerson
+                    ? await Self.liveMicDisplaySpeakers(for: resolvedSegments, using: self.liveSpeakerSession())
+                    : nil
+                self.onChunkTranscribed?(resolvedSegments, "You", displaySpeakers)
             }
         } else {
             task.cancel()
@@ -1413,6 +1443,9 @@ final class MeetingSession {
         // Single funnel for all AEC'd mic audio — the streaming partial tail
         // must consume exactly the stream the mic chunks record.
         feedMicPartialSession(cleanedFloat)
+        // In-person has no system track, so the mic stream is what live speaker
+        // labels read; same samples, same clock as the chunk timing below.
+        if inPerson { liveSpeakerSession()?.enqueue(cleanedFloat) }
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
             Int16(max(-1.0, min(1.0, sample)) * 32767)
         }
