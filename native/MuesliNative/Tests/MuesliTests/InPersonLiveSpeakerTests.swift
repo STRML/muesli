@@ -25,8 +25,8 @@ struct InPersonLiveSpeakerTests {
         return session
     }
 
-    private func meeting(config: AppConfig = AppConfig(), inPerson: Bool = true) -> (MeetingSession, ContractProducer) {
-        let producer = ContractProducer(useQueue: true)
+    private func meeting(config: AppConfig = AppConfig(), inPerson: Bool = true, useQueue: Bool = true) -> (MeetingSession, ContractProducer) {
+        let producer = ContractProducer(useQueue: useQueue)
         let route = RouteAwareMeetingMicRecorder(systemDefaultRecorder:
             StreamingMeetingMicRecorderAdapter(recorder: producer, kind: .systemDefaultStreaming))
         let session = MeetingSession(title: "in-person live", calendarEventID: nil,
@@ -209,13 +209,14 @@ struct InPersonLiveSpeakerTests {
     // Row: pause/resume mid-meeting.
     @Test("pause and resume add no gap and no duplicate: the live clock equals the recorded mic")
     func pauseResume() async throws {
-        let (session, producer) = meeting()
+        let (session, producer) = meeting(useQueue: false)
         let engine = ScriptedLiveSpeakerEngine { _ in 0 }
         let live = LiveSpeakerLabelSession(factory: { engine })
         live.start()
         session.testingInstallLiveSpeakerSession(live)
         let resumed = DispatchSemaphore(value: 0)
         producer.afterResume = { resumed.signal() }
+        session.testingConsumeChunk = { _, url, _ in try? FileManager.default.removeItem(at: url) }
         try await session.testingStartCapture()
         let start = MicrophoneCaptureAudio.frame(atHostTime: mach_absolute_time()) - 4096
         try producer.emit(micValues(3_200), at: start)

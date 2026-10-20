@@ -102,6 +102,15 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
 
     var status: Status { state.withLock { $0.status } }
 
+    /// True once the engine has produced a labeler and the session has not failed.
+    /// Labels stay answerable after `stop()`, so chunks still committing keep them.
+    var isLabeling: Bool {
+        state.withLock { s in
+            if case .failed = s.status { return false }
+            return s.labeler != nil
+        }
+    }
+
     /// Begins loading the engine. Audio enqueued before this is buffered.
     func start() {
         let factory = factory

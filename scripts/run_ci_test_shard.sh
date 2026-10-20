@@ -155,6 +155,7 @@ case "${shard}" in
       BufferedMicrophoneCaptureTests
       MeetingMicrophoneDeliveryTests
       InPersonMeetingTests
+      InPersonLiveSpeakerTests
       StreamingMicRecorderBufferTests
       AudioAttributionServiceTests
       CameraActivityMonitorTests
