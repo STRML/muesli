@@ -809,7 +809,7 @@ struct MeetingMicrophoneDeliveryTests {
     }
 }
 
-private final class ContractGate {
+final class ContractGate {
     let entered = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
     func block() { entered.signal(); #expect(release.wait(timeout: .now() + 10) == .success) }
@@ -821,7 +821,7 @@ private final class ContractGate {
 
 /// Real producer, adapter and lifecycle; only the native device is
 /// replaced. Every output block goes through production admission and queues.
-private final class ContractProducer: StreamingDictationRecording, PausableStreamingDictationRecording, MicrophoneCaptureReporting {
+final class ContractProducer: StreamingDictationRecording, PausableStreamingDictationRecording, MicrophoneCaptureReporting {
     let driver: ContractQueueDriver?
     private let streaming: StreamingMicRecorder?
     private let child: StreamingDictationRecording & MicrophoneCaptureReporting
@@ -895,7 +895,7 @@ private final class ContractProducer: StreamingDictationRecording, PausableStrea
     func currentPower() -> Float { child.currentPower() }
 }
 
-private final class ContractQueueDriver {
+final class ContractQueueDriver {
     var onStop: (() -> Void)?
     private let queue = AudioQueueRef(bitPattern: 1)!
     private var callback: AudioQueueInputCallback?
@@ -961,7 +961,7 @@ private final class ContractQueueDriver {
     deinit { for buffer in buffers { buffer.pointee.mAudioData.deallocate(); buffer.deinitialize(count: 1); buffer.deallocate() } }
 }
 
-private final class ContractSystemAudio: SystemAudioCapturing {
+final class ContractSystemAudio: SystemAudioCapturing {
     var onPCMSamples: (([Int16]) -> Void)?
     var isRecording = false
     var isPaused = false
@@ -972,7 +972,7 @@ private final class ContractSystemAudio: SystemAudioCapturing {
     func stop() -> URL? { isRecording = false; return nil }
 }
 
-private final class ContractAecProcessor: MeetingAecProcessor {
+final class ContractAecProcessor: MeetingAecProcessor {
     let name = "test", frameSize = 4, sampleRate = 16_000
     var events: [String] = [] // Session pipeline queue only.
     func reset() { events.append("reset") }

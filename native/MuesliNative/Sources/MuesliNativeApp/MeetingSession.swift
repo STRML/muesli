@@ -502,6 +502,8 @@ final class MeetingSession {
     /// Returns nil when live speaker labels are off for this meeting's config snapshot.
     static func makeLiveSpeakerSession(
         config: AppConfig,
+        inPerson: Bool = false,
+        modelAvailable: Bool = true,
         factory: @escaping LiveSpeakerLabelSession.EngineFactory
     ) -> LiveSpeakerLabelSession? {
         guard config.enableLiveSpeakerLabels else { return nil }
@@ -520,6 +522,14 @@ final class MeetingSession {
             labels.append(await session.label(start: segment.start, end: segment.end))
         }
         return labels
+    }
+
+    /// STUB (red phase): in-person mic labels.
+    static func liveMicDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?
+    ) async -> [String]? {
+        await liveDisplaySpeakers(for: segments, using: session)
     }
 
     private func liveSpeakerSession() -> LiveSpeakerLabelSession? {
@@ -631,6 +641,10 @@ final class MeetingSession {
             retainedRecordingWriter = try MeetingRecordingWriter(micOnly: inPerson)
         }
         try await captureLifecycle.start()
+    }
+
+    func testingInstallLiveSpeakerSession(_ session: LiveSpeakerLabelSession?) {
+        liveSpeakerSessionStorage.withLock { $0 = session }
     }
 
     func testingPipelineBarrier(_ inspect: () -> Void = {}) { chunkRotationQueue.sync(execute: inspect) }
