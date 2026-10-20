@@ -87,6 +87,7 @@ struct MeetingMicrophoneDeliveryTests {
     @Test("in-person session retains the microphone alone, unmixed, with no system capture")
     func inPersonSessionKeepsOnlyMic() async throws {
         let producer = ContractProducer(useQueue: true)
+        let aec = MeetingNeuralAec(preloadedProcessor: ContractAecProcessor())
         let route = RouteAwareMeetingMicRecorder(systemDefaultRecorder:
             StreamingMeetingMicRecorderAdapter(recorder: producer, kind: .systemDefaultStreaming))
         let session = MeetingSession(title: "in-person", calendarEventID: nil,
@@ -96,7 +97,7 @@ struct MeetingMicrophoneDeliveryTests {
             config: AppConfig(),
             templateSnapshot: .init(id: "test", name: "test", kind: .custom, prompt: ""),
             transcriptionCoordinator: TranscriptionCoordinator(), meetingMicRecorder: route,
-            aec: MeetingNeuralAec(preloadedProcessor: ContractAecProcessor()), inPerson: true)
+            aec: aec, inPerson: true)
         try await session.testingStartCapture()
         var expectedMic: [Int16] = []
         let captureStart = MicrophoneCaptureAudio.frame(atHostTime: mach_absolute_time()) - 4096
@@ -104,6 +105,10 @@ struct MeetingMicrophoneDeliveryTests {
             try producer.emit(Array(repeating: index + 1, count: 512), at: captureStart + Int64(index * 512))
             expectedMic += Array(repeating: Int16(Float(index + 1) / 16 * 32767), count: 512)
         }
+        // Mic audio reaches the chunk pipeline immediately: no AEC wait for a reference that never comes.
+        var heldByAec = -1
+        session.testingPipelineBarrier { heldByAec = aec.flushStreamingMic().count }
+        #expect(heldByAec == 0)
         let urls = await session.testingFinishCapture()
         defer { for url in [urls.0, urls.1, urls.2].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) } }
         func pcm(_ url: URL?) throws -> [Int16] {

@@ -73,7 +73,10 @@ struct InPersonMeetingTests {
     // Row: diarizer model unavailable.
     @Test("diarization is skipped, not fatal, when the model is unavailable; the copy is cleaned up")
     func diarizerUnavailable() async throws {
-        let copy = try tempWav()
+        let original = try tempWav()
+        defer { try? FileManager.default.removeItem(at: original) }
+        let copy = try #require(InPersonMeeting.diarizationCopy(of: original))
+        #expect(copy.deletingLastPathComponent() == original.deletingLastPathComponent())
         let segments = await InPersonMeeting.diarize(copy: copy, using: TranscriptionCoordinator())
         #expect(segments == nil)
         #expect(!FileManager.default.fileExists(atPath: copy.path))
@@ -98,6 +101,7 @@ struct InPersonMeetingTests {
     @Test("the diarization copy survives the controller consuming the original recording")
     func copySurvivesOriginalConsumption() throws {
         let original = try tempWav()
+        defer { try? FileManager.default.removeItem(at: original) }
         let copy = try #require(InPersonMeeting.diarizationCopy(of: original))
         defer { try? FileManager.default.removeItem(at: copy) }
         try FileManager.default.removeItem(at: original)

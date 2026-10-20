@@ -1365,7 +1365,8 @@ final class MeetingSession {
             let floatSamples = rawSamples.map { Float($0) / 32767.0 }
 
             // AEC: clean mic using position-aligned system reference
-            let cleanedFloat = self.neuralAec.processStreamingMic(floatSamples)
+            // No far-end reference exists in-person; AEC would hold mic audio waiting for one.
+            let cleanedFloat = self.inPerson ? floatSamples : self.neuralAec.processStreamingMic(floatSamples)
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
 
             // Meeting mic chunks must be driven by the cleaned mic stream. Raw

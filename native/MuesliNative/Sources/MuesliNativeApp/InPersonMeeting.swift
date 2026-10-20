@@ -30,8 +30,9 @@ enum InPersonMeeting {
     /// handed over, so diarization works on a private copy.
     static func diarizationCopy(of url: URL?) -> URL? {
         guard let url else { return nil }
-        let copy = FileManager.default.temporaryDirectory
-            .appendingPathComponent("muesli-in-person-\(UUID().uuidString).wav")
+        // Same directory as the original, so the launch-time sweep also clears it after a forced quit.
+        let copy = url.deletingLastPathComponent()
+            .appendingPathComponent("in-person-\(UUID().uuidString).wav")
         do {
             try FileManager.default.copyItem(at: url, to: copy)
             return copy
