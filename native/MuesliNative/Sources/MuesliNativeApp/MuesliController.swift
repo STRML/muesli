@@ -7184,7 +7184,8 @@ public final class MuesliController: NSObject {
         autoStopSource: MeetingAutoStopSource? = nil,
         presentation: MeetingStartPresentation = .foregroundNotes,
         startOrigin: MeetingRecordingStartOrigin = .manual,
-        dashboardWindowPresentation: DashboardWindowPresentation = .restored
+        dashboardWindowPresentation: DashboardWindowPresentation = .restored,
+        inPerson: Bool = false
     ) -> Bool {
         guard ensureBasicDictationPermissionsBeforeDashboard() else { return false }
         if isMeetingRecording() {
@@ -7204,7 +7205,8 @@ public final class MuesliController: NSObject {
             openDocument: presentation.opensMeetingDocument,
             endDate: endDate,
             autoStopSource: autoStopSource,
-            startOrigin: startOrigin
+            startOrigin: startOrigin,
+            inPerson: inPerson
         )
         guard didStart else { return false }
         if presentation.presentsHistoryWindow {
@@ -7227,7 +7229,8 @@ public final class MuesliController: NSObject {
         startOrigin: MeetingRecordingStartOrigin = .manual,
         followUpToID: Int64? = nil,
         inheritedFolderID: Int64? = nil,
-        previousMeetingNotes: String? = nil
+        previousMeetingNotes: String? = nil,
+        inPerson: Bool = false
     ) -> Bool {
         guard ensureNoMeetingRetranscription() else { return false }
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
@@ -7256,7 +7259,7 @@ public final class MuesliController: NSObject {
             )
             persistCalendarAttendees(for: calendarOccurrence, meetingID: meetingID)
             installMeetingCapture(id: meetingID, title: title, calendarEventID: resolvedCalendarEventID,
-                backend: meetingBackend, templateSnapshot: templateSnapshot)
+                backend: meetingBackend, templateSnapshot: templateSnapshot, inPerson: inPerson)
             activeMeetingAudioWarning = nil
             syncAppState()
             if openDocument {
@@ -7350,6 +7353,15 @@ public final class MuesliController: NSObject {
 
     func startQuickNoteMeeting() {
         startMeetingRecordingFromEntryPoint(title: "Meeting")
+    }
+
+    /// Microphone-only meeting; the mic is diarized into "Speaker N" at stop.
+    @objc func startInPersonMeetingRecording() {
+        startMeetingRecordingFromEntryPoint(
+            title: "In-person meeting",
+            dashboardWindowPresentation: .compactMeetingTrailing,
+            inPerson: true
+        )
     }
 
     /// What the Resume control should show for `meeting` right now.
@@ -7789,7 +7801,8 @@ public final class MuesliController: NSObject {
     }
 
     private func installMeetingCapture(id: Int64, title: String, calendarEventID: String?,
-                                       backend: BackendOption, templateSnapshot: MeetingTemplateSnapshot) {
+                                       backend: BackendOption, templateSnapshot: MeetingTemplateSnapshot,
+                                       inPerson: Bool = false) {
         let routingController = dictationAudioRoutingController
         let route = routingController.meetingInputRouteSnapshot()
         let microphone = RouteAwareMeetingMicRecorder(
@@ -7798,7 +7811,8 @@ public final class MuesliController: NSObject {
         microphone.preferredInputDeviceID = route.preferredInputDeviceID
         let session = MeetingSession(title: title, calendarEventID: calendarEventID,
             backend: backend, runtime: runtime, config: config, templateSnapshot: templateSnapshot,
-            transcriptionCoordinator: transcriptionCoordinator, meetingMicRecorder: microphone)
+            transcriptionCoordinator: transcriptionCoordinator, meetingMicRecorder: microphone,
+            inPerson: inPerson)
         let owner = ObjectIdentifier(session)
         session.onCaptureQuiesced = { [weak self] in
             Task { @MainActor [weak self] in self?.completeMeetingCaptureShutdown(owner: owner) }
