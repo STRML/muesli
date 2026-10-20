@@ -154,6 +154,7 @@ case "${shard}" in
     filters=(
       BufferedMicrophoneCaptureTests
       MeetingMicrophoneDeliveryTests
+      InPersonMeetingTests
       StreamingMicRecorderBufferTests
       AudioAttributionServiceTests
       CameraActivityMonitorTests

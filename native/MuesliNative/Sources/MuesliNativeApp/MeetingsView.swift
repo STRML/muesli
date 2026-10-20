@@ -905,6 +905,31 @@ struct MeetingsView: View {
             .fixedSize()
 
             Button {
+                controller.startInPersonMeetingRecording()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.2.wave.2")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("In-person")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .padding(.vertical, 8)
+                .background(MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .overlay(
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.isMeetingRecording || appState.isMeetingStarting)
+            .help("Record a room with the microphone only and label the speakers")
+            .fixedSize()
+
+            Button {
                 controller.importAudioFile()
             } label: {
                 HStack(spacing: 6) {

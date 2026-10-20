@@ -171,6 +171,8 @@ final class MeetingSession {
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
+    /// Microphone-only meeting whose mic transcript is diarized into "Speaker N".
+    private let inPerson: Bool
     private let captureLifecycle: MeetingCaptureLifecycle
     private let discardCleanup = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     var capturePhase: MeetingCapturePhase { captureLifecycle.phase }
@@ -277,8 +279,10 @@ final class MeetingSession {
         transcriptionCoordinator: TranscriptionCoordinator,
         meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
         systemAudioCapture: SystemAudioCapturing? = nil,
-        aec: MeetingNeuralAec = MeetingNeuralAec()
+        aec: MeetingNeuralAec = MeetingNeuralAec(),
+        inPerson: Bool = false
     ) {
+        self.inPerson = inPerson
         self.title = title
         self.calendarEventID = calendarEventID
         backendLock.withLock { $0 = backend }
@@ -290,6 +294,8 @@ final class MeetingSession {
         self.neuralAec = aec
         if let systemAudioCapture {
             self.systemAudioRecorder = systemAudioCapture
+        } else if inPerson {
+            self.systemAudioRecorder = NoOpSystemAudioCapture()
         } else if config.useCoreAudioTap {
             self.systemAudioRecorder = CoreAudioSystemRecorder()
         } else {
@@ -622,7 +628,7 @@ final class MeetingSession {
             chunkTimingTracker.start()
             systemChunkTimingTracker.start()
             try prepareRealtimeAudioPipeline(vadManager: nil)
-            retainedRecordingWriter = try MeetingRecordingWriter()
+            retainedRecordingWriter = try MeetingRecordingWriter(micOnly: inPerson)
         }
         try await captureLifecycle.start()
     }
@@ -788,6 +794,10 @@ final class MeetingSession {
         liveSpeakerSession()?.stop()
         let retainedRecordingURL = retainedRecordingWriter?.stop()
         retainedRecordingWriter = nil
+        // The controller consumes the retained file as soon as it is handed over.
+        let inPersonDiarizationCopy = inPerson ? InPersonMeeting.diarizationCopy(of: retainedRecordingURL) : nil
+        // In-person meetings always write a mic file for diarization; only keep it if the policy allows.
+        let keptRecordingURL = config.meetingRecordingSavePolicy == .never ? nil : retainedRecordingURL
         if stoppedCapture.timedOut {
             fputs("[meeting] capture shutdown deadline exceeded; preserving completed chunks while drivers retire\n", stderr)
             onCaptureShutdownTimedOut?()
@@ -804,6 +814,9 @@ final class MeetingSession {
         // Persist retained audio before final ASR or summary work can fail.
         // Retention is best-effort and must not bypass ASR or session teardown.
         await onRecordingReady?(retainedRecordingURL, retainedRecordingWriterError)
+        if keptRecordingURL == nil, let retainedRecordingURL {
+            try? FileManager.default.removeItem(at: retainedRecordingURL)
+        }
 
         var micTailFinalized = false
         var systemTailFinalized = false
@@ -875,7 +888,9 @@ final class MeetingSession {
         }
 
         var diarizationSegments: [TimedSpeakerSegment]?
-        if let systemAudioURL {
+        if inPerson {
+            diarizationSegments = await InPersonMeeting.diarize(copy: inPersonDiarizationCopy, using: transcriptionCoordinator)
+        } else if let systemAudioURL {
             // Run speaker diarization on system audio (batch post-processing)
             if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL) {
                 diarizationSegments = diarizationResult.segments
@@ -896,6 +911,12 @@ final class MeetingSession {
                 return lhs.text < rhs.text
             }
             return lhs.start < rhs.start
+        }
+
+        if inPerson {
+            // One mic is the only channel: its transcript is the diarized one, and nobody is "You".
+            systemSegments = micSegments
+            micSegments = []
         }
 
         if let systemAudioURL,
@@ -950,7 +971,8 @@ final class MeetingSession {
             systemSegments: protectedTranscriptInputs.systemSegments,
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
             meetingStart: meetingStart,
-            speakerNames: speakerNames
+            speakerNames: speakerNames,
+            undiarizedSystemSpeaker: inPerson ? InPersonMeeting.undiarizedSpeaker : "Others"
         )
 
         let titleManualNotes = await manualNotesProvider?()
@@ -1050,7 +1072,7 @@ final class MeetingSession {
             durationSeconds: max(endTime.timeIntervalSince(meetingStart), 0),
             rawTranscript: rawTranscript,
             formattedNotes: formattedNotes,
-            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingURL: keptRecordingURL,
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
@@ -1272,10 +1294,10 @@ final class MeetingSession {
         retainedRecordingWriter = nil
         retainedRecordingWriterError = nil
 
-        guard config.meetingRecordingSavePolicy != .never else { return }
+        guard InPersonMeeting.shouldRetainWriter(policy: config.meetingRecordingSavePolicy, inPerson: inPerson) else { return }
 
         do {
-            retainedRecordingWriter = try MeetingRecordingWriter()
+            retainedRecordingWriter = try MeetingRecordingWriter(micOnly: inPerson)
         } catch {
             retainedRecordingWriterError = error
             fputs("[meeting] failed to prepare retained recording writer: \(error)\n", stderr)
@@ -1343,7 +1365,8 @@ final class MeetingSession {
             let floatSamples = rawSamples.map { Float($0) / 32767.0 }
 
             // AEC: clean mic using position-aligned system reference
-            let cleanedFloat = self.neuralAec.processStreamingMic(floatSamples)
+            // No far-end reference exists in-person; AEC would hold mic audio waiting for one.
+            let cleanedFloat = self.inPerson ? floatSamples : self.neuralAec.processStreamingMic(floatSamples)
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
 
             // Meeting mic chunks must be driven by the cleaned mic stream. Raw

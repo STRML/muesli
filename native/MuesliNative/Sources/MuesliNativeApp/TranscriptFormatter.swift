@@ -15,7 +15,8 @@ enum TranscriptFormatter {
         diarizationSegments: [TimedSpeakerSegment]?,
         meetingStart: Date,
         conservativeSpeakerAttribution: Bool = false,
-        speakerNames: [String: String] = [:]
+        speakerNames: [String: String] = [:],
+        undiarizedSystemSpeaker: String = "Others"
     ) -> String {
         // The formatter is intentionally source-agnostic: upstream capture decides
         // which mic/system segments are valid, then this layer only labels/merges.
@@ -34,7 +35,7 @@ enum TranscriptFormatter {
                 return TaggedSegment(segment: segment, speaker: speaker)
             }
         } else {
-            taggedSystem = systemSegments.map { TaggedSegment(segment: $0, speaker: "Others") }
+            taggedSystem = systemSegments.map { TaggedSegment(segment: $0, speaker: undiarizedSystemSpeaker) }
         }
 
         let tagged = (taggedMic + taggedSystem).sorted { $0.segment.start < $1.segment.start }
