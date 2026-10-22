@@ -18,9 +18,10 @@
 #
 # What can be shared is the content: a new worktree's scratch path (and debug
 # DerivedData) is seeded with an APFS clone of an idle donor, the main
-# checkout's first and then the most recently used sibling's. Dependency
-# checkouts and path-independent outputs then share blocks copy-on-write and the
-# first build skips dependency resolution. Seeding fails open: any problem means
+# checkout's first and then the most recently modified sibling's. The paths
+# SwiftPM and git record inside the clone are rebased onto the seed, so it never
+# depends on its donor. Dependency checkouts and path-independent outputs share
+# blocks copy-on-write and the first build skips dependency resolution. Seeding fails open: any problem means
 # a cold build and one line on stderr. MUESLI_SWIFTPM_SEED=0 turns it off, and CI
 # never seeds.
 #
@@ -107,33 +108,56 @@ muesli_spm_mark_worktree_root() {
   return 0
 }
 
-# Prints the first process command line that names <path> (or a path inside
-# it), ignoring seed clones, which only read their donor. Fails when no process
-# matches. An unreadable process table counts as a match, to stay conservative.
+muesli_spm_ere_escape() {
+  printf '%s' "$1" | sed -e 's/[][\.*^$+?(){}|]/\\&/g'
+}
+
+# Prints the first process command line that names <path> or a path inside it.
+# Fails when no process matches; an unreadable process table counts as a match,
+# to stay conservative.
+# muesli_spm_path_in_use_by_process <path> [skipped child] [count seeders: 0|1]
+#   skipped child: references to <path>/<child> alone do not count (a lane
+#     building into the donor's DerivedData does not make its scratch busy).
+#   count seeders: by default a seed clone (*.seed-tmp.*) reading <path> does not
+#     count, so seeders do not block each other; the GC passes 1.
 muesli_spm_path_in_use_by_process() {
-  local path="$1" processes pattern match
-  local boundary="(\$|[/[:space:]\"'])"
+  local path="$1" skip="${2:-}" count_seeders="${3:-0}" processes match
   processes="$(ps -A -ww -o command= 2>/dev/null)" || {
     printf 'process table unreadable\n'
     return 0
   }
-  pattern="$(printf '%s' "$path" | sed -e 's/[][\.*^$+?(){}|]/\\&/g')$boundary"
-  match="$(printf '%s\n' "$processes" | grep -E -- "$pattern" | grep -v -F '.seed-tmp.' || true)"
+  if [[ "$count_seeders" != "1" ]]; then
+    processes="$(printf '%s\n' "$processes" | grep -v -F '.seed-tmp.' || true)"
+  fi
+  if [[ -n "$skip" ]]; then
+    processes="$(printf '%s\n' "$processes" | MUESLI_SPM_CUT="$path/$skip" awk '{
+      cut = ENVIRON["MUESLI_SPM_CUT"]
+      while ((i = index($0, cut)) > 0) {
+        rest = substr($0, i + length(cut))
+        sub(/^[^ \t]*/, "", rest)
+        $0 = substr($0, 1, i - 1) rest
+      }
+      print
+    }')"
+  fi
+  match="$(printf '%s\n' "$processes" | grep -E -- "$(muesli_spm_ere_escape "$path")(\$|[/[:space:]])" || true)"
   [[ -n "$match" ]] || return 1
   printf '%s\n' "$match" | sed -n '1p'
 }
 
 # muesli_spm_find_hit <dir> <skipped child or ""> <find predicate>...: true when
 # anything under <dir>, outside the skipped child, matches the predicate.
+# A find error (an unreadable or vanished entry) also counts as a hit: callers
+# ask "busy?" or "changed?", and an unknown answer must not read as "no".
 muesli_spm_find_hit() {
-  local dir="$1" skip="$2" hit
+  local dir="$1" skip="$2" hit status=0
   shift 2
   if [[ -n "$skip" ]]; then
-    hit="$(find "$dir" -path "$dir/$skip" -prune -o "$@" -print -quit 2>/dev/null || true)"
+    hit="$(find "$dir" -path "$dir/$skip" -prune -o "$@" -print -quit 2>/dev/null)" || status=$?
   else
-    hit="$(find "$dir" "$@" -print -quit 2>/dev/null || true)"
+    hit="$(find "$dir" "$@" -print -quit 2>/dev/null)" || status=$?
   fi
-  [[ -n "$hit" ]]
+  [[ -n "$hit" || "$status" -ne 0 ]]
 }
 
 # muesli_spm_path_modified_recently <dir> [skipped child]
@@ -146,7 +170,7 @@ muesli_spm_path_modified_recently() {
 # muesli_spm_path_busy <dir> [skipped child]
 muesli_spm_path_busy() {
   muesli_spm_path_modified_recently "$1" "${2:-}" && return 0
-  muesli_spm_path_in_use_by_process "$1" >/dev/null && return 0
+  muesli_spm_path_in_use_by_process "$1" "${2:-}" >/dev/null && return 0
   return 1
 }
 
@@ -191,11 +215,38 @@ muesli_spm_clone_tree() {
     cp -c -R "$src" "$dest" 2>/dev/null
     return
   fi
+  local entries
+  entries="$(find "$src" -mindepth 1 -maxdepth 1 2>/dev/null)" || return 1
   mkdir "$dest" 2>/dev/null || return 1
-  for entry in "$src"/* "$src"/.[!.]*; do
-    [[ -e "$entry" || -L "$entry" ]] || continue
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
     [[ "$(basename "$entry")" == "$skip" ]] && continue
     cp -c -R "$entry" "$dest/" 2>/dev/null || return 1
+  done <<<"$entries"
+  return 0
+}
+
+# Rebases the absolute paths that SwiftPM and git record inside a scratch path
+# (or a DerivedData's SourcePackages) from the donor's location to the seed's:
+# workspace-state.json, and each checkout's origin URL and objects/info/alternates.
+# Without this a seeded checkout borrows git objects from the donor and breaks
+# once the donor is collected. Fails when any of those files still names the donor.
+muesli_spm_rebase_paths() {
+  local tree="$1" from="$2" to="$3" from_real base file old
+  command -v perl >/dev/null 2>&1 || return 1
+  from_real="$(cd "$from" 2>/dev/null && pwd -P)" || from_real="$from"
+  for base in "$tree" "$tree/SourcePackages"; do
+    for file in "$base/workspace-state.json" "$base"/checkouts/*/.git/config \
+      "$base"/checkouts/*/.git/objects/info/alternates; do
+      [[ -f "$file" ]] || continue
+      for old in "$from" "$from_real"; do
+        MUESLI_SPM_FROM="$old" MUESLI_SPM_TO="$to" \
+          perl -pi -e 's/\Q$ENV{MUESLI_SPM_FROM}\E(?=[\/"\s]|$)/$ENV{MUESLI_SPM_TO}/g' "$file" 2>/dev/null || return 1
+        if grep -qE -- "$(muesli_spm_ere_escape "$old")([/\"[:space:]]|\$)" "$file" 2>/dev/null; then
+          return 1
+        fi
+      done
+    done
   done
   return 0
 }
@@ -226,6 +277,11 @@ muesli_spm_clone_into() {
     return 1
   fi
   rm -f "$stamp" 2>/dev/null
+  if ! muesli_spm_rebase_paths "$tmp" "$donor" "$dest"; then
+    rm -rf "$tmp" 2>/dev/null
+    muesli_spm_note "could not rebase $donor's recorded paths onto $dest; cold build"
+    return 2
+  fi
   if [[ -e "$dest" ]] && ! muesli_spm_dir_empty "$dest"; then
     rm -rf "$tmp" 2>/dev/null
     muesli_spm_note "$dest appeared during the clone; seed discarded"
@@ -298,7 +354,8 @@ muesli_seed_spm_dir() {
 }
 
 # Prints seed donors for one worktree cache dir, best first: the main
-# checkout's matching path, then siblings' by most recent modification.
+# checkout's matching path, then siblings' by the modification time of the donor
+# directory itself (a proxy for recent use).
 # muesli_spm_seed_donors <root> <relative path under the worktree cache dir>...
 muesli_spm_seed_donors() {
   local root="$1"
@@ -341,8 +398,11 @@ muesli_spm_prepare_worktree_dir() {
   local cache_root donors=() donor
   cache_root="$(muesli_default_spm_cache_root)"
   muesli_spm_mark_worktree_root "$cache_root/worktrees/$(muesli_spm_worktree_dir_name "$root")" "$root"
+  local seen=$'\n'
   while IFS= read -r donor; do
-    [[ -n "$donor" ]] && donors+=("$donor")
+    [[ -n "$donor" && "$seen" != *$'\n'"$donor"$'\n'* ]] || continue
+    seen+="$donor"$'\n'
+    donors+=("$donor")
   done < <(muesli_spm_seed_donors "$root" "$@")
   muesli_seed_spm_dir "$dest" "$prune" ${donors[@]+"${donors[@]}"} || true
   return 0
@@ -365,11 +425,11 @@ muesli_worktree_spm_scratch_path() {
 }
 
 # Seeds a worktree's debug DerivedData (<dev scratch>/xcodebuild/<name>) from a
-# donor's, preferring the same app name. Skipped when
-# MUESLI_XCODEBUILD_DERIVED_DATA is set. Never fails.
+# donor's, preferring the same app name. Skipped when MUESLI_XCODEBUILD_DERIVED_DATA,
+# MUESLI_SWIFTPM_SCRATCH_PATH or MUESLI_SWIFTPM_SCRATCH_CHANNEL is set. Never fails.
 muesli_seed_worktree_derived_data() {
   local dest="$1" root="$2" name="$3"
-  [[ -z "${MUESLI_XCODEBUILD_DERIVED_DATA:-}" ]] || return 0
+  [[ -z "${MUESLI_XCODEBUILD_DERIVED_DATA:-}${MUESLI_SWIFTPM_SCRATCH_PATH:-}${MUESLI_SWIFTPM_SCRATCH_CHANNEL:-}" ]] || return 0
   muesli_spm_scratch_disabled && return 0
   local config="${name##*-}"
   muesli_spm_prepare_worktree_dir "$dest" "$root" "" \

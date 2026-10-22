@@ -14,8 +14,9 @@
 #   orphaned  its recorded worktree root no longer exists
 #   unowned   no usable root marker and no matching worktree (caches from before
 #             root markers, hand-named paths, other clones of the repository)
-#   in-use    orphaned or unowned, but a running process names it or something in
-#             it changed in the last few minutes; never removed
+#   in-use    orphaned or unowned, but a running process (a seed clone included)
+#             names it, or something in it changed in the last few minutes or
+#             cannot be read; never removed
 #   skipped   a symlink or a file; never followed or removed
 #
 # Leftover seed temporaries (*.seed-tmp.<pid>, *.seed-stamp.<pid>) whose process
@@ -113,12 +114,12 @@ classify() {
     detail="no recorded worktree root"
   fi
   [[ "$status" == "orphaned" || "$status" == "unowned" ]] || return 0
-  if process="$(muesli_spm_path_in_use_by_process "$entry")"; then
+  if process="$(muesli_spm_path_in_use_by_process "$entry" "" 1)"; then
     status="in-use"
     detail="named by a running process: ${process:0:100}"
   elif muesli_spm_path_modified_recently "$entry"; then
     status="in-use"
-    detail="modified in the last $MUESLI_SPM_BUSY_MINUTES minutes"
+    detail="modified in the last $MUESLI_SPM_BUSY_MINUTES minutes, or unreadable"
   fi
   return 0
 }
@@ -178,7 +179,7 @@ for entry in "$worktrees_dir"/* "$worktrees_dir"/.[!.]*; do
 
   if [[ "$apply" == "1" ]] && deletable "$status"; then
     # Re-check right before removing: a build may have started since.
-    if muesli_spm_path_in_use_by_process "$entry" >/dev/null || muesli_spm_path_modified_recently "$entry"; then
+    if muesli_spm_path_in_use_by_process "$entry" "" 1 >/dev/null || muesli_spm_path_modified_recently "$entry"; then
       status="in-use"
       detail="started being used during GC; kept"
     elif rm -rf "$entry"; then

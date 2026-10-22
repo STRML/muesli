@@ -54,11 +54,11 @@ The helper prints `~/Library/Caches/muesli-spm/worktrees/<worktree>-<hash>/<chan
 
 Every worktree builds into its own scratch path and DerivedData. Never point two worktrees at one writable scratch path. SwiftPM makes a second build into a path wait for the first, and its build state is keyed to absolute source and scratch paths, so a shared path blocks agents and rebuilds on every switch. SwiftPM's lock file also lives in `$TMPDIR`, so a sandboxed agent and a normal shell do not wait for each other at all.
 
-What worktrees share is content. On first use, `scripts/muesli_spm_cache.sh` seeds a new worktree's path with an APFS clone (`cp -c`) of an idle donor: the main checkout's same channel first, then the most recently used sibling's. Clones share blocks copy-on-write, so the first build skips dependency resolution and rewrites only the outputs that depend on the worktree's paths.
+What worktrees share is content. On first use, `scripts/muesli_spm_cache.sh` seeds a new worktree's path with an APFS clone (`cp -c`) of an idle donor: the main checkout's same channel first, then the most recently modified sibling's. Clones share blocks copy-on-write, so the first build skips dependency resolution and rewrites only the outputs that depend on the worktree's paths. The absolute paths that SwiftPM and git record in the clone (`workspace-state.json`, each checkout's origin URL and object alternates) are rebased onto the seed, so a seed never depends on its donor and survives the donor's removal.
 
 - A donor is skipped while a running process names it or while anything in it changed in the last 2 minutes.
 - Seeding never fails a build. Any problem means a cold build and one `muesli-spm:` line on stderr.
-- `MUESLI_SWIFTPM_SEED=0` turns seeding off. CI never seeds. Explicit `MUESLI_SWIFTPM_SCRATCH_PATH`, `MUESLI_SWIFTPM_SCRATCH_CHANNEL`, and `MUESLI_XCODEBUILD_DERIVED_DATA` paths are never seeded.
+- `MUESLI_SWIFTPM_SEED=0` turns seeding off. CI never seeds. When `MUESLI_SWIFTPM_SCRATCH_PATH`, `MUESLI_SWIFTPM_SCRATCH_CHANNEL`, or `MUESLI_XCODEBUILD_DERIVED_DATA` is set, nothing is seeded.
 
 Each worktree cache directory records its source root in `.muesli-worktree-root`. A cache outlives its worktree until you collect it:
 

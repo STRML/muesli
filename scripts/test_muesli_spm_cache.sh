@@ -82,6 +82,51 @@ make_scratch() {
   backdate "$1"
 }
 
+# make_git_scratch <dir> <tag> [subdir]: a scratch laid out like SwiftPM's (or
+# DerivedData's SourcePackages with subdir=SourcePackages). The checkout borrows
+# objects from repositories/ through git alternates and records absolute paths in
+# its origin URL and in workspace-state.json, exactly as SwiftPM does.
+make_git_scratch() {
+  local dir="$1" tag="$2" sub="${3:-}"
+  local base="$dir${sub:+/$sub}" work="$TEST_ROOT/work-$tag-$RANDOM"
+  mkdir -p "$base/repositories" "$base/checkouts" "$dir/out"
+  git -c init.defaultBranch=main init -q --bare "$base/repositories/dep-1234"
+  git -c init.defaultBranch=main init -q "$work"
+  printf '%s\n' "$tag" > "$work/origin.txt"
+  git -C "$work" add origin.txt
+  git -C "$work" commit -q -m dep
+  git -C "$work" push -q "$base/repositories/dep-1234" HEAD:refs/heads/main
+  git clone -q --shared "$base/repositories/dep-1234" "$base/checkouts/dep"
+  printf '{"artifacts":[{"path":"%s/artifacts/x"}],"checkoutPath":"%s/checkouts/dep","unrelated":"%s2/elsewhere"}\n' \
+    "$base" "$base" "$dir" > "$base/workspace-state.json"
+  printf 'db\n' > "$dir/out/build.db"
+  backdate "$dir"
+}
+
+# expect_self_contained <seed base> <donor base>: no recorded path points into the
+# donor, and the checkout still works after the donor is gone.
+expect_self_contained() {
+  local seed="$1" donor="$2" file
+  for file in "$seed/workspace-state.json" "$seed/checkouts/dep/.git/config" \
+    "$seed/checkouts/dep/.git/objects/info/alternates"; do
+    if grep -qF -e "$donor/" -e "$donor\"" "$file" || [[ "$(sed -n '1p' "$file")" == "$donor"* ]]; then
+      fail "$file still points into the donor $donor"
+    fi
+  done
+  grep -qF "$donor2_marker" "$seed/workspace-state.json" || fail "a path that only shares the donor's prefix was rewritten"
+  grep -qF "$seed/repositories/dep-1234/objects" "$seed/checkouts/dep/.git/objects/info/alternates" ||
+    fail "alternates not rebased onto the seed: $(cat "$seed/checkouts/dep/.git/objects/info/alternates")"
+}
+
+expect_checkout_survives_donor() {
+  local checkout="$1" tag="$2"
+  local fsck_output
+  fsck_output="$(git -C "$checkout" fsck --connectivity-only 2>&1)" ||
+    fail "seeded checkout lost its objects with the donor: $fsck_output"
+  [[ "$(git -C "$checkout" show HEAD:origin.txt)" == "$tag" ]] || fail "seeded checkout cannot read its commit"
+  git -C "$checkout" fetch -q origin 2>/dev/null || fail "seeded checkout's origin points at the removed donor"
+}
+
 origin_of() {
   cat "$1/checkouts/dep/origin.txt" 2>/dev/null || printf 'missing'
 }
@@ -255,6 +300,67 @@ expect_seeded "$out" external "external root"
 [[ ! -e "$CACHE" ]] || fail "external root run wrote to the default root"
 pass "external cache root"
 
+# --- a seed stands alone: recorded donor paths are rebased onto the seed ------
+reset_cache
+main_test="$(wt_cache_dir "$MAIN")/test"
+make_git_scratch "$main_test" main
+donor2_marker="$main_test""2/elsewhere"
+out="$(scratch_path "$WT1" test)"
+expect_seeded "$out" main "git-backed donor"
+if [[ "$EXPECT_CLONE" == "1" ]]; then
+  expect_self_contained "$out" "$main_test"
+  mv "$main_test" "$TEST_ROOT/donor-removed-by-gc"
+  expect_checkout_survives_donor "$out/checkouts/dep" main
+fi
+pass "seeded scratch does not depend on its donor"
+
+reset_cache
+main_dd="$(wt_cache_dir "$MAIN")/dev/xcodebuild/MuesliDev-debug"
+make_git_scratch "$main_dd" main-dd SourcePackages
+donor2_marker="$main_dd""2/elsewhere"
+(
+  source "$WT1/scripts/muesli_spm_cache.sh"
+  dd="$(wt_cache_dir "$WT1")/dev/xcodebuild/MuesliDev-debug"
+  muesli_seed_worktree_derived_data "$dd" "$WT1" MuesliDev-debug 2>"$ERR"
+  if [[ "$EXPECT_CLONE" == "1" ]]; then
+    expect_self_contained "$dd/SourcePackages" "$main_dd/SourcePackages"
+    mv "$main_dd" "$TEST_ROOT/dd-donor-removed-by-gc"
+    expect_checkout_survives_donor "$dd/SourcePackages/checkouts/dep" main-dd
+  else
+    [[ ! -e "$dd" ]] || fail "DerivedData seeded without clonefile"
+  fi
+)
+pass "seeded DerivedData does not depend on its donor"
+
+# --- explicit SwiftPM overrides turn DerivedData seeding off too --------------
+reset_cache
+make_scratch "$(wt_cache_dir "$MAIN")/dev/xcodebuild/MuesliDev-debug" main-dd
+(
+  source "$WT1/scripts/muesli_spm_cache.sh"
+  dd="$(wt_cache_dir "$WT1")/dev/xcodebuild/MuesliDev-debug"
+  MUESLI_SWIFTPM_SCRATCH_PATH="$TEST_ROOT/explicit" muesli_seed_worktree_derived_data "$dd" "$WT1" MuesliDev-debug 2>"$ERR"
+  [[ ! -e "$dd" ]] || fail "DerivedData seeded with an explicit MUESLI_SWIFTPM_SCRATCH_PATH"
+  MUESLI_SWIFTPM_SCRATCH_CHANNEL=agent-1 muesli_seed_worktree_derived_data "$dd" "$WT1" MuesliDev-debug 2>"$ERR"
+  [[ ! -e "$dd" ]] || fail "DerivedData seeded with an explicit MUESLI_SWIFTPM_SCRATCH_CHANNEL"
+  [[ ! -e "$(wt_cache_dir "$WT1")/.muesli-worktree-root" ]] || fail "explicit override still wrote a root marker"
+)
+pass "explicit overrides skip DerivedData seeding"
+
+# --- an unreadable donor counts as busy, never as idle ------------------------
+if [[ "$EXPECT_CLONE" == "1" ]]; then
+  reset_cache
+  make_scratch "$(wt_cache_dir "$MAIN")/test" main
+  make_scratch "$(wt_cache_dir "$WT2")/test" sibling
+  mkdir -p "$(wt_cache_dir "$MAIN")/test/out/locked"
+  backdate "$(wt_cache_dir "$MAIN")/test"
+  chmod 000 "$(wt_cache_dir "$MAIN")/test/out/locked"
+  out="$(scratch_path "$WT1" test)"
+  chmod 755 "$(wt_cache_dir "$MAIN")/test/out/locked"
+  grep -q "busy" "$ERR" || fail "unreadable donor not treated as busy"
+  [[ "$(origin_of "$out")" == "sibling" ]] || fail "unreadable donor used: $(origin_of "$out")"
+  pass "unreadable donor skipped"
+fi
+
 # --- dev channel: donor DerivedData is pruned, then seeded per app -----------
 reset_cache
 main_dev="$(wt_cache_dir "$MAIN")/dev"
@@ -263,10 +369,16 @@ mkdir -p "$main_dev/xcodebuild/MuesliDev-debug" "$main_dev/xcodebuild/MuesliDevA
 printf 'dev\n' > "$main_dev/xcodebuild/MuesliDev-debug/origin.txt"
 printf 'lane-a\n' > "$main_dev/xcodebuild/MuesliDevA-debug/origin.txt"
 backdate "$main_dev"
-# A lane building into the donor's DerivedData does not make its dev scratch busy.
+# A lane building into the donor's DerivedData (recent writes, and an xcodebuild
+# naming it) does not make the donor's dev scratch busy.
 mkdir -p "$main_dev/xcodebuild/MuesliDevC-debug"
 printf 'building\n' > "$main_dev/xcodebuild/MuesliDevC-debug/build.db"
+bash -c 'sleep 60; :' -derivedDataPath "$main_dev/xcodebuild/MuesliDevC-debug" >/dev/null 2>&1 &
+lane_pid="$!"
+BG_PIDS+=("$lane_pid")
+sleep 0.5
 out="$(scratch_path "$WT1" dev)"
+stop_bg "$lane_pid"
 expect_seeded "$out" main-dev "dev channel"
 [[ ! -e "$out/xcodebuild" ]] || fail "donor DerivedData copied with the dev scratch"
 (
@@ -386,6 +498,8 @@ setup_gc_fixture() {
   printf '%s\n' "$TEST_ROOT/gone-too" > "$wts/recent-orphan/.muesli-worktree-root"
   make_scratch "$wts/proc-orphan/test" proc
   printf '%s\n' "$TEST_ROOT/gone-three" > "$wts/proc-orphan/.muesli-worktree-root"
+  make_scratch "$wts/seeding-orphan/test" seeding
+  printf '%s\n' "$TEST_ROOT/gone-four" > "$wts/seeding-orphan/.muesli-worktree-root"
   mkdir -p "$TEST_ROOT/outside"
   printf 'keep\n' > "$TEST_ROOT/outside/keep.txt"
   ln -s "$TEST_ROOT/outside" "$wts/link-entry"
@@ -426,7 +540,13 @@ grep -Eq '^in-use +.*proc-orphan' <<<"$report" || fail "process-held orphan not 
 grep -Eq '^skipped +.*link-entry' <<<"$report" || fail "symlink entry not skipped: $report"
 pass "GC dry run classifies and writes nothing"
 
+bash -c 'sleep 60; :' cp -c -R "$CACHE/worktrees/seeding-orphan/test" "$CACHE/worktrees/x/test.seed-tmp.1" >/dev/null 2>&1 &
+seeder_pid="$!"
+BG_PIDS+=("$seeder_pid")
+sleep 0.5
 report="$(gc --apply)" || fail "apply failed"
+stop_bg "$seeder_pid"
+[[ -d "$CACHE/worktrees/seeding-orphan" ]] || fail "GC removed a donor that a seed was cloning"
 [[ ! -e "$CACHE/worktrees/orphan-entry" ]] || fail "orphan not removed"
 [[ -d "$CACHE/worktrees/legacy-entry" ]] || fail "unowned removed without --include-unowned"
 [[ -d "$CACHE/worktrees/live-entry/test" ]] || fail "live entry removed"
