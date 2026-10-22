@@ -230,9 +230,10 @@ muesli_spm_clone_tree() {
 # (or a DerivedData's SourcePackages) from the donor's location to the seed's:
 # workspace-state.json, and each checkout's origin URL and objects/info/alternates.
 # Without this a seeded checkout borrows git objects from the donor and breaks
-# once the donor is collected. Fails when any of those files still names the donor.
+# once the donor is collected. Handles plain and JSON-escaped (\/) slashes, and
+# fails when any of those files still names the donor in either form.
 muesli_spm_rebase_paths() {
-  local tree="$1" from="$2" to="$3" from_real base file old
+  local tree="$1" from="$2" to="$3" from_real base file old old_escaped
   command -v perl >/dev/null 2>&1 || return 1
   from_real="$(cd "$from" 2>/dev/null && pwd -P)" || from_real="$from"
   for base in "$tree" "$tree/SourcePackages"; do
@@ -240,9 +241,16 @@ muesli_spm_rebase_paths() {
       "$base"/checkouts/*/.git/objects/info/alternates; do
       [[ -f "$file" ]] || continue
       for old in "$from" "$from_real"; do
-        MUESLI_SPM_FROM="$old" MUESLI_SPM_TO="$to" \
-          perl -pi -e 's/\Q$ENV{MUESLI_SPM_FROM}\E(?=[\/"\s]|$)/$ENV{MUESLI_SPM_TO}/g' "$file" 2>/dev/null || return 1
-        if grep -qE -- "$(muesli_spm_ere_escape "$old")([/\"[:space:]]|\$)" "$file" 2>/dev/null; then
+        MUESLI_SPM_FROM="$old" MUESLI_SPM_TO="$to" perl -pi -e '
+          BEGIN {
+            $f = $ENV{MUESLI_SPM_FROM}; $t = $ENV{MUESLI_SPM_TO};
+            ($fe = $f) =~ s{/}{\\/}g; ($te = $t) =~ s{/}{\\/}g;
+          }
+          s/\Q$f\E(?=[\/"\s]|$)/$t/g;
+          s/\Q$fe\E(?=\\\/|["\s]|$)/$te/g;
+        ' "$file" 2>/dev/null || return 1
+        old_escaped="${old//\//\\/}"
+        if grep -qF -e "$old/" -e "$old\"" -e "$old_escaped\\/" -e "$old_escaped\"" "$file" 2>/dev/null; then
           return 1
         fi
       done

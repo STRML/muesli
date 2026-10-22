@@ -97,8 +97,9 @@ make_git_scratch() {
   git -C "$work" commit -q -m dep
   git -C "$work" push -q "$base/repositories/dep-1234" HEAD:refs/heads/main
   git clone -q --shared "$base/repositories/dep-1234" "$base/checkouts/dep"
-  printf '{"artifacts":[{"path":"%s/artifacts/x"}],"checkoutPath":"%s/checkouts/dep","unrelated":"%s2/elsewhere"}\n' \
-    "$base" "$base" "$dir" > "$base/workspace-state.json"
+  # escapedPath is how a JSON encoder that escapes slashes would write a path.
+  printf '{"artifacts":[{"path":"%s/artifacts/x"}],"checkoutPath":"%s/checkouts/dep","unrelated":"%s2/elsewhere","escapedPath":"%s\\/checkouts\\/dep"}\n' \
+    "$base" "$base" "$dir" "${base//\//\\/}" > "$base/workspace-state.json"
   printf 'db\n' > "$dir/out/build.db"
   backdate "$dir"
 }
@@ -106,13 +107,15 @@ make_git_scratch() {
 # expect_self_contained <seed base> <donor base>: no recorded path points into the
 # donor, and the checkout still works after the donor is gone.
 expect_self_contained() {
-  local seed="$1" donor="$2" file
+  local seed="$1" donor="$2" file donor_escaped="${2//\//\\/}"
   for file in "$seed/workspace-state.json" "$seed/checkouts/dep/.git/config" \
     "$seed/checkouts/dep/.git/objects/info/alternates"; do
-    if grep -qF -e "$donor/" -e "$donor\"" "$file" || [[ "$(sed -n '1p' "$file")" == "$donor"* ]]; then
+    if grep -qF -e "$donor/" -e "$donor\"" -e "$donor_escaped\\/" "$file" || [[ "$(sed -n '1p' "$file")" == "$donor"* ]]; then
       fail "$file still points into the donor $donor"
     fi
   done
+  grep -qF "${seed//\//\\/}\\/checkouts\\/dep" "$seed/workspace-state.json" ||
+    fail "JSON-escaped path not rebased: $(cat "$seed/workspace-state.json")"
   grep -qF "$donor2_marker" "$seed/workspace-state.json" || fail "a path that only shares the donor's prefix was rewritten"
   grep -qF "$seed/repositories/dep-1234/objects" "$seed/checkouts/dep/.git/objects/info/alternates" ||
     fail "alternates not rebased onto the seed: $(cat "$seed/checkouts/dep/.git/objects/info/alternates")"
