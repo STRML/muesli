@@ -36,19 +36,39 @@ Local build scripts resolve a shared SwiftPM scratch path through `scripts/muesl
 Default channels:
 
 ```bash
-./scripts/dev-test.sh                 # ~/Library/Caches/muesli-spm/worktrees/<worktree>/dev
+./scripts/dev-test.sh                 # ~/Library/Caches/muesli-spm/worktrees/<worktree>-<hash>/dev
 ./scripts/build_native_app.sh release # ~/Library/Caches/muesli-spm/release
 ./scripts/release-preprod.sh          # ~/Library/Caches/muesli-spm/preprod
 ```
 
-For direct or concurrent worktree builds, pass a specific path:
+For direct SwiftPM runs, ask the helper for this worktree's path:
 
 ```bash
-MUESLI_SWIFTPM_SCRATCH_PATH="$HOME/Library/Caches/muesli-spm/worktrees/pr182/dev" ./scripts/dev-test.sh
-swift test --package-path native/MuesliNative --scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/pr182/test"
+swift test --package-path native/MuesliNative --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)"
+swift build --package-path native/MuesliNative --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)" --build-tests
 ```
 
-Caveat: do not run concurrent builds from different worktrees into the same scratch path. Use separate paths per channel, agent, or simultaneous build, such as `worktrees/pr182/dev`, `worktrees/pr188/dev`, or `agent-1`.
+The helper prints `~/Library/Caches/muesli-spm/worktrees/<worktree>-<hash>/<channel>`. Do not hand-name paths such as `worktrees/pr182/test`: they are never seeded, and the cache GC cannot tell which worktree owns them.
+
+### Seeded worktree caches
+
+Every worktree builds into its own scratch path and DerivedData. Never point two worktrees at one writable scratch path. SwiftPM makes a second build into a path wait for the first, and its build state is keyed to absolute source and scratch paths, so a shared path blocks agents and rebuilds on every switch. SwiftPM's lock file also lives in `$TMPDIR`, so a sandboxed agent and a normal shell do not wait for each other at all.
+
+What worktrees share is content. On first use, `scripts/muesli_spm_cache.sh` seeds a new worktree's path with an APFS clone (`cp -c`) of an idle donor: the main checkout's same channel first, then the most recently used sibling's. Clones share blocks copy-on-write, so the first build skips dependency resolution and rewrites only the outputs that depend on the worktree's paths.
+
+- A donor is skipped while a running process names it or while anything in it changed in the last 2 minutes.
+- Seeding never fails a build. Any problem means a cold build and one `muesli-spm:` line on stderr.
+- `MUESLI_SWIFTPM_SEED=0` turns seeding off. CI never seeds. Explicit `MUESLI_SWIFTPM_SCRATCH_PATH`, `MUESLI_SWIFTPM_SCRATCH_CHANNEL`, and `MUESLI_XCODEBUILD_DERIVED_DATA` paths are never seeded.
+
+Each worktree cache directory records its source root in `.muesli-worktree-root`. A cache outlives its worktree until you collect it:
+
+```bash
+scripts/muesli_spm_gc.sh                            # dry run: live, orphaned, unowned, in-use
+scripts/muesli_spm_gc.sh --apply                    # remove caches whose worktree is gone
+scripts/muesli_spm_gc.sh --apply --include-unowned  # also remove caches with no recorded root
+```
+
+Read the dry run before using `--include-unowned`. Unowned caches are hand-named or older than root markers, and some may belong to another clone of the repository. The GC never removes a cache that is in use.
 
 ## App Intents / Shortcuts Build Path
 
@@ -74,10 +94,10 @@ Named lanes default to local-only signing, which omits iCloud and APNs entitleme
 
 Deleting a scratch path only removes rebuildable SwiftPM artifacts. It does not delete installed app bundles or app data under `~/Library/Application Support/`.
 
-For direct SwiftPM test runs, pass the scratch path yourself:
+For direct SwiftPM test runs, use this worktree's seeded scratch path:
 
 ```bash
-swift test --package-path native/MuesliNative --scratch-path "$HOME/Library/Caches/muesli-spm/test"
+swift test --package-path native/MuesliNative --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)"
 ```
 
 ## LocalVQE Runtime

@@ -55,20 +55,19 @@ SwiftPM can write build artifacts to `native/MuesliNative/.build` inside the act
 Default script channels:
 
 ```bash
-./scripts/dev-test.sh                 # ~/Library/Caches/muesli-spm/worktrees/<worktree>/dev
+./scripts/dev-test.sh                 # ~/Library/Caches/muesli-spm/worktrees/<worktree>-<hash>/dev
 ./scripts/build_native_app.sh release # ~/Library/Caches/muesli-spm/release
 ./scripts/release-preprod.sh          # ~/Library/Caches/muesli-spm/preprod
 ./scripts/release-alpha.sh            # ~/Library/Caches/muesli-spm/alpha
 ```
 
-For parallel PR/worktree work, use isolated paths:
+For direct SwiftPM runs in a worktree, ask the helper for its path instead of hand-naming one such as `worktrees/pr182/test`:
 
 ```bash
-MUESLI_SWIFTPM_SCRATCH_PATH="$HOME/Library/Caches/muesli-spm/worktrees/pr182/dev" ./scripts/dev-test.sh
-swift test --package-path native/MuesliNative --scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/pr182/test"
+swift test --package-path native/MuesliNative --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)"
 ```
 
-The build script passes the resolved path to SwiftPM as `--scratch-path`, so multiple worktrees do not each grow their own `.build`. Caveat: do not run concurrent builds from different worktrees into the same scratch path; use separate paths per channel, agent, or simultaneous build. Deleting a scratch path only removes rebuildable SwiftPM artifacts, not installed apps or app data. Set `MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1` only when you intentionally want package-local `.build`.
+Every worktree keeps a private scratch path and DerivedData. Never point two worktrees at one writable scratch path: SwiftPM makes the second build wait, and its build state is keyed to absolute paths. On first use the scripts seed a new worktree's path with an APFS clone of an idle donor (the main checkout's same channel, then the most recently used sibling's), so the first build skips dependency resolution and shares unchanged blocks copy-on-write. Seeding fails open to a cold build; `MUESLI_SWIFTPM_SEED=0` turns it off. Each worktree cache records its root in `.muesli-worktree-root`; `scripts/muesli_spm_gc.sh` reports caches whose worktree is gone and removes them with `--apply` (details in `AGENTS.md`). Deleting a scratch path only removes rebuildable SwiftPM artifacts, not installed apps or app data. Set `MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1` only when you intentionally want package-local `.build`.
 
 ### Parallel dev lanes
 Use fixed lanes for concurrent local testing instead of creating branch-named app identities:

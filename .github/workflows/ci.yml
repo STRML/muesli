@@ -85,6 +85,9 @@ jobs:
       - name: Test LocalVQE runtime validation
         run: ./scripts/test_localvqe_runtime_validation.sh
 
+      - name: Test SwiftPM cache seeding and GC (no clonefile)
+        run: ./scripts/test_muesli_spm_cache.sh
+
       - name: Test release cache identity and workflow policy
         run: |
           python3 ./scripts/test_ci_release_cache.py
@@ -319,6 +322,9 @@ jobs:
       - name: Test dev iCloud signing script
         # Needs macOS (PlistBuddy); signs nothing, the tool calls are stubbed.
         run: ./scripts/test_dev_sign_cloud.sh
+
+      - name: Test SwiftPM cache seeding and GC (APFS clones)
+        run: ./scripts/test_muesli_spm_cache.sh
 
       - name: Cache LocalVQE runtime build
         uses: actions/cache@v4
