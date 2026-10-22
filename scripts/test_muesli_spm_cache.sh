@@ -263,6 +263,9 @@ mkdir -p "$main_dev/xcodebuild/MuesliDev-debug" "$main_dev/xcodebuild/MuesliDevA
 printf 'dev\n' > "$main_dev/xcodebuild/MuesliDev-debug/origin.txt"
 printf 'lane-a\n' > "$main_dev/xcodebuild/MuesliDevA-debug/origin.txt"
 backdate "$main_dev"
+# A lane building into the donor's DerivedData does not make its dev scratch busy.
+mkdir -p "$main_dev/xcodebuild/MuesliDevC-debug"
+printf 'building\n' > "$main_dev/xcodebuild/MuesliDevC-debug/build.db"
 out="$(scratch_path "$WT1" dev)"
 expect_seeded "$out" main-dev "dev channel"
 [[ ! -e "$out/xcodebuild" ]] || fail "donor DerivedData copied with the dev scratch"

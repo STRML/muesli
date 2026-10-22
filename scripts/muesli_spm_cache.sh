@@ -123,22 +123,29 @@ muesli_spm_path_in_use_by_process() {
   printf '%s\n' "$match" | sed -n '1p'
 }
 
+# muesli_spm_find_hit <dir> <skipped child or ""> <find predicate>...: true when
+# anything under <dir>, outside the skipped child, matches the predicate.
+muesli_spm_find_hit() {
+  local dir="$1" skip="$2" hit
+  shift 2
+  if [[ -n "$skip" ]]; then
+    hit="$(find "$dir" -path "$dir/$skip" -prune -o "$@" -print -quit 2>/dev/null || true)"
+  else
+    hit="$(find "$dir" "$@" -print -quit 2>/dev/null || true)"
+  fi
+  [[ -n "$hit" ]]
+}
+
+# muesli_spm_path_modified_recently <dir> [skipped child]
 muesli_spm_path_modified_recently() {
-  local hit
-  hit="$(find "$1" -mmin "-$MUESLI_SPM_BUSY_MINUTES" -print -quit 2>/dev/null || true)"
-  [[ -n "$hit" ]]
+  muesli_spm_find_hit "$1" "${2:-}" -mmin "-$MUESLI_SPM_BUSY_MINUTES"
 }
 
-muesli_spm_path_changed_since() {
-  local hit
-  hit="$(find "$1" -newer "$2" -print -quit 2>/dev/null || true)"
-  [[ -n "$hit" ]]
-}
-
-# True when <path> is being written or used: a recent modification or a running
-# process that names it.
+# True when <path> is being written or used: a recent modification (outside the
+# skipped child) or a running process that names it.
+# muesli_spm_path_busy <dir> [skipped child]
 muesli_spm_path_busy() {
-  muesli_spm_path_modified_recently "$1" && return 0
+  muesli_spm_path_modified_recently "$1" "${2:-}" && return 0
   muesli_spm_path_in_use_by_process "$1" >/dev/null && return 0
   return 1
 }
@@ -176,6 +183,23 @@ muesli_spm_dir_empty() {
   [[ -d "$1" && -z "$(ls -A "$1" 2>/dev/null)" ]]
 }
 
+# muesli_spm_clone_tree <src> <dest> <skipped child or "">: APFS-clones <src>
+# to the new path <dest>, leaving out one top-level child.
+muesli_spm_clone_tree() {
+  local src="$1" dest="$2" skip="$3" entry
+  if [[ -z "$skip" ]]; then
+    cp -c -R "$src" "$dest" 2>/dev/null
+    return
+  fi
+  mkdir "$dest" 2>/dev/null || return 1
+  for entry in "$src"/* "$src"/.[!.]*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    [[ "$(basename "$entry")" == "$skip" ]] && continue
+    cp -c -R "$entry" "$dest/" 2>/dev/null || return 1
+  done
+  return 0
+}
+
 # muesli_spm_clone_into <dest> <prune> <donor>: clone, verify, publish.
 # Returns 0 when <dest> was published; 1 to try the next donor; 2 to stop.
 muesli_spm_clone_into() {
@@ -191,20 +215,17 @@ muesli_spm_clone_into() {
     muesli_spm_note "cannot write in $(dirname "$dest"); cold build"
     return 2
   fi
-  if ! cp -c -R "$donor" "$tmp" 2>/dev/null; then
+  if ! muesli_spm_clone_tree "$donor" "$tmp" "$prune"; then
     rm -rf "$tmp" "$stamp" 2>/dev/null
     muesli_spm_note "clone of $donor failed; cold build"
     return 2
   fi
-  if muesli_spm_path_changed_since "$donor" "$stamp"; then
+  if muesli_spm_find_hit "$donor" "$prune" -newer "$stamp"; then
     rm -rf "$tmp" "$stamp" 2>/dev/null
     muesli_spm_note "seed donor changed during the clone, discarded: $donor"
     return 1
   fi
   rm -f "$stamp" 2>/dev/null
-  if [[ -n "$prune" ]]; then
-    rm -rf "${tmp:?}/$prune" 2>/dev/null
-  fi
   if [[ -e "$dest" ]] && ! muesli_spm_dir_empty "$dest"; then
     rm -rf "$tmp" 2>/dev/null
     muesli_spm_note "$dest appeared during the clone; seed discarded"
@@ -255,7 +276,7 @@ muesli_seed_spm_dir() {
   local donor status seeded=0
   for donor in "$@"; do
     [[ -n "$donor" && "$donor" != "$dest" && -d "$donor" && ! -L "$donor" ]] || continue
-    if muesli_spm_path_busy "$donor"; then
+    if muesli_spm_path_busy "$donor" "$prune"; then
       muesli_spm_note "seed donor busy, skipping: $donor"
       continue
     fi
