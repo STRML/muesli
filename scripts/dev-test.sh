@@ -11,7 +11,8 @@ set -euo pipefail
 # - CloudKit/APNs dev signing is opt-in with --cloud-entitlements
 # - External contributors can set MUESLI_SKIP_SIGN=1 to build without the
 #   maintainer signing certificate
-# - Uses a shared, worktree-isolated SwiftPM scratch path by default; set
+# - Uses a worktree-private SwiftPM scratch path and DerivedData under
+#   ~/Library/Caches/muesli-spm, seeded from an idle donor's on first use; set
 #   MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1 to use package-local .build instead
 # - Installs to /Applications/MuesliDev*.app
 #

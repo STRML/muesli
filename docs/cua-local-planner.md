@@ -51,7 +51,7 @@ end-to-end desktop success benchmark.
 
 ```bash
 MUESLI_CUA_BENCHMARK=1 swift test --package-path native/MuesliNative \
-  --scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/b617-cua/test" \
+  --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)" \
   --filter ComputerUseLocalPlannerBenchmarkTests
 ```
 

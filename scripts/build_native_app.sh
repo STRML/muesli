@@ -88,11 +88,13 @@ fi
 
 SWIFT_BUILD_ARGS=(--package-path "$PACKAGE_DIR" -c "$BUILD_CONFIG")
 if ! muesli_spm_scratch_disabled; then
-  DEFAULT_SCRATCH_CHANNEL="release"
   if [[ "$BUILD_CONFIG" == "debug" ]]; then
-    DEFAULT_SCRATCH_CHANNEL="$(muesli_worktree_spm_scratch_channel dev "$ROOT")"
+    # Private to this worktree; seeded with an APFS clone of an idle donor on
+    # first use (see muesli_spm_cache.sh).
+    SWIFTPM_SCRATCH_PATH="$(muesli_worktree_spm_scratch_path dev "$ROOT")"
+  else
+    SWIFTPM_SCRATCH_PATH="$(muesli_resolve_spm_scratch_path release)"
   fi
-  SWIFTPM_SCRATCH_PATH="$(muesli_resolve_spm_scratch_path "$DEFAULT_SCRATCH_CHANNEL")"
   mkdir -p "$SWIFTPM_SCRATCH_PATH"
   SWIFT_BUILD_ARGS+=(--scratch-path "$SWIFTPM_SCRATCH_PATH")
   echo "Using SwiftPM scratch path: $SWIFTPM_SCRATCH_PATH"
@@ -119,6 +121,9 @@ if [[ "$USE_XCODE_BUILD" == "1" ]]; then
     XCODE_SCRATCH_CHANNEL="$(muesli_worktree_spm_scratch_channel dev "$ROOT")"
   fi
   XCODE_DERIVED_DATA="${MUESLI_XCODEBUILD_DERIVED_DATA:-$(muesli_default_spm_cache_root)/$XCODE_SCRATCH_CHANNEL/xcodebuild/$APP_NAME-$BUILD_CONFIG}"
+  if [[ "$BUILD_CONFIG" != "release" ]]; then
+    muesli_seed_worktree_derived_data "$XCODE_DERIVED_DATA" "$ROOT" "$APP_NAME-$BUILD_CONFIG" || true
+  fi
   mkdir -p "$XCODE_DERIVED_DATA"
 
   echo "Generating Xcode project (xcodegen)..."
