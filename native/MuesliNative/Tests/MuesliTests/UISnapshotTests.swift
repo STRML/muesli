@@ -156,6 +156,36 @@ struct UISnapshotTests {
         #expect(demandedWidth(of: TimelineView(appState: f.controller.appState, controller: f.controller), offered: 240) <= 240)
     }
 
+    private struct SnapshotError: LocalizedError {
+        var errorDescription: String? {
+            "Custom LLM could not be reached while generating meeting notes. A server with the specified hostname could not be found."
+        }
+    }
+
+    @Test("meeting header: red Summary chip when the summary failed, green when it worked")
+    func statusChips() throws {
+        let f = try makeFixture()
+        f.controller.appState.selectedTab = .meetings
+
+        let start = Date().addingTimeInterval(-7_200)
+        let failedID = try f.store.createLiveMeeting(title: "V12 Weekly Update Call", calendarEventID: nil, startTime: start)
+        try f.store.completeLiveMeeting(
+            id: failedID, title: "V12 Weekly Update Call", calendarEventID: nil, startTime: start,
+            endTime: start.addingTimeInterval(3_600), rawTranscript: "Brian: ship it Friday.",
+            formattedNotes: MeetingSummaryClient.summaryFailureNotes(
+                transcript: "Brian: ship it Friday.", meetingTitle: "V12 Weekly Update Call", error: SnapshotError()),
+            micAudioPath: nil, systemAudioPath: nil)
+
+        let failed = try #require(try f.store.meeting(id: failedID))
+        let worked = try #require(try f.store.meeting(id: f.normalMeeting))
+        try render(MeetingDetailView(meeting: failed, controller: f.controller, appState: f.controller.appState),
+                   width: 1000, height: 360, name: "10-meeting-chips-summary-failed")
+        try render(MeetingDetailView(meeting: worked, controller: f.controller, appState: f.controller.appState),
+                   width: 1000, height: 360, name: "11-meeting-chips-ok")
+        try render(MeetingDetailView(meeting: failed, controller: f.controller, appState: f.controller.appState),
+                   width: 680, height: 360, name: "12-meeting-chips-summary-failed-narrow")
+    }
+
     @Test("settings: private meetings, auto export and folder suggestions")
     func settings() throws {
         let f = try makeFixture()
