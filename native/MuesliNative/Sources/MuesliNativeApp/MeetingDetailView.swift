@@ -999,20 +999,22 @@ struct MeetingDetailView: View {
             transcriptionChip(for: meeting)
             summaryChip(for: meeting)
         }
+        .fixedSize()
     }
 
     @ViewBuilder
     private func transcriptionChip(for meeting: MeetingRecord) -> some View {
         let status = MeetingPipelineStatus.transcription(for: meeting, isRunning: isRetranscribing)
-        let chip = stageChip(title: "Transcript", systemImage: "waveform", status: status,
-                             showsChevron: status.isFailed && hasSavedRecording(meeting))
+        let chip = stageChip(title: "Transcript", systemImage: "waveform", status: status)
         switch status {
         case .failed(let reason) where hasSavedRecording(meeting):
-            Menu { retranscribeModelItems() } label: { chip }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .help("Transcription failed: \(reason)\nChoose a model to re-transcribe the saved recording.")
-                .accessibilityIdentifier("meeting.status.transcription.failed")
+            splitStageChip(title: "Transcript", systemImage: "waveform", status: status,
+                           help: "Transcription failed: \(reason)",
+                           menuHelp: "Choose a model to re-transcribe the saved recording",
+                           action: nil) {
+                retranscribeModelItems()
+            }
+            .accessibilityIdentifier("meeting.status.transcription.failed")
         case .failed(let reason):
             chip.help("Transcription failed: \(reason)")
         case .working:
@@ -1025,20 +1027,16 @@ struct MeetingDetailView: View {
     @ViewBuilder
     private func summaryChip(for meeting: MeetingRecord) -> some View {
         let status = MeetingPipelineStatus.summary(for: meeting, isRunning: isSummarizing)
-        let chip = stageChip(title: "Summary", systemImage: "sparkles", status: status, showsChevron: status.isFailed)
+        let chip = stageChip(title: "Summary", systemImage: "sparkles", status: status)
         switch status {
         case .failed(let reason):
-            Menu {
+            splitStageChip(title: "Summary", systemImage: "sparkles", status: status,
+                           help: "Summary failed: \(reason)\nClick to retry with \(appState.selectedMeetingSummaryBackend.label).",
+                           menuHelp: "Retry with another backend",
+                           action: { summarizeWithSettings(meeting) }) {
                 resummarizeMenuItems(for: meeting)
-            } label: {
-                chip
-            } primaryAction: {
-                summarizeWithSettings(meeting)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
             .disabled(isRetranscribing)
-            .help("Summary failed: \(reason)\nClick to retry with \(appState.selectedMeetingSummaryBackend.label), or open the menu to pick another backend.")
             .accessibilityIdentifier("meeting.status.summary.failed")
         case .working:
             chip.help("Summarizing meeting")
@@ -1047,13 +1045,16 @@ struct MeetingDetailView: View {
         }
     }
 
-    private func stageChip(title: String, systemImage: String, status: MeetingStageStatus, showsChevron: Bool) -> some View {
-        let tint: Color = switch status {
+    private func stageTint(_ status: MeetingStageStatus) -> Color {
+        switch status {
         case .working: MuesliTheme.textSecondary
         case .succeeded: .green
         case .failed: .red
         }
-        return HStack(spacing: 5) {
+    }
+
+    private func stageChipContent(title: String, systemImage: String, status: MeetingStageStatus) -> some View {
+        HStack(spacing: 5) {
             Image(systemName: systemImage)
                 .font(.system(size: 10, weight: .semibold))
             Text(title)
@@ -1066,18 +1067,65 @@ struct MeetingDetailView: View {
             case .failed:
                 Image(systemName: "xmark.circle.fill").foregroundStyle(Color.red)
             }
-            if showsChevron {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(MuesliTheme.textSecondary)
-            }
         }
         .foregroundStyle(MuesliTheme.textPrimary)
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).fill(tint.opacity(0.14)))
-        .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).strokeBorder(tint.opacity(0.35), lineWidth: 1))
         .accessibilityElement(children: .combine)
+    }
+
+    private func stageChip(title: String, systemImage: String, status: MeetingStageStatus) -> some View {
+        let tint = stageTint(status)
+        return stageChipContent(title: title, systemImage: systemImage, status: status)
+            .background(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).fill(tint.opacity(0.14)))
+            .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).strokeBorder(tint.opacity(0.35), lineWidth: 1))
+    }
+
+    /// A failed chip that offers a way to recover: the left segment runs `action` (or only explains,
+    /// when nil) and the chevron segment opens `menuItems`. Built as a Button next to a Menu, like
+    /// `resumeRecordingButton`: a `Menu` whose label is a styled HStack is flattened by macOS to its
+    /// first icon and text, which drops the red tint and the x.
+    private func splitStageChip<MenuItems: View>(
+        title: String,
+        systemImage: String,
+        status: MeetingStageStatus,
+        help: String,
+        menuHelp: String,
+        action: (() -> Void)?,
+        @ViewBuilder menuItems: () -> MenuItems
+    ) -> some View {
+        let tint = stageTint(status)
+        let fill = tint.opacity(0.14)
+        let content = stageChipContent(title: title, systemImage: systemImage, status: status)
+        return HStack(spacing: 1) {
+            Group {
+                if let action {
+                    Button(action: action) { content.background(fill) }
+                        .buttonStyle(.plain)
+                } else {
+                    content.background(fill)
+                }
+            }
+            .help(help)
+
+            Menu {
+                menuItems()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .padding(.horizontal, 7)
+                    .frame(maxHeight: .infinity)
+                    .background(fill)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize(horizontal: true, vertical: false)
+            .help(menuHelp)
+        }
+        .fixedSize()
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        .overlay(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall).strokeBorder(tint.opacity(0.35), lineWidth: 1))
     }
 
     @ViewBuilder
