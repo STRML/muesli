@@ -203,6 +203,7 @@ case "${shard}" in
       CustomLLMRequestHeadersTests
       CustomLLMModelCatalogTests
       CustomLLMModelListControllerTests
+      EndpointURLCommandTests
       SettingsModelFieldTests
       MeetingSummaryClientTests
       MeetingChatStoreTests
