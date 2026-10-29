@@ -192,6 +192,7 @@ case "${shard}" in
       CustomLLMAPIKeyResolutionTests
       CustomLLMHeaderPropagationTests
       CustomLLMRequestHeadersTests
+      EndpointURLCommandTests
       SettingsModelFieldTests
       MeetingSummaryClientTests
       MeetingPipelineStatusTests
