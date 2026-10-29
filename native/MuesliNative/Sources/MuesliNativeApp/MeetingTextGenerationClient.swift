@@ -75,7 +75,7 @@ struct MeetingTextGenerationClient: MeetingTextGenerating {
         guard supportsNativeTools(config: request.base.config) else { throw MeetingTextGenerationError.invalidEndpoint }
         let credential = try await credentialResolver(request.base.config)
         try Task.checkCancellation()
-        var urlRequest = try Self.makeRequest(await request.base.resolvingEndpointURLCommands(), credential: credential)
+        var urlRequest = try Self.makeRequest(await request.base.resolvingEndpointURLCommand(), credential: credential)
         if provider == .openRouter { urlRequest.url = URL(string: "https://openrouter.ai/api/v1/responses")! }
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: MeetingNativeToolTransport.requestBody(request, stream: false))
         let (data, response) = try await load(urlRequest)
@@ -97,7 +97,7 @@ struct MeetingTextGenerationClient: MeetingTextGenerating {
             _ = try CustomLLMRequestHeaders.validated(request.config.customLLMHeaders)
         }
         let urlRequest = try Self.makeRequest(
-            await request.resolvingEndpointURLCommands(),
+            await request.resolvingEndpointURLCommand(),
             credential: await credentialResolver(request.config)
         )
         let (data, response) = try await load(urlRequest)

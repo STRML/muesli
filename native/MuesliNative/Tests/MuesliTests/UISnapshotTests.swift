@@ -198,4 +198,18 @@ struct UISnapshotTests {
         }
         try render(SettingsView(appState: f.controller.appState, controller: f.controller), width: 900, height: 3600, name: "04-settings")
     }
+
+    @Test("settings: Custom LLM endpoint with a URL command")
+    func settingsEndpointURLCommand() throws {
+        let f = try makeFixture()
+        f.controller.appState.selectedTab = .settings
+        f.controller.appState.selectedSettingsPane = .meetings
+        f.controller.updateConfig { config in
+            config.meetingSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+            config.customLLMURL = "https://studio.example.ts.net/v1/chat/completions"
+            config.customLLMURLCommand = "/usr/local/bin/pick-endpoint-url"
+        }
+        f.controller.appState.selectedMeetingSummaryBackend = .customLLM
+        try render(SettingsView(appState: f.controller.appState, controller: f.controller), width: 900, height: 3600, name: "13-settings-endpoint-url-command")
+    }
 }

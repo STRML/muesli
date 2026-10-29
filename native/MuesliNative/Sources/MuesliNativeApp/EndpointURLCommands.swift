@@ -2,24 +2,39 @@ import Foundation
 import MuesliCore
 
 extension AppConfig {
-    /// Returns a copy whose Ollama, LM Studio and Custom LLM URLs come from their URL commands.
+    /// The URL field and its URL command for each backend that has a configurable endpoint.
+    private static let endpointURLFields: [String: (url: WritableKeyPath<AppConfig, String>, command: KeyPath<AppConfig, String>)] = [
+        MeetingSummaryBackendOption.ollama.backend: (\.ollamaURL, \.ollamaURLCommand),
+        MeetingSummaryBackendOption.lmStudio.backend: (\.lmStudioURL, \.lmStudioURLCommand),
+        MeetingSummaryBackendOption.customLLM.backend: (\.customLLMURL, \.customLLMURLCommand),
+    ]
+
+    /// Returns a copy whose URL for `backend` comes from that backend's URL command.
     ///
-    /// Each command runs via `/bin/sh -c` before the request, so the endpoint can follow
+    /// The command runs via `/bin/sh -c` before the request, so the endpoint can follow
     /// the network (a LAN host at home, a tailnet host elsewhere). Its trimmed stdout replaces
     /// the saved URL; an empty command, a failure, a timeout or no output keeps the saved URL.
-    func resolvingEndpointURLCommands() async throws -> AppConfig {
+    /// Only the named backend's command runs; other backends' commands are left alone.
+    func resolvingEndpointURLCommand(forBackend backend: String) async throws -> AppConfig {
+        guard let fields = Self.endpointURLFields[backend] else { return self }
         var resolved = self
-        resolved.ollamaURL = try await CredentialCommandRunner.resolve(command: ollamaURLCommand, fallback: ollamaURL)
-        resolved.lmStudioURL = try await CredentialCommandRunner.resolve(command: lmStudioURLCommand, fallback: lmStudioURL)
-        resolved.customLLMURL = try await CredentialCommandRunner.resolve(command: customLLMURLCommand, fallback: customLLMURL)
+        resolved[keyPath: fields.url] = try await CredentialCommandRunner.resolve(
+            command: self[keyPath: fields.command],
+            fallback: self[keyPath: fields.url]
+        )
         return resolved
+    }
+
+    /// Resolves the URL command of the meeting summary backend, which summaries, titles and chat use.
+    func resolvingSummaryEndpointURLCommand() async throws -> AppConfig {
+        try await resolvingEndpointURLCommand(forBackend: MeetingSummaryBackendOption.resolved(meetingSummaryBackend).backend)
     }
 }
 
 extension MeetingTextGenerationRequest {
-    func resolvingEndpointURLCommands() async throws -> MeetingTextGenerationRequest {
+    func resolvingEndpointURLCommand() async throws -> MeetingTextGenerationRequest {
         var resolved = self
-        resolved.config = try await config.resolvingEndpointURLCommands()
+        resolved.config = try await config.resolvingSummaryEndpointURLCommand()
         return resolved
     }
 }

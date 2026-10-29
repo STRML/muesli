@@ -237,7 +237,7 @@ enum MeetingSummaryClient {
             try await summarizeOnce(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
-                config: try await config.resolvingEndpointURLCommands(),
+                config: try await config.resolvingSummaryEndpointURLCommand(),
                 template: template,
                 existingNotes: existingNotes,
                 manualNotesToRetain: manualNotesToRetain,
@@ -1578,7 +1578,7 @@ enum MeetingSummaryClient {
         isPrivateMeeting: Bool = false
     ) async -> String? {
         guard PrivateMeetingPolicy.allowsContent(isPrivateMeeting: isPrivateMeeting, config: config),
-              let config = try? await config.resolvingEndpointURLCommands() else {
+              let config = try? await config.resolvingSummaryEndpointURLCommand() else {
             return nil
         }
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()

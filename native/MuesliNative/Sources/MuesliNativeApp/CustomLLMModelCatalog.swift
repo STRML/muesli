@@ -72,7 +72,7 @@ enum CustomLLMModelCatalog {
         config: AppConfig,
         transport: Transport = { try await URLSession.shared.data(for: $0) }
     ) async throws -> [String] {
-        let config = try await config.resolvingEndpointURLCommands()
+        let config = try await config.resolvingEndpointURLCommand(forBackend: MeetingSummaryBackendOption.customLLM.backend)
         guard let url = modelsURL(config: config) else { throw CustomLLMModelCatalogError.invalidEndpoint }
         let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
 

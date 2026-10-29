@@ -132,6 +132,30 @@ struct EndpointURLCommandTests {
         #expect(hosts.allSatisfy { $0 == EndpointURLCommandURLProtocol.commandHost })
     }
 
+    @Test("only the selected backend's URL command runs")
+    func unselectedCommandsDoNotRun() async throws {
+        EndpointURLCommandURLProtocol.install()
+        defer { EndpointURLCommandURLProtocol.uninstall() }
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-url-command-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        var config = Self.config(backend: "custom_llm", command: Self.command)
+        config.ollamaURLCommand = "touch '\(marker.path)'"
+        config.lmStudioURLCommand = "touch '\(marker.path)'"
+
+        #expect(try await MeetingSummaryClient.summarize(transcript: "Transcript", meetingTitle: "Test", config: config) == "OK")
+        #expect(await MeetingSummaryClient.generateTitle(transcript: "Transcript", config: config) == "OK")
+        #expect(try await TranscriptCleanupClient.generate(
+            systemPrompt: "Clean.", userPrompt: "raw", backend: .hosted(.customLLM),
+            model: "custom-model", config: config
+        ) == "OK")
+        #expect(try await MeetingTextGenerationClient().generate(
+            MeetingTextGenerationRequest(system: "System", user: "User", config: config)
+        ) == "OK")
+        #expect(try await CustomLLMModelCatalog.fetch(config: config) == ["command-model"])
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
     @Test("the model list refetches when the URL command changes")
     func fingerprintIncludesURLCommand() {
         var config = AppConfig()

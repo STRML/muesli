@@ -176,7 +176,7 @@ enum TranscriptCleanupClient {
         guard let llmBackend = backend.llmBackend else {
             throw TranscriptCleanupError.missingConfiguration("Local generation is handled on device.")
         }
-        let config = try await config.resolvingEndpointURLCommands()
+        let config = try await config.resolvingEndpointURLCommand(forBackend: llmBackend.backend)
         switch llmBackend {
         case .chatGPT:
             return try await ChatGPTResponsesClient.respond(
