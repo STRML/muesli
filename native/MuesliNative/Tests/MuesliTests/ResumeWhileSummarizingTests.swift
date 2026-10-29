@@ -274,6 +274,42 @@ struct ResumeWhileSummarizingControllerTests {
         #expect(try store.meeting(id: id)?.formattedNotes == "## Notes")
     }
 
+    @Test("a running re-summarize is visible app-wide until it finishes, so the chip survives navigation")
+    func runningResummaryIsPublishedUntilDone() async throws {
+        let store = try makeStore()
+        let id = try insertCompletedMeeting(store)
+        let controller = makeController(store: store)
+        configure(controller, cli: try makeFakeClaude(delay: 0.4, success: true))
+        let meeting = try #require(try store.meeting(id: id))
+
+        var seenWhileRunning = false
+        let outcome: Result<Void, Error> = await withCheckedContinuation { continuation in
+            controller.resummarize(meeting: meeting) { continuation.resume(returning: $0) }
+            seenWhileRunning = controller.appState.summarizingMeetingIDs.contains(id)
+        }
+        guard case .success = outcome else { Issue.record("expected the summary to succeed"); return }
+        #expect(seenWhileRunning)
+        #expect(!controller.appState.summarizingMeetingIDs.contains(id))
+    }
+
+    @Test("a cancelled re-summarize clears its running mark")
+    func cancelledResummaryClearsRunningMark() async throws {
+        let store = try makeStore()
+        let id = try insertCompletedMeeting(store)
+        let controller = makeController(store: store)
+        configure(controller, cli: try makeFakeClaude(delay: 0.5, success: true))
+        let meeting = try #require(try store.meeting(id: id))
+
+        _ = await withCheckedContinuation { continuation in
+            controller.resummarize(meeting: meeting) { continuation.resume(returning: $0) }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
+                controller.cancelInFlightResummary(meetingID: id)
+            }
+        }
+        #expect(!controller.appState.summarizingMeetingIDs.contains(id))
+    }
+
     @Test("R3: a summary that completes after the row became recording does not overwrite it")
     func lateSummaryDoesNotOverwriteRecordingRow() async throws {
         let store = try makeStore()
