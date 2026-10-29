@@ -5975,7 +5975,10 @@ public final class MuesliController: NSObject {
         let run = Task { [weak self] in
             guard let self else { return }
             defer {
-                if self.resummaryRuns[meeting.id]?.token == runToken { self.resummaryRuns[meeting.id] = nil }
+                if self.resummaryRuns[meeting.id]?.token == runToken {
+                    self.resummaryRuns[meeting.id] = nil
+                    self.appState.summarizingMeetingIDs.remove(meeting.id)
+                }
             }
             let plan = MeetingResummarizationPolicy.plan(for: meeting)
             let participantNames = await self.summaryParticipantNames(meetingID: meeting.id)
@@ -6032,6 +6035,7 @@ public final class MuesliController: NSObject {
             }
         }
         resummaryRuns[meeting.id] = (runToken, run)
+        appState.summarizingMeetingIDs.insert(meeting.id)
     }
 
     /// Nil only when the row is gone. A failed read must not look like a deleted row, or a good

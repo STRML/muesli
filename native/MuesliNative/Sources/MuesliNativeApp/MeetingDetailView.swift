@@ -86,8 +86,11 @@ struct MeetingDetailView: View {
     let onBack: (() -> Void)?
     let backLabel: String
     @Environment(\.usesCompactQuickNotes) private var usesCompactQuickNotes
-    @State private var isSummarizing = false
     @State private var recordingPinned = false
+    private var isSummarizing: Bool {
+        guard let id = meeting?.id else { return false }
+        return appState.summarizingMeetingIDs.contains(id)
+    }
     private var isRetranscribing: Bool {
         guard let id = meeting?.id else { return false }
         return appState.meetingRetranscriptions[id]?.isRunning == true
@@ -893,9 +896,7 @@ struct MeetingDetailView: View {
 
     private func beginSummary(for meeting: MeetingRecord, summaryConfig: AppConfig? = nil) {
         guard !isSummarizing else { return }
-        isSummarizing = true
         let completion: (Result<Void, Error>) -> Void = { [meeting] result in
-            isSummarizing = false
             switch result {
             case .success:
                 if let updated = controller.meeting(id: meeting.id) {
@@ -2183,9 +2184,7 @@ struct MeetingDetailView: View {
         guard let meetingID = transcriptResummaryPromptMeetingID else { return }
         transcriptResummaryPromptMeetingID = nil
         guard let updatedMeeting = controller.meeting(id: meetingID) else { return }
-        isSummarizing = true
         controller.resummarize(meeting: updatedMeeting) { [meetingID] result in
-            isSummarizing = false
             switch result {
             case .success:
                 if let refreshed = controller.meeting(id: meetingID) {
