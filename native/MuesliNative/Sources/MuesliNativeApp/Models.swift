@@ -2199,10 +2199,13 @@ struct AppConfig: Codable {
     var meetingSummaryMaxOutputTokens: Int? = nil
     var meetingSummaryRetryCount: Int = MeetingSummaryRetryPolicy.defaultRetryCount
     var ollamaURL: String = "http://localhost:11434"
+    var ollamaURLCommand: String = ""
     var ollamaModel: String = "qwen3.5"
     var lmStudioURL: String = "http://localhost:1234"
+    var lmStudioURLCommand: String = ""
     var lmStudioModel: String = ""
     var customLLMURL: String = ""
+    var customLLMURLCommand: String = ""
     var customLLMAPIKey: String = ""
     var customLLMAPIKeyCommand: String = ""
     var customLLMHeaders: [CustomLLMRequestHeader] = []
@@ -2384,10 +2387,13 @@ struct AppConfig: Codable {
         case meetingSummaryMaxOutputTokens = "meeting_summary_max_output_tokens"
         case meetingSummaryRetryCount = "meeting_summary_retry_count"
         case ollamaURL = "ollama_url"
+        case ollamaURLCommand = "ollama_url_command"
         case ollamaModel = "ollama_model"
         case lmStudioURL = "lmstudio_url"
+        case lmStudioURLCommand = "lmstudio_url_command"
         case lmStudioModel = "lmstudio_model"
         case customLLMURL = "custom_llm_url"
+        case customLLMURLCommand = "custom_llm_url_command"
         case customLLMAPIKey = "custom_llm_api_key"
         case customLLMAPIKeyCommand = "custom_llm_api_key_command"
         case customLLMHeaders = "custom_llm_headers"
@@ -2627,10 +2633,13 @@ struct AppConfig: Codable {
             (try? c.decode(Int.self, forKey: .meetingSummaryRetryCount)) ?? defaults.meetingSummaryRetryCount
         )
         ollamaURL = (try? c.decode(String.self, forKey: .ollamaURL)) ?? defaults.ollamaURL
+        ollamaURLCommand = (try? c.decode(String.self, forKey: .ollamaURLCommand)) ?? defaults.ollamaURLCommand
         ollamaModel = (try? c.decode(String.self, forKey: .ollamaModel)) ?? defaults.ollamaModel
         lmStudioURL = (try? c.decode(String.self, forKey: .lmStudioURL)) ?? defaults.lmStudioURL
+        lmStudioURLCommand = (try? c.decode(String.self, forKey: .lmStudioURLCommand)) ?? defaults.lmStudioURLCommand
         lmStudioModel = (try? c.decode(String.self, forKey: .lmStudioModel)) ?? defaults.lmStudioModel
         customLLMURL = (try? c.decode(String.self, forKey: .customLLMURL)) ?? defaults.customLLMURL
+        customLLMURLCommand = (try? c.decode(String.self, forKey: .customLLMURLCommand)) ?? defaults.customLLMURLCommand
         customLLMAPIKey = (try? c.decode(String.self, forKey: .customLLMAPIKey)) ?? defaults.customLLMAPIKey
         customLLMAPIKeyCommand = (try? c.decode(String.self, forKey: .customLLMAPIKeyCommand)) ?? defaults.customLLMAPIKeyCommand
         customLLMHeaders = (try? c.decode([CustomLLMRequestHeader].self, forKey: .customLLMHeaders)) ?? defaults.customLLMHeaders
