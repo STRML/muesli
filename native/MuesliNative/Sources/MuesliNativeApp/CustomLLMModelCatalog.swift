@@ -60,6 +60,7 @@ enum CustomLLMModelCatalog {
         let headers = config.customLLMHeaders.map { "\($0.name)=\($0.value)" }.joined(separator: "&")
         return [
             config.customLLMURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            config.customLLMURLCommand.trimmingCharacters(in: .whitespacesAndNewlines),
             config.customLLMFormat,
             config.customLLMAPIKey,
             config.customLLMAPIKeyCommand.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -71,6 +72,7 @@ enum CustomLLMModelCatalog {
         config: AppConfig,
         transport: Transport = { try await URLSession.shared.data(for: $0) }
     ) async throws -> [String] {
+        let config = try await config.resolvingEndpointURLCommand(forBackend: MeetingSummaryBackendOption.customLLM.backend)
         guard let url = modelsURL(config: config) else { throw CustomLLMModelCatalogError.invalidEndpoint }
         let format = CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI
 

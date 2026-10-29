@@ -1377,6 +1377,7 @@ struct SettingsView: View {
                     onChange: { value in controller.updateConfig { $0.ollamaURL = value } }
                 ).frame(height: 22)
             }
+            endpointURLCommandRow(\.ollamaURLCommand)
         } else if backend == .hosted(.lmStudio) {
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("LM Studio URL", controlWidth: meetingControlWidth) {
@@ -1386,6 +1387,7 @@ struct SettingsView: View {
                     onChange: { value in controller.updateConfig { $0.lmStudioURL = value } }
                 ).frame(height: 22)
             }
+            endpointURLCommandRow(\.lmStudioURLCommand)
         } else if backend == .hosted(.customLLM) {
             customLLMSettingsRows(model: appState.config.quilModel) { value in
                 controller.updateConfig { $0.quilModel = value }
@@ -1528,6 +1530,7 @@ struct SettingsView: View {
                 )
                 .frame(height: 22)
             }
+            endpointURLCommandRow(\.ollamaURLCommand)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
                 settingsModelTextField(
@@ -1545,6 +1548,7 @@ struct SettingsView: View {
                 )
                 .frame(height: 22)
             }
+            endpointURLCommandRow(\.lmStudioURLCommand)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
                 settingsModelTextField(
@@ -1758,6 +1762,7 @@ struct SettingsView: View {
                     )
                     .frame(height: 22)
                 }
+                endpointURLCommandRow(\.ollamaURLCommand)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Model", controlWidth: meetingControlWidth) {
                     settingsModelTextField(
@@ -1774,6 +1779,7 @@ struct SettingsView: View {
                     )
                     .frame(height: 22)
                 }
+                endpointURLCommandRow(\.lmStudioURLCommand)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Model", controlWidth: meetingControlWidth) {
                     settingsModelTextField(
@@ -1818,6 +1824,24 @@ struct SettingsView: View {
         }
     }
 
+    /// A shell command whose output replaces the endpoint URL above it, so the URL can follow the network.
+    @ViewBuilder
+    private func endpointURLCommandRow(_ keyPath: WritableKeyPath<AppConfig, String>) -> some View {
+        Divider().background(MuesliTheme.surfaceBorder)
+        settingsRow("URL Command", controlWidth: meetingControlWidth) {
+            PastableTextField(
+                text: appState.config[keyPath: keyPath],
+                placeholder: "e.g. /usr/local/bin/pick-endpoint-url",
+                commitsOnEndEditing: true,
+                onChange: { val in controller.updateConfig { $0[keyPath: keyPath] = val } }
+            )
+            .frame(height: 22)
+            .help("Runs shell code via /bin/sh with your user permissions before each request. Use an absolute executable path. Non-empty output replaces the saved URL; failures fall back to it.")
+        }
+        settingsDescription("Optional shell command that prints the URL; falls back to the saved URL.")
+            .lineLimit(1)
+    }
+
     @ViewBuilder
     private func customLLMSettingsRows(model: String, onModelChange: @escaping (String) -> Void) -> some View {
         Divider().background(MuesliTheme.surfaceBorder)
@@ -1838,6 +1862,7 @@ struct SettingsView: View {
         settingsDescription(CustomLLMConnectionGuidance.endpointHelp)
             .lineLimit(1)
             .help("Use HTTPS with a certificate trusted by your Mac. Enable TLS on the server or use a reverse proxy such as Caddy. Localhost means a server running on this Mac.")
+        endpointURLCommandRow(\.customLLMURLCommand)
         Divider().background(MuesliTheme.surfaceBorder)
         settingsRow("API Key", controlWidth: meetingControlWidth) {
             PastableSecureField(

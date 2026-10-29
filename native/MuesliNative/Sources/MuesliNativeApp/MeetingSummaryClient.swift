@@ -233,10 +233,11 @@ enum MeetingSummaryClient {
             maxRetries: config.meetingSummaryRetryCount,
             timeBudget: isClaudeCode ? claudeCodeSummaryTimeBudget : nil
         ) { remainingTime in
+            // Each attempt re-resolves, so a retry follows a network change.
             try await summarizeOnce(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
-                config: config,
+                config: try await config.resolvingSummaryEndpointURLCommand(),
                 template: template,
                 existingNotes: existingNotes,
                 manualNotesToRetain: manualNotesToRetain,
@@ -1576,7 +1577,8 @@ enum MeetingSummaryClient {
         openRouterAPIKeyOverride: String? = nil,
         isPrivateMeeting: Bool = false
     ) async -> String? {
-        guard PrivateMeetingPolicy.allowsContent(isPrivateMeeting: isPrivateMeeting, config: config) else {
+        guard PrivateMeetingPolicy.allowsContent(isPrivateMeeting: isPrivateMeeting, config: config),
+              let config = try? await config.resolvingSummaryEndpointURLCommand() else {
             return nil
         }
         let backend = (config.meetingSummaryBackend.isEmpty ? MeetingSummaryBackendOption.chatGPT.backend : config.meetingSummaryBackend).lowercased()
