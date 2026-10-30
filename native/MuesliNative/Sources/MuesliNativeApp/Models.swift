@@ -2275,6 +2275,8 @@ struct AppConfig: Codable {
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
     var autoRecordMeetings: Bool = false
+    /// Stop a recording that follows a call once the call has ended. Off by default: the call-ended alert only warns.
+    var stopRecordingWhenCallEnds: Bool = false
     var upcomingMeetingsHourCount: Int?
     var upcomingMeetingsWindow: UpcomingMeetingsWindow {
         .resolve(dayCount: upcomingMeetingsDayCount, hourCount: upcomingMeetingsHourCount)
@@ -2471,6 +2473,7 @@ struct AppConfig: Codable {
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
         case autoRecordMeetings = "auto_record_meetings"
+        case stopRecordingWhenCallEnds = "stop_recording_when_call_ends"
         case upcomingMeetingsHourCount = "upcoming_meetings_hour_count"
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
@@ -2659,6 +2662,7 @@ struct AppConfig: Codable {
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
+        stopRecordingWhenCallEnds = (try? c.decode(Bool.self, forKey: .stopRecordingWhenCallEnds)) ?? defaults.stopRecordingWhenCallEnds
         let decodedHours = try? c.decode(Int.self, forKey: .upcomingMeetingsHourCount)
         upcomingMeetingsHourCount = [6, 12].contains(decodedHours ?? 0) ? decodedHours : nil
         if c.contains(.upcomingMeetingsDayCount) {

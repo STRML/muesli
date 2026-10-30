@@ -68,7 +68,7 @@ struct MeetingAutoStopPolicyTests {
         #expect(MeetingAutoStopSource(candidate: candidate()).hasObservedCandidate)
     }
 
-    @Test("source-backed origins warn without stopping recording", arguments: [
+    @Test("source-backed origins stop with a notice; a manual recording never stops", arguments: [
         MeetingRecordingStartOrigin.manual, .detectedPrompt, .calendarAutoRecord,
         .scheduledMeetingPrompt, .joinAndRecord
     ])
@@ -76,7 +76,7 @@ struct MeetingAutoStopPolicyTests {
         let explicit = MeetingAutoStopSource(candidate: candidate())
         let recent = MeetingAutoStopSource(candidate: candidate(id: "recent", url: nil))
         let tracksSource = origin != .manual
-        let expectedSignalLoss: MeetingSignalLossResponse = tracksSource ? .warnOnly : .none
+        let expectedSignalLoss: MeetingSignalLossResponse = tracksSource ? .stopWithNotice : .none
         #expect(origin.tracksMeetingSource == tracksSource)
         #expect(origin.signalLossResponse == expectedSignalLoss)
         #expect(origin.signalLossSource(explicitSource: explicit, recentSource: recent) == (tracksSource ? explicit : nil))
@@ -142,5 +142,27 @@ struct MeetingAutoStopPolicyTests {
         #expect(!shouldStop9)
         let shouldStop10 = tracker.observe(candidate: nil, now: now.addingTimeInterval(31), gracePeriod: 20)
         #expect(shouldStop10)
+    }
+
+    @Test("a seen call that is no longer found counts as lost at once, and returns when it is found again")
+    func lostSourceDoesNotWaitForGrace() {
+        var tracker = MeetingAutoStopTracker()
+        tracker.arm(source: MeetingAutoStopSource(candidate: candidate()))
+        #expect(!tracker.hasLostSource)
+        _ = tracker.observe(candidate: candidate(), now: now, gracePeriod: 20)
+        #expect(!tracker.hasLostSource)
+        _ = tracker.observe(candidate: nil, now: now.addingTimeInterval(1), gracePeriod: 20)
+        #expect(tracker.hasLostSource)
+        _ = tracker.observe(candidate: candidate(), now: now.addingTimeInterval(2), gracePeriod: 20)
+        #expect(!tracker.hasLostSource)
+    }
+
+    @Test("a call that was never seen is not reported lost")
+    func unseenSourceIsNotLost() throws {
+        var tracker = MeetingAutoStopTracker()
+        let url = try #require(URL(string: "https://\(room)"))
+        tracker.arm(source: MeetingAutoStopSource(meetingURL: url))
+        _ = tracker.observe(candidate: nil, now: now, gracePeriod: 20)
+        #expect(!tracker.hasLostSource)
     }
 }
