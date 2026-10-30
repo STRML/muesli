@@ -7,11 +7,11 @@ have said that a specific service may receive it.
 
 | Where content could leave | What happens to a private meeting |
 |---|---|
-| Meeting summary and title generation | Skipped unless the selected backend is allowed for private meetings. The transcript is kept and the meeting shows why no summary was made. |
+| Meeting summary and title generation | Skipped unless the selected backend is allowed for private meetings. The transcript is kept and the meeting shows why no summary was made. An audio file imported into a private folder is treated the same way. |
 | Ask Meetings (chat) | Excluded from retrieval, search, browse and read tools, even when attached explicitly. A chat whose earlier answers cite a private meeting refuses to continue on a backend that is not allowed. |
-| Auto-export | Never written. In "keep notes up to date" mode, an exported note is removed when the meeting becomes private. |
+| Auto-export | Never written. |
 | `muesli-cli` | `meetings list` and `meetings get` return the title and timing with `isPrivate: true` and no transcript, notes, audio paths or context. `meetings update-notes` refuses. |
-| iCloud sync | Not uploaded. A deletion still syncs, so a copy that was uploaded earlier is removed when you delete the meeting. |
+| iCloud sync | Content is not uploaded. A copy that reached iCloud before the meeting became private is replaced with a deletion marker, so it also leaves your other devices. The meeting stays on this Mac. Un-marking it uploads it again. |
 
 Copying text and exporting by hand are explicit actions and are not blocked.
 
@@ -38,6 +38,5 @@ A failed privacy lookup counts as private, so an error can only withhold content
 
 ## Limits
 
-- Marking a meeting private does not recall a copy that was already uploaded to iCloud or exported
-  before it was marked. In keep-in-sync mode the vault note is removed; the iCloud copy is not.
+- Marking a meeting private does not recall a file that auto-export wrote before it was marked.
 - Meeting titles are visible in CLI output so a meeting can still be found.
