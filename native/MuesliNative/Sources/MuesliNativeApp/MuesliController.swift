@@ -5439,24 +5439,12 @@ public final class MuesliController: NSObject {
             config.enableComputerUsePlanner = true
             config.onboardingUseCase = onboardingUseCase.rawValue
             config.enablePushToTalk = onboardingUseCase.includesPushToTalk
-            if let summaryBackend {
-                config.meetingSummaryBackend = summaryBackend.backend
-            }
-            if let anthropicWorkspaceID {
-                config.anthropicWorkspaceID = anthropicWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            if let apiKey, !apiKey.isEmpty {
-                if summaryBackend == .openAI {
-                    config.openAIAPIKey = apiKey
-                } else if summaryBackend == .anthropic {
-                    config.anthropicAPIKey = apiKey
-                } else if summaryBackend == .openRouter,
-                          shouldRetainLegacyOpenRouterKey {
-                    // ConfigStore retries the migration and preserves this
-                    // fallback if protected credential storage remains unavailable.
-                    config.openRouterAPIKey = apiKey
-                }
-            }
+            config.applyOnboardingSummaryChoice(
+                summaryBackend,
+                apiKey: apiKey,
+                anthropicWorkspaceID: anthropicWorkspaceID,
+                retainLegacyOpenRouterKey: shouldRetainLegacyOpenRouterKey
+            )
         }
         selectBackend(backend)
         hotkeyMonitor.configure(hotkey)

@@ -2245,6 +2245,32 @@ extension AppConfig {
         let locked = lockedSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines)
         if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
     }
+
+    /// Writes the summary provider picked during onboarding, with its key. A nil choice
+    /// changes nothing, so an already configured backend and its credentials stay as they are.
+    mutating func applyOnboardingSummaryChoice(
+        _ choice: MeetingSummaryBackendOption?,
+        apiKey: String?,
+        anthropicWorkspaceID: String?,
+        retainLegacyOpenRouterKey: Bool
+    ) {
+        if let choice {
+            meetingSummaryBackend = choice.backend
+        }
+        if choice == .anthropic, let anthropicWorkspaceID {
+            self.anthropicWorkspaceID = anthropicWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let apiKey, !apiKey.isEmpty else { return }
+        if choice == .openAI {
+            openAIAPIKey = apiKey
+        } else if choice == .anthropic {
+            anthropicAPIKey = apiKey
+        } else if choice == .openRouter, retainLegacyOpenRouterKey {
+            // ConfigStore retries the migration and preserves this
+            // fallback if protected credential storage remains unavailable.
+            openRouterAPIKey = apiKey
+        }
+    }
 }
 
 struct AppConfig: Codable {

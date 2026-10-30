@@ -280,6 +280,120 @@ struct OnboardingFlowTests {
         ) == .stop(cancelTestDictation: true))
     }
 
+    // MARK: - Summary backend persistence
+
+    /// Runs onboarding's summary write the way `completeOnboarding` does: decide, apply,
+    /// then the lock that `updateConfig` enforces.
+    private func completeOnboarding(
+        from config: AppConfig,
+        selection: MeetingSummaryBackendOption,
+        userPicked: Bool,
+        claudeCodeReady: Bool = false,
+        apiKey: String? = nil,
+        anthropicWorkspaceID: String? = nil
+    ) -> AppConfig {
+        var result = config
+        let choice = OnboardingFlow.summaryBackendToPersist(
+            selection: selection, userPicked: userPicked, claudeCodeReady: claudeCodeReady
+        )
+        result.applyOnboardingSummaryChoice(
+            choice, apiKey: apiKey, anthropicWorkspaceID: anthropicWorkspaceID,
+            retainLegacyOpenRouterKey: false
+        )
+        result.enforceSummaryBackendLock()
+        return result
+    }
+
+    @Test("fresh install without a pick keeps the default backend")
+    func freshInstallWithoutPickKeepsDefault() {
+        let result = completeOnboarding(from: AppConfig(), selection: .chatGPT, userPicked: false)
+        #expect(result.meetingSummaryBackend == AppConfig().meetingSummaryBackend)
+    }
+
+    @Test("re-running onboarding without a pick keeps the backend chosen in Settings")
+    func rerunWithoutPickKeepsSettingsBackend() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        config.openAIAPIKey = "sk-existing"
+        let result = completeOnboarding(from: config, selection: .chatGPT, userPicked: false)
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+        #expect(result.openAIAPIKey == "sk-existing")
+    }
+
+    @Test("re-running onboarding without a pick keeps a Custom LLM endpoint")
+    func rerunWithoutPickKeepsCustomLLM() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+        config.customLLMURL = "http://127.0.0.1:8080/v1/chat/completions"
+        config.customLLMModel = "local-model"
+        let result = completeOnboarding(from: config, selection: .chatGPT, userPicked: false)
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+        #expect(result.customLLMURL == config.customLLMURL)
+        #expect(result.customLLMModel == config.customLLMModel)
+    }
+
+    @Test("an explicit pick in onboarding replaces the configured backend and stores its key")
+    func explicitPickReplacesBackend() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+        let result = completeOnboarding(
+            from: config, selection: .anthropic, userPicked: true,
+            apiKey: "sk-ant-new", anthropicWorkspaceID: " ws-1 "
+        )
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.anthropic.backend)
+        #expect(result.anthropicAPIKey == "sk-ant-new")
+        #expect(result.anthropicWorkspaceID == "ws-1")
+    }
+
+    @Test("an unpicked selection never writes a typed key or workspace")
+    func noPickWritesNoCredentials() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+        let result = completeOnboarding(
+            from: config, selection: .anthropic, userPicked: false,
+            apiKey: "sk-ant-new", anthropicWorkspaceID: "ws-1"
+        )
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+        #expect(result.anthropicAPIKey.isEmpty)
+        #expect(result.anthropicWorkspaceID.isEmpty)
+    }
+
+    @Test("Claude Code configured but not installed stays configured instead of falling back to ChatGPT")
+    func uninstalledClaudeCodeStaysConfigured() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.claudeCode.backend
+        // The view displays ChatGPT when Claude Code is missing; that fallback is not a pick.
+        let result = completeOnboarding(from: config, selection: .chatGPT, userPicked: false)
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.claudeCode.backend)
+    }
+
+    @Test("picking Claude Code without a signed-in CLI writes nothing")
+    func claudeCodePickWithoutSignInWritesNothing() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        let result = completeOnboarding(
+            from: config, selection: .claudeCode, userPicked: true, claudeCodeReady: false
+        )
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+    }
+
+    @Test("picking a signed-in Claude Code is persisted")
+    func claudeCodePickWithSignInPersists() {
+        let result = completeOnboarding(
+            from: AppConfig(), selection: .claudeCode, userPicked: true, claudeCodeReady: true
+        )
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.claudeCode.backend)
+    }
+
+    @Test("a locked backend survives an explicit onboarding pick")
+    func lockSurvivesExplicitPick() {
+        var config = AppConfig()
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+        config.lockedSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+        let result = completeOnboarding(from: config, selection: .chatGPT, userPicked: true)
+        #expect(result.meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+    }
+
     @Test("extreme ETA values are omitted instead of overflowing")
     func extremeETAReturnsUnknown() {
         #expect(ModelDownloadDisplayFormatting.eta(Double.greatestFiniteMagnitude) == nil)
