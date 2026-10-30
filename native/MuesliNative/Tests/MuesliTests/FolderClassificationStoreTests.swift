@@ -319,6 +319,42 @@ struct FolderClassificationStoreTests {
         #expect(try fixture.memory(.series, "s1").isEmpty)
     }
 
+    @Test("auto-filing into a private folder marks the meeting for sync so iCloud gets a tombstone")
+    func autoApplyIntoPrivateFolderMarksDirty() throws {
+        let fixture = try FolderClassificationFixture()
+        let legal = try fixture.store.createFolder(name: "Legal")
+        let cases = try fixture.store.createFolder(name: "Cases", parentID: legal)
+        let rush = try fixture.store.createFolder(name: "Rush")
+        try fixture.store.setFolderPrivate(id: legal, isPrivate: true)
+        let privateTarget = try fixture.meeting()
+        let plainTarget = try fixture.meeting()
+
+        func syncState(_ id: Int64) throws -> (dirty: Int64, updatedAt: Double) {
+            var db: OpaquePointer?
+            guard sqlite3_open(fixture.store.resolvedDatabaseURL.path, &db) == SQLITE_OK else { return (-1, -1) }
+            defer { sqlite3_close(db) }
+            var statement: OpaquePointer?
+            sqlite3_prepare_v2(db, "SELECT sync_dirty, updated_at FROM meetings WHERE id = \(id)", -1, &statement, nil)
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else { return (-1, -1) }
+            return (sqlite3_column_int64(statement, 0), sqlite3_column_double(statement, 1))
+        }
+        var db: OpaquePointer?
+        #expect(sqlite3_open(fixture.store.resolvedDatabaseURL.path, &db) == SQLITE_OK)
+        #expect(sqlite3_exec(db, "UPDATE meetings SET sync_dirty = 0, updated_at = 100", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(db)
+
+        #expect(try fixture.classification.autoApply(meetingID: privateTarget, candidate: candidate(cases)))
+        #expect(try fixture.classification.autoApply(meetingID: plainTarget, candidate: candidate(rush)))
+
+        let flipped = try syncState(privateTarget)
+        #expect(flipped.dirty == 1)
+        #expect(flipped.updatedAt > 100)
+        let untouched = try syncState(plainTarget)
+        #expect(untouched.dirty == 0)
+        #expect(untouched.updatedAt == 100)
+    }
+
     @Test("auto-apply never moves a meeting that already has a folder")
     func autoApplyRespectsExistingFolder() throws {
         let fixture = try FolderClassificationFixture()
