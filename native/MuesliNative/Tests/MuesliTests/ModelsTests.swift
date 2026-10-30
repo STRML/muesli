@@ -128,6 +128,42 @@ struct BackendOptionTests {
         #expect(reason?.contains("macOS 26") == true)
     }
 
+    @Test("Qwen3 ASR is offered through macOS 26 and unusable from macOS 27, where it fails to load")
+    func qwen3AsrBlockedFromMacOS27() {
+        let macOS27 = OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 1)
+        #expect(BackendOption.qwen3Asr.isCompatible(currentOSVersion: Self.macOS26))
+        #expect(BackendOption.qwen3Asr.incompatibilityReason(currentOSVersion: Self.macOS26) == nil)
+        #expect(!BackendOption.qwen3Asr.isCompatible(currentOSVersion: macOS27))
+        #expect(BackendOption.qwen3Asr.incompatibilityReason(currentOSVersion: macOS27)?
+            .contains("does not load on macOS 27") == true)
+        #expect(BackendOption.compatibleOptions(BackendOption.experimental, currentOSVersion: Self.macOS26)
+            .contains(.qwen3Asr))
+        #expect(BackendOption.compatibleOptions(BackendOption.experimental, currentOSVersion: macOS27)
+            == BackendOption.experimental.filter { $0 != .qwen3Asr })
+        #expect(BackendOption.parakeetUnified.isCompatible(currentOSVersion: macOS27))
+    }
+
+    @Test("a downloaded Qwen3 ASR stays deletable on macOS 27 and is replaced as a saved selection")
+    func qwen3AsrCachedAndSavedOnMacOS27() {
+        let macOS27 = OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 1)
+        #expect(BackendOption.incompatibleDownloadedOptions([BackendOption.qwen3Asr.model], currentOSVersion: macOS27)
+            == [.qwen3Asr])
+        #expect(BackendOption.incompatibleDownloadedOptions([BackendOption.qwen3Asr.model], currentOSVersion: Self.macOS26)
+            .isEmpty)
+
+        var config = AppConfig()
+        config.sttBackend = BackendOption.qwen3Asr.backend
+        config.sttModel = BackendOption.qwen3Asr.model
+        let changed = BackendOption.normalizeRestoredSelections(
+            in: &config,
+            downloadedOptions: [.qwen3Asr, .parakeetUnified],
+            currentOSVersion: macOS27
+        )
+        #expect(changed)
+        #expect(config.sttBackend == BackendOption.parakeetUnified.backend)
+        #expect(config.sttModel == BackendOption.parakeetUnified.model)
+    }
+
     @Test(
         "baseline backends are compatible on supported macOS 14 versions",
         arguments: [

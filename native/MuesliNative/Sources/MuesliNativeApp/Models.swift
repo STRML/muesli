@@ -388,7 +388,24 @@ struct BackendOption: Equatable {
         }
     }
 
+    /// First macOS major version on which this model is known not to load, or nil if none.
+    var unsupportedFromOSMajorVersion: Int? {
+        switch backend {
+        case "qwen":
+            // The Qwen3 ASR 0.6B CoreML export fails to load on macOS 27.0.1: the stateful decoder
+            // hits an `mps_spi.sdpa` mask mismatch (mask 1x1x1x53 vs key cache length 0) and the
+            // ANE/CPU fallback returns error -14. It needs a re-export. Only 27.0.1 was observed;
+            // 26.x is unconfirmed, so the model stays offered there.
+            return 27
+        default:
+            return nil
+        }
+    }
+
     func isCompatible(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> Bool {
+        if let ceiling = unsupportedFromOSMajorVersion, currentOSVersion.majorVersion >= ceiling {
+            return false
+        }
         let minimum = minimumOSVersion
         return (currentOSVersion.majorVersion, currentOSVersion.minorVersion, currentOSVersion.patchVersion)
             >= (minimum.majorVersion, minimum.minorVersion, minimum.patchVersion)
@@ -397,6 +414,9 @@ struct BackendOption: Equatable {
     /// Applies even to installed models; download state does not establish OS compatibility.
     func incompatibilityReason(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> String? {
         guard !isCompatible(currentOSVersion: currentOSVersion) else { return nil }
+        if let ceiling = unsupportedFromOSMajorVersion, currentOSVersion.majorVersion >= ceiling {
+            return "\(label) does not load on macOS \(ceiling) or later yet. Choose another model."
+        }
         let minimum = minimumOSVersion
         let required = minimum.minorVersion == 0 ? "\(minimum.majorVersion)" : Self.label(for: minimum)
         return "\(label) requires macOS \(required) or later (you're on macOS \(Self.label(for: currentOSVersion)))."
