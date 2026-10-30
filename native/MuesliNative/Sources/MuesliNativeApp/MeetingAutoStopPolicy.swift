@@ -45,45 +45,76 @@ enum MeetingSignalLossResponse: Equatable {
     case warnOnly
 }
 
+/// What to do about a recording whose call signal is gone.
+enum MeetingSignalLossAction: Equatable {
+    case none
+    /// First loss: raise the persistent sidebar alert and show the toast.
+    case raiseAlertAndToast
+    /// The alert is already up; show the toast again.
+    case reofferToast
+}
+
+/// The user-facing side of signal loss for one recording. The recording is never stopped from
+/// here: this only decides when to tell the user, and what stays on screen until they answer.
 struct MeetingSignalLossPromptState: Equatable {
-    private(set) var isPromptSuppressed = false
+    /// How long a toast the user did not answer stays quiet before it is offered again.
+    static let reofferInterval: TimeInterval = 5 * 60
+
+    private var isAlertRaised = false
     private(set) var isDismissedForRecording = false
+    private var lastOfferedAt: Date?
     private(set) var lastTranscriptActivityAt: Date?
 
-    var canPresentPrompt: Bool {
-        !isPromptSuppressed && !isDismissedForRecording
-    }
+    /// The sidebar shows "Call ended?" while this holds. It stays until the user stops or
+    /// dismisses, or the call signal returns.
+    var isCallEndedAlertActive: Bool { isAlertRaised }
 
     mutating func resetForRecording() {
-        isPromptSuppressed = false
-        isDismissedForRecording = false
-        lastTranscriptActivityAt = nil
+        self = MeetingSignalLossPromptState()
     }
 
     mutating func noteTranscriptActivity(now: Date) {
         lastTranscriptActivityAt = now
     }
 
+    /// Speech from the remote side is evidence that the call is still going. The user's own
+    /// voice is not: the mic keeps hearing them after the call ends.
+    mutating func noteTranscriptActivity(from speaker: String, now: Date) {
+        guard speaker != Self.ownVoiceSpeakerLabel else { return }
+        noteTranscriptActivity(now: now)
+    }
+
+    static let ownVoiceSpeakerLabel = "You"
+
     func hasRecentTranscriptActivity(now: Date, quietPeriod: TimeInterval) -> Bool {
         guard let lastTranscriptActivityAt else { return false }
         return now.timeIntervalSince(lastTranscriptActivityAt) < quietPeriod
     }
 
-    mutating func markPromptPresented() {
-        isPromptSuppressed = true
+    /// Call on every observation in which the source is gone past its grace period.
+    mutating func evaluateSignalLoss(now: Date, transcriptQuietPeriod: TimeInterval) -> MeetingSignalLossAction {
+        guard !isDismissedForRecording,
+              !hasRecentTranscriptActivity(now: now, quietPeriod: transcriptQuietPeriod) else {
+            return .none
+        }
+        guard isAlertRaised, let lastOfferedAt else {
+            isAlertRaised = true
+            lastOfferedAt = now
+            return .raiseAlertAndToast
+        }
+        guard now.timeIntervalSince(lastOfferedAt) >= Self.reofferInterval else { return .none }
+        self.lastOfferedAt = now
+        return .reofferToast
     }
 
     mutating func markSourceRecovered() {
-        isPromptSuppressed = false
+        isAlertRaised = false
+        lastOfferedAt = nil
     }
 
     mutating func markDismissedByUser() {
-        isPromptSuppressed = true
+        isAlertRaised = false
         isDismissedForRecording = true
-    }
-
-    mutating func markAutoDismissed() {
-        isPromptSuppressed = true
     }
 }
 

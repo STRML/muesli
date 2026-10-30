@@ -189,6 +189,7 @@ case "${shard}" in
       MeetingContactIdentityTests
       MeetingContactResolverTests
       MeetingDetectorTests
+      MeetingSignalLossAlertTests
       MeetingParticipantStoreTests
       MeetingProcessingStageTests
       MeetingRecordingWriterTests

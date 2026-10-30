@@ -71,7 +71,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func updateMenuBarTitle() {
         let detail: String?
-        if let countdownOverride {
+        if controller.appState.isMeetingCallEnded {
+            // Visible even with the main window closed; the menu below has Stop.
+            detail = "Call ended?"
+        } else if let countdownOverride {
             detail = countdownOverride
         } else if controller.config.showNextMeetingInMenuBar {
             let now = Date()

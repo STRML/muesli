@@ -83,6 +83,8 @@ enum MuesliTheme {
 
     static let recording        = Color(hex: 0xEF4444)
     static let transcribing     = Color(hex: 0xF59E0B)
+    /// Something needs an answer from the user (the call a recording followed has ended).
+    static let attention        = Color(hex: 0xF59E0B)
     static let success          = Color(hex: 0x34D399)
 
     // MARK: - Typography — Nunito Sans, matching muesli.works
