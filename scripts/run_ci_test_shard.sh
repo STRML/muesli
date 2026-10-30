@@ -222,6 +222,11 @@ case "${shard}" in
       MeetingNotesInlineMarkdownTests
       TranscriptFormatterTests
       TranscriptReconcilerTests
+      LiveSpeakerLabelerTests
+      LiveSpeakerLabelSessionTests
+      LiveSpeakerSupportTests
+      LiveSpeakerResampleTests
+      LiveSpeakerRealModelSmokeTests
       SpeakerAttributionTests
       MeetingSummaryBackendTests
       MeetingResummarizationPolicyTests
