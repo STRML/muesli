@@ -106,6 +106,36 @@ struct MeetingVideoStoreTests {
         }
     }
 
+    @Test func legacyVideoOfDeletedMeetingIsRetired() throws {
+        try withStore { store, db, root in
+            let legacy = try VisualMemoryStore(root: root.appendingPathComponent("legacy"))
+            let deleted = VisualMemoryItem(kind: .meetingVideo, meetingID: 42, source: "Display", path: "deleted.mp4")
+            try Data([1]).write(to: legacy.url(for: deleted.path))
+            try legacy.save([deleted])
+            #expect(sqlite3_exec(db, "UPDATE meetings SET deleted_at=1 WHERE id=42", nil, nil, nil) == SQLITE_OK)
+            try store.migrateLegacyVideos(from: legacy)
+            #expect(try store.items().isEmpty)
+            #expect(try legacy.items().isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: try legacy.url(for: deleted.path).path))
+            #expect(!FileManager.default.fileExists(atPath: try store.url(for: deleted.path).path))
+        }
+    }
+
+    @Test func legacyVideoOfDeletedMeetingDoesNotBlockLiveOnes() throws {
+        try withStore { store, db, root in
+            #expect(sqlite3_exec(db, "INSERT INTO meetings VALUES(7,1)", nil, nil, nil) == SQLITE_OK)
+            let legacy = try VisualMemoryStore(root: root.appendingPathComponent("legacy"))
+            let deleted = VisualMemoryItem(kind: .meetingVideo, meetingID: 7, source: "Display", path: "deleted.mp4")
+            let live = VisualMemoryItem(kind: .meetingVideo, meetingID: 42, source: "Display", path: "live.mp4")
+            try Data([1]).write(to: legacy.url(for: deleted.path))
+            try Data([2]).write(to: legacy.url(for: live.path))
+            try legacy.save([deleted, live])
+            try store.migrateLegacyVideos(from: legacy)
+            #expect(try store.items().map(\.id) == [live.id])
+            #expect(try legacy.items().isEmpty)
+        }
+    }
+
     @Test func interruptedCaptureIsOwnedAndRecoveredOnlyAfterFinalization() throws {
         try withStore { store, _, _ in
             let item = VisualMemoryItem(kind: .meetingVideo, meetingID: 42, source: "Display", path: "interrupted.mp4")

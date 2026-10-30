@@ -227,6 +227,8 @@ public extension MeetingVideoStore {
             var copied: URL?
             var committed = false
             do {
+                // A clip of a deleted meeting can never be saved; retire it as the soft-delete trigger would.
+                if try ownerWasDeleted(item) { try legacy.delete(ids: [item.id]); continue }
                 let source = try legacy.url(for: item.path)
                 let destination = try url(for: item.path)
                 if FileManager.default.fileExists(atPath: destination.path) {
@@ -245,5 +247,17 @@ public extension MeetingVideoStore {
             }
         }
         if let firstError { throw firstError }
+    }
+
+    private func ownerWasDeleted(_ item: VisualMemoryItem) throws -> Bool {
+        guard let meetingID = item.meetingID else { return false }
+        lock.lock(); defer { lock.unlock() }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT 1 FROM meetings WHERE id=? AND deleted_at IS NOT NULL", -1, &stmt, nil) == SQLITE_OK else { throw failure() }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, meetingID)
+        let status = sqlite3_step(stmt)
+        guard status == SQLITE_ROW || status == SQLITE_DONE else { throw failure() }
+        return status == SQLITE_ROW
     }
 }
