@@ -194,6 +194,7 @@ case "${shard}" in
       MeetingRecordingWriterTests
       MeetingRecordingTranscriberTests
       MeetingResumePolicyTests
+      MeetingCallEndDetectionTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
       MeetingFollowUpThreadTests
