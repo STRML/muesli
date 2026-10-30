@@ -2007,15 +2007,18 @@ struct MeetingsNavigationTests {
         #expect(controller.hostedDictationSessionPresenceForTesting.finalizing)
         #expect(controller.selectedDictationProvider == .local)
         #expect(controller.dictationBackendReadiness == .preparing)
-        #expect(controller.selectedMeetingSummaryBackend == .openAI)
-        #expect(controller.config.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+        // Sign-out never picks another summary provider. The next summary
+        // hits the existing not-configured path instead of going to OpenAI.
+        #expect(controller.selectedMeetingSummaryBackend == .openRouter)
+        #expect(controller.config.meetingSummaryBackend == MeetingSummaryBackendOption.openRouter.backend)
+        #expect(!controller.canUseSummaryProvider(.openRouter))
         #expect(controller.selectedPostProcessorBackend == .local)
         #expect(controller.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
         #expect(controller.config.quilBackend == TranscriptCleanupBackendOption.local.backend)
         #expect(controller.config.quilModel == PostProcessorOption.defaultQuilOption.id)
 
         let persisted = configStore.load()
-        #expect(persisted.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+        #expect(persisted.meetingSummaryBackend == MeetingSummaryBackendOption.openRouter.backend)
         #expect(persisted.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
         #expect(persisted.quilBackend == TranscriptCleanupBackendOption.local.backend)
         #expect(persisted.resolvedDictationProvider == .local)
