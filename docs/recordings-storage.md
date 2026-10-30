@@ -27,6 +27,8 @@ meeting at a time, until it is under budget. It skips a meeting that:
 A file is removed only if it is inside the recordings folder. A file shared with a protected meeting
 stays. Files are deleted, not moved to the Trash, because a trashed file keeps using the space.
 
+Meeting screen recordings (video) are not counted toward the budget and are never removed by it.
+
 The meeting keeps its transcript and notes. Each removal is logged
 in the `recording_prune_log` table with the meeting id, path and size.
 
