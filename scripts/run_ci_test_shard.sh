@@ -58,6 +58,9 @@ case "${shard}" in
       OpenAILogoShapeTests
       StandardMenuShortcutTests
       LocalStorageUsageTests
+      RecordingRetentionPlannerTests
+      RecordingRetentionServiceTests
+      RecordingRetentionSchemaTests
       MeetingVideoStoreTests
       VisualMemoryStoreTests
       MeetingVideoAudioTests
