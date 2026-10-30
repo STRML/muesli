@@ -122,6 +122,21 @@ struct PrivateMeetingsStoreTests {
         #expect(try store.privateMeetingIDs() == [direct, inherited])
     }
 
+    @Test("isFolderPrivate covers the folder, its subfolders, and nothing else")
+    func folderPrivacyLookup() throws {
+        let store = try makeStore()
+        let root = try store.createFolder(name: "Legal")
+        let child = try store.createFolder(name: "Cases", parentID: root)
+        let other = try store.createFolder(name: "Work")
+
+        #expect(try store.isFolderPrivate(id: child) == false)
+        try store.setFolderPrivate(id: root, isPrivate: true)
+        #expect(try store.isFolderPrivate(id: root))
+        #expect(try store.isFolderPrivate(id: child))
+        #expect(try store.isFolderPrivate(id: other) == false)
+        #expect(try store.isFolderPrivate(id: 9_999) == false)
+    }
+
     // MARK: - Folder inheritance (F6, F7, F8)
 
     @Test("a meeting in a private folder is private")

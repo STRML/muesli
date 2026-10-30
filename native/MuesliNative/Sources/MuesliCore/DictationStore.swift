@@ -4173,6 +4173,34 @@ public final class DictationStore {
         return sqlite3_column_int(statement, 0) != 0
     }
 
+    /// A folder is private when it or any ancestor is flagged. Unknown ids are not private.
+    /// A meeting filed into a private folder is private, so a caller about to create one
+    /// there can ask before any content leaves the Mac.
+    public func isFolderPrivate(id: Int64) throws -> Bool {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        WITH RECURSIVE ancestors(id) AS (
+            SELECT ?1
+            UNION
+            SELECT f.parent_id FROM meeting_folders f
+            JOIN ancestors a ON f.id = a.id
+            WHERE f.parent_id IS NOT NULL
+        )
+        SELECT EXISTS(SELECT 1 FROM meeting_folders WHERE is_private = 1 AND id IN (SELECT id FROM ancestors))
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, id)
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw lastError(db)
+        }
+        return sqlite3_column_int(statement, 0) != 0
+    }
+
     /// Every private meeting id, including meetings that are private only through a folder.
     public func privateMeetingIDs() throws -> Set<Int64> {
         let db = try openDatabase()

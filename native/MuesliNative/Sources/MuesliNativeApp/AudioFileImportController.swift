@@ -217,9 +217,12 @@ enum AudioFileImportController {
         try Task.checkCancellation()
 
         let wordCount = DictationStore.countWords(in: diarizedTranscript)
+        // An import filed into a private folder is a private meeting from the moment it is saved.
+        let isPrivateMeeting = await controller.isFolderPrivateFailingClosed(id: folderID)
         let generatedTitle: String
         progress("Generating title...")
-        if let autoTitle = await MeetingSummaryClient.generateTitle(transcript: diarizedTranscript, config: config),
+        if let autoTitle = await MeetingSummaryClient.generateTitle(
+            transcript: diarizedTranscript, config: config, isPrivateMeeting: isPrivateMeeting),
            !autoTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             generatedTitle = autoTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
@@ -238,7 +241,8 @@ enum AudioFileImportController {
                 config: config,
                 template: templateSnapshot,
                 existingNotes: nil,
-                manualNotesToRetain: ""
+                manualNotesToRetain: "",
+                isPrivateMeeting: isPrivateMeeting
             )
         } catch {
             fputs("[import] summary generation failed: \(error)\n", stderr)

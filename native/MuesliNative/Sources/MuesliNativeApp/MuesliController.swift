@@ -6122,6 +6122,17 @@ public final class MuesliController: NSObject {
         }
     }
 
+    /// Whether a meeting filed into this folder would be private. Same fail-closed rule.
+    func isFolderPrivateFailingClosed(id folderID: Int64?) -> Bool {
+        guard let folderID else { return false }
+        do {
+            return try dictationStore.isFolderPrivate(id: folderID)
+        } catch {
+            fputs("[muesli-native] private-folder lookup failed, treating folder \(folderID) as private: \(error.localizedDescription)\n", stderr)
+            return true
+        }
+    }
+
     func resummarize(meeting: MeetingRecord, summaryConfig: AppConfig? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         let templateSnapshot = meetingTemplateSnapshot(for: meeting)
         resummarize(meeting: meeting, using: templateSnapshot, summaryConfig: summaryConfig, completion: completion)
