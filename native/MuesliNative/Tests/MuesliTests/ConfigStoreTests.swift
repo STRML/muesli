@@ -48,6 +48,35 @@ struct ConfigStoreTests {
         #expect(loaded.meetingSummaryBackend == "openrouter")
     }
 
+    @Test("a locked summary backend is restored on save and on load")
+    func lockedSummaryBackendIsEnforced() throws {
+        let supportDirectory = makeSupportDirectory(label: "summary-lock")
+        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+        let store = ConfigStore(supportDirectory: supportDirectory)
+
+        var config = AppConfig()
+        config.lockedSummaryBackend = MeetingSummaryBackendOption.customLLM.backend
+        config.meetingSummaryBackend = MeetingSummaryBackendOption.chatGPT.backend
+        store.save(config)
+        #expect(store.load().meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+
+        // A file edited behind the app's back is also pulled back to the pinned backend.
+        let configURL = store.configPath()
+        var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any])
+        json["meeting_summary_backend"] = MeetingSummaryBackendOption.openAI.backend
+        try JSONSerialization.data(withJSONObject: json).write(to: configURL)
+        let loaded = store.load()
+        #expect(loaded.lockedSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+        #expect(loaded.meetingSummaryBackend == MeetingSummaryBackendOption.customLLM.backend)
+
+        // Without a lock nothing is pinned.
+        var unlocked = loaded
+        unlocked.lockedSummaryBackend = ""
+        unlocked.meetingSummaryBackend = MeetingSummaryBackendOption.openAI.backend
+        store.save(unlocked)
+        #expect(store.load().meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+    }
+
     @Test("config path honors the isolated support directory")
     func configPath() {
         let supportDirectory = makeSupportDirectory(label: "path")

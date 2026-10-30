@@ -2239,6 +2239,14 @@ enum CotypistWordPause: String, Codable, CaseIterable {
     }
 }
 
+extension AppConfig {
+    /// Reverts any change to the summary backend while `lockedSummaryBackend` is set.
+    mutating func enforceSummaryBackendLock() {
+        let locked = lockedSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
+    }
+}
+
 struct AppConfig: Codable {
     var dictationHotkey: HotkeyConfig = .default
     var enablePushToTalk: Bool = true
@@ -2425,6 +2433,10 @@ struct AppConfig: Codable {
     var autoExportMarkdownFolderPath: String = ""
     var autoExportMarkdownContent: String = MeetingExportContent.notes.rawValue
     var autoExportFileFormat: String = MeetingAutoExportFileFormat.markdown.rawValue
+    /// When non-empty, `meetingSummaryBackend` is pinned to this id. Any writer that sets a different
+    /// backend (onboarding, a sign-in, a settings tool) is reverted, so meeting text only goes where
+    /// you chose. There is no UI for it: set `locked_summary_backend` in config.json.
+    var lockedSummaryBackend: String = ""
     var iCloudSyncEnabled: Bool = false
     var showIOSCompanionPrompt: Bool = true
     var contributionPromptNextWordCount: Int?
@@ -2592,6 +2604,7 @@ struct AppConfig: Codable {
         case autoExportMarkdownFolderPath = "auto_export_markdown_folder_path"
         case autoExportMarkdownContent = "auto_export_markdown_content"
         case autoExportFileFormat = "auto_export_file_format"
+        case lockedSummaryBackend = "locked_summary_backend"
         case iCloudSyncEnabled = "icloud_sync_enabled"
         case showIOSCompanionPrompt = "show_ios_companion_prompt"
         case contributionPromptNextWordCount = "contribution_prompt_next_word_count"
@@ -2883,6 +2896,7 @@ struct AppConfig: Codable {
         autoExportMarkdownContent = MeetingExportContent(rawValue: decodedAutoExportMarkdownContent)?.rawValue ?? defaults.autoExportMarkdownContent
         let decodedAutoExportFileFormat = (try? c.decode(String.self, forKey: .autoExportFileFormat)) ?? defaults.autoExportFileFormat
         autoExportFileFormat = MeetingAutoExportFileFormat(rawValue: decodedAutoExportFileFormat)?.rawValue ?? defaults.autoExportFileFormat
+        lockedSummaryBackend = (try? c.decode(String.self, forKey: .lockedSummaryBackend)) ?? defaults.lockedSummaryBackend
         contributionPromptNextWordCount = try? c.decode(Int.self, forKey: .contributionPromptNextWordCount)
         contributionPromptNextMeetingCount = try? c.decode(Int.self, forKey: .contributionPromptNextMeetingCount)
         contributionGitHubStarClicked = (try? c.decode(Bool.self, forKey: .contributionGitHubStarClicked)) ?? defaults.contributionGitHubStarClicked

@@ -1811,6 +1811,7 @@ public final class MuesliController: NSObject {
         let previousEnableDictionaryCorrectionPrompts = config.enableDictionaryCorrectionPrompts
         let previousEnableLiveStreamingPartials = config.enableLiveStreamingPartials
         mutate(&config)
+        config.enforceSummaryBackendLock()
         BackendOption.normalizeRestoredSelections(
             in: &config,
             downloadedOptions: downloadedBackendOptions(),
