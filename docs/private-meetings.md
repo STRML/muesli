@@ -9,7 +9,7 @@ have said that a specific service may receive it.
 |---|---|
 | Meeting summary and title generation | Skipped unless the selected backend is allowed for private meetings. The transcript is kept and the meeting shows why no summary was made. An audio file imported into a private folder is treated the same way. |
 | Ask Meetings (chat) | Excluded from retrieval, search, browse and read tools, even when attached explicitly. A chat whose earlier answers cite a private meeting refuses to continue on a backend that is not allowed. |
-| Auto-export | Never written. |
+| Auto-export | Never written. In "keep notes up to date" mode, an exported note is removed when the meeting becomes private. |
 | `muesli-cli` | `meetings list` and `meetings get` return the title and timing with `isPrivate: true` and no transcript, notes, audio paths or context. `meetings update-notes` refuses. |
 | iCloud sync | Content is not uploaded. A copy that reached iCloud before the meeting became private is replaced with a deletion marker, so it also leaves your other devices. The meeting stays on this Mac. Un-marking it uploads it again. |
 
@@ -38,5 +38,6 @@ A failed privacy lookup counts as private, so an error can only withhold content
 
 ## Limits
 
-- Marking a meeting private does not recall a file that auto-export wrote before it was marked.
+- Marking a meeting private does not recall a file that auto-export wrote before it was marked,
+  except in "keep notes up to date" mode, which removes the note.
 - Meeting titles are visible in CLI output so a meeting can still be found.
