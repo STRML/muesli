@@ -7524,12 +7524,13 @@ public final class MuesliController: NSObject {
         activeMeetingAudioWarning = nil
         syncAppState()
 
+        let resumeOrigin = MeetingResumePolicy.startOrigin(hasCalendarEvent: meeting.calendarEventID != nil)
         armMeetingAutoStop(
-            source: MeetingRecordingStartOrigin.manual.signalLossSource(
+            source: resumeOrigin.signalLossSource(
                 explicitSource: nil,
                 recentSource: recentMeetingAutoStopSource()
             ),
-            response: MeetingRecordingStartOrigin.manual.signalLossResponse
+            response: resumeOrigin.signalLossResponse
         )
 
         cancelDictationAudioSessionForMeetingRecordingIfNeeded()
