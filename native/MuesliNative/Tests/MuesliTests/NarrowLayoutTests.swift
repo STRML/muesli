@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Testing
+import MuesliCore
 @testable import MuesliNativeApp
 
 /// A window narrow enough to show a meeting list beside the sidebar leaves a pane of about 240 pt.
@@ -39,5 +40,29 @@ struct NarrowLayoutTests {
     func recordSourceFilterFitsNarrowPane() {
         let picker = RecordOriginPicker(selection: .constant(.all))
         #expect(width(of: picker, proposed: 240) <= 240)
+    }
+
+    @Test("a dictation row fits a 240 pt pane")
+    func dictationRowFitsNarrowPane() {
+        let record = DictationRecord(
+            id: 1, timestamp: "2026-10-15T12:00:00Z", durationSeconds: 9,
+            rawText: "Remind me to send the revised term sheet to the lender once legal signs off on the covenant language.",
+            appContext: "", wordCount: 18, targetAppName: "Notes", targetAppBundleID: "com.apple.Notes"
+        )
+        let row = DictationRowView(record: record, timeOnly: "12:00", onCopy: {}, onDelete: {})
+        #expect(width(of: row, proposed: 240) <= 240)
+    }
+
+    @Test("the stat cards fit a 240 pt pane")
+    func statCardsFitNarrowPane() {
+        let header = StatsHeaderView(
+            dictationStats: DictationStats(
+                totalWords: 123_456, totalSessions: 321, averageWordsPerSession: 38,
+                averageWPM: 140, currentStreakDays: 12, longestStreakDays: 30
+            ),
+            meetingStats: MeetingStats(totalWords: 98_765, totalMeetings: 40, averageWPM: 120),
+            onSelect: { _ in }
+        )
+        #expect(width(of: header, proposed: 240) <= 240)
     }
 }

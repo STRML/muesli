@@ -175,60 +175,85 @@ struct IPhoneBridgeCard: View {
     @State private var isReconnectConfirmationPresented = false
     @State private var isResetConfirmationPresented = false
 
-    var body: some View {
-        HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-            RotatingSyncIcon(
-                systemName: bridgeIcon,
-                isAnimating: bridgeSyncIconIsAnimating,
-                font: .system(size: 18, weight: .semibold)
-            )
-            .foregroundStyle(bridgeIconColor)
-            .frame(width: 28)
+    private var bridgeIconView: some View {
+        RotatingSyncIcon(
+            systemName: bridgeIcon,
+            isAnimating: bridgeSyncIconIsAnimating,
+            font: .system(size: 18, weight: .semibold)
+        )
+        .foregroundStyle(bridgeIconColor)
+        .frame(width: 28)
+    }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bridgeTitle)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                Text(bridgeSubtitle)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .lineLimit(2)
+    private var bridgeText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(bridgeTitle)
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textPrimary)
+            Text(bridgeSubtitle)
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .lineLimit(2)
+        }
+    }
+
+    private var bridgePrimaryButton: some View {
+        Button(action: primaryAction) {
+            HStack(spacing: 6) {
+                Text(buttonTitle)
+                RotatingSyncIcon(
+                    systemName: buttonIcon,
+                    isAnimating: buttonIconIsAnimating,
+                    font: .system(size: 12, weight: .semibold)
+                )
             }
+            .font(MuesliTheme.font(size: 12, weight: .semibold))
+            .foregroundStyle(MuesliTheme.accent)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(MuesliTheme.accentSubtle)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .disabled(actionDisabled)
+        .help(buttonHelp)
+    }
 
-            Spacer(minLength: MuesliTheme.spacing12)
+    private var bridgeDismissButton: some View {
+        Button {
+            controller.updateConfig { $0.showIOSCompanionPrompt = false }
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .frame(width: 28, height: 28)
 
-            Button(action: primaryAction) {
-                HStack(spacing: 6) {
-                    Text(buttonTitle)
-                    RotatingSyncIcon(
-                        systemName: buttonIcon,
-                        isAnimating: buttonIconIsAnimating,
-                        font: .system(size: 12, weight: .semibold)
-                    )
-                }
-                .font(MuesliTheme.font(size: 12, weight: .semibold))
-                .foregroundStyle(MuesliTheme.accent)
-                .padding(.horizontal, 12)
-                .frame(height: 28)
-                .background(MuesliTheme.accentSubtle)
                 .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
-            }
-            .buttonStyle(.plain)
-            .disabled(actionDisabled)
-            .help(buttonHelp)
+        }
+        .buttonStyle(.plain)
+        .help("Hide iOS companion prompt")
+    }
 
-            Button {
-                controller.updateConfig { $0.showIOSCompanionPrompt = false }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .frame(width: 28, height: 28)
-
-                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                bridgeIconView
+                bridgeText
+                Spacer(minLength: MuesliTheme.spacing12)
+                bridgePrimaryButton
+                bridgeDismissButton
             }
-            .buttonStyle(.plain)
-            .help("Hide iOS companion prompt")
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                    bridgeIconView
+                    bridgeText
+                }
+                HStack(spacing: MuesliTheme.spacing8) {
+                    bridgePrimaryButton
+                    Spacer(minLength: 0)
+                    bridgeDismissButton
+                }
+            }
         }
         .padding(.horizontal, MuesliTheme.spacing12)
         .padding(.vertical, MuesliTheme.spacing8)
