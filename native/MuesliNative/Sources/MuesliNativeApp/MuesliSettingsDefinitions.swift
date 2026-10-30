@@ -517,6 +517,7 @@ extension MuesliController {
 
         toggle("meeting_hover_transcript", "Show meeting transcript on hover", \.showMeetingTranscriptOnIndicatorHover)
         toggle("auto_record_meetings", "Auto-record calendar meetings", \.autoRecordMeetings)
+        toggle("read_call_participants", "Read participant names from calls", \.readCallParticipants)
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
         toggle("meeting_reminders", "Scheduled meeting notifications", \.showScheduledMeetingNotifications)
         toggle("calendar_meeting_links_only", "Only show events with a meeting link", \.calendarMeetingLinksOnly,

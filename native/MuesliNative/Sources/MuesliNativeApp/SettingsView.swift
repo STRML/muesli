@@ -2436,6 +2436,13 @@ struct SettingsView: View {
                     settingsControl("auto_record_meetings")
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
+                settingsCompactRow(
+                    "Read participant names from calls",
+                    description: "While recording a Google Meet call in your browser, read the names shown on the call page and add them to the meeting's participants, which your summary model receives. Only the call's own tab is read, and only while it is in front."
+                ) {
+                    settingsControl("read_call_participants")
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Save meeting recording") {
                     settingsControl("recording_policy")
                 }

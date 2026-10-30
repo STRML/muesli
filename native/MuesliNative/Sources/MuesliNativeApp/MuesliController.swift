@@ -496,6 +496,9 @@ public final class MuesliController: NSObject {
     private var searchTask: Task<Void, Never>?
     private var onboardingModelPreparationTask: Task<Void, Never>?
     private var openRouterSummaryCatalogTask: Task<Void, Never>?
+    /// Samples the call page for who is on it while a browser call is recorded (docs/call-roster.md).
+    var callRosterTask: Task<Void, Never>?
+    var callRosterBook = CallRosterBook()
     private var openRouterTranscriptionCatalogTask: Task<Void, Never>?
     private var openRouterTranscriptionCatalogGeneration = 0
     private var maraudersMapCountdown: MaraudersMapCountdownController?
@@ -534,7 +537,7 @@ public final class MuesliController: NSObject {
     }
     var activeMeetingStartedAt: Date? { activeMeetingSession?.startTime }
 
-    private var activeMeetingID: Int64? {
+    var activeMeetingID: Int64? {
         guard let capture = meetingCapture, !capture.session.capturePhase.isEnding else { return nil }
         return capture.id
     }
@@ -9736,6 +9739,7 @@ public final class MuesliController: NSObject {
         activeMeetingSignalLossResponse = source == nil ? .none : response
         meetingSignalLossPromptState.resetForRecording()
         syncMeetingDetectionMonitor()
+        startCallRosterSampling(source: source)
     }
 
     private func recentMeetingAutoStopSource() -> MeetingAutoStopSource? {
@@ -9762,6 +9766,7 @@ public final class MuesliController: NSObject {
     }
 
     private func disarmMeetingAutoStop() {
+        stopCallRosterSampling()
         activeMeetingAutoStop.disarm()
         activeMeetingSignalLossResponse = .none
         meetingSignalLossPromptState.resetForRecording()
