@@ -35,18 +35,25 @@ struct RecordOriginPicker: View {
     @Binding var selection: RecordOriginFilter
 
     var body: some View {
+        // Three segments are about 300 pt wide and cannot shrink, so a narrow pane gets a menu instead.
+        ViewThatFits(in: .horizontal) {
+            picker.pickerStyle(.segmented)
+            picker.pickerStyle(.menu)
+        }
+        .help("Filter by the device where the recording was created")
+        .accessibilityLabel("Record source")
+    }
+
+    private var picker: some View {
         Picker("Record source", selection: $selection) {
             ForEach(RecordOriginFilter.allCases, id: \.self) { origin in
                 Text(origin.label).tag(origin)
             }
         }
-        .pickerStyle(.segmented)
         .labelsHidden()
         // The segmented control's intrinsic width is wider than a hardcoded frame, and the extra
-        // width bleeds out of it — which pushed the filter row past the page's leading padding.
+        // width bleeds out of it: which pushed the filter row past the page's leading padding.
         .fixedSize()
-        .help("Filter by the device where the recording was created")
-        .accessibilityLabel("Record source")
     }
 }
 

@@ -477,75 +477,30 @@ struct MeetingsView: View {
             let groups = groupedUpcomingEvents
             let lastGroupId = groups.last?.id
             ForEach(groups) { group in
-                HStack(alignment: .top, spacing: 20) {
-                    // Date column
-                    VStack(alignment: .center, spacing: 2) {
-                        Text(group.dayNumber)
-                            .font(MuesliTheme.font(size: 24))
-                            .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textPrimary)
-                        Text(group.dayLabel)
-                            .font(MuesliTheme.font(size: 11, weight: .medium))
-                            .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary)
-                        Text(group.dayOfWeek)
-                            .font(MuesliTheme.font(size: 10))
-                            .foregroundStyle(MuesliTheme.textSecondary)
+                // Date beside the events when there is room; above them when the pane is narrow.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 20) {
+                        dateColumn(for: group)
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(group.events) { event in
+                                upcomingEventRow(event, isToday: group.isToday, stacked: false)
+                            }
+                        }
                     }
-                    .frame(width: 60)
 
-                    // Events column
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(group.events) { event in
-                            HStack(spacing: 8) {
-                                RoundedRectangle(cornerRadius: 1.5)
-                                    .fill(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary.opacity(0.4))
-                                    .frame(width: 3, height: 36)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(event.title)
-                                        .font(MuesliTheme.font(size: 13, weight: .medium))
-                                        .foregroundStyle(MuesliTheme.textPrimary)
-                                        .lineLimit(1)
-
-                                    Text(formatTimeRange(event))
-                                        .font(MuesliTheme.font(size: 11))
-                                        .foregroundStyle(MuesliTheme.textSecondary)
-                                }
-
-                                Spacer()
-
-                                if let meetingURL = event.meetingURL,
-                                   !appState.isMeetingRecording,
-                                   !appState.isMeetingStarting {
-                                    joinActionControl(for: event, meetingURL: meetingURL)
-                                }
-
-                                Menu {
-                                    Button("All Meetings") {
-                                        controller.createMeetingFromCalendarEvent(event, folderID: nil)
-                                    }
-                                    Divider()
-                                    ForEach(appState.folders) { folder in
-                                        Button(folder.name) {
-                                            controller.createMeetingFromCalendarEvent(event, folderID: folder.id)
-                                        }
-                                    }
-                                } label: {
-                                    Text("Add to folder")
-                                        .font(MuesliTheme.font(size: 10, weight: .medium))
-                                        .foregroundStyle(MuesliTheme.textSecondary)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(MuesliTheme.surfacePrimary)
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 4)
-                                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5)
-                                        )
-                                }
-                                .menuStyle(.borderlessButton)
-                                .fixedSize()
-
-                                hideEventButton(event)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text(group.dayNumber)
+                                .font(MuesliTheme.font(size: 18))
+                            Text(group.dayLabel)
+                                .font(MuesliTheme.font(size: 11, weight: .medium))
+                            Text(group.dayOfWeek)
+                                .font(MuesliTheme.font(size: 10))
+                        }
+                        .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary)
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(group.events) { event in
+                                upcomingEventRow(event, isToday: group.isToday, stacked: true)
                             }
                         }
                     }
@@ -564,6 +519,94 @@ struct MeetingsView: View {
             RoundedRectangle(cornerRadius: 12)
                 .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
         )
+    }
+
+    private func dateColumn(for group: UpcomingEventGroup) -> some View {
+        VStack(alignment: .center, spacing: 2) {
+            Text(group.dayNumber)
+                .font(MuesliTheme.font(size: 24))
+                .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textPrimary)
+            Text(group.dayLabel)
+                .font(MuesliTheme.font(size: 11, weight: .medium))
+                .foregroundStyle(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary)
+            Text(group.dayOfWeek)
+                .font(MuesliTheme.font(size: 10))
+                .foregroundStyle(MuesliTheme.textSecondary)
+        }
+        .frame(width: 60)
+    }
+
+    /// One calendar event. `stacked` puts the controls on their own wrapping line under the title for
+    /// a narrow pane; unstacked keeps everything on one row.
+    @ViewBuilder
+    private func upcomingEventRow(_ event: UnifiedCalendarEvent, isToday: Bool, stacked: Bool) -> some View {
+        let heading = HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(isToday ? MuesliTheme.accent : MuesliTheme.textSecondary.opacity(0.4))
+                .frame(width: 3, height: 36)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.title)
+                    .font(MuesliTheme.font(size: 13, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(stacked ? 2 : 1)
+
+                Text(formatTimeRange(event))
+                    .font(MuesliTheme.font(size: 11))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+        }
+        if stacked {
+            VStack(alignment: .leading, spacing: 6) {
+                heading
+                WrappingHStack(spacing: 8, lineSpacing: 6) {
+                    eventControls(for: event)
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                heading
+                Spacer()
+                eventControls(for: event)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func eventControls(for event: UnifiedCalendarEvent) -> some View {
+        if let meetingURL = event.meetingURL,
+           !appState.isMeetingRecording,
+           !appState.isMeetingStarting {
+            joinActionControl(for: event, meetingURL: meetingURL)
+        }
+
+        Menu {
+            Button("All Meetings") {
+                controller.createMeetingFromCalendarEvent(event, folderID: nil)
+            }
+            Divider()
+            ForEach(appState.folders) { folder in
+                Button(folder.name) {
+                    controller.createMeetingFromCalendarEvent(event, folderID: folder.id)
+                }
+            }
+        } label: {
+            Text("Add to folder")
+                .font(MuesliTheme.font(size: 10, weight: .medium))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5)
+                )
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+
+        hideEventButton(event)
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -691,6 +734,14 @@ struct MeetingsView: View {
                         browserHeaderActions
                     }
                 }
+
+                // A narrow pane: the five actions wrap instead of widening the page.
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    browserHeaderTitle
+                    WrappingHStack(spacing: MuesliTheme.spacing8, lineSpacing: MuesliTheme.spacing8) {
+                        browserHeaderActionItems
+                    }
+                }
             }
 
             browserHeaderMeta(meetingCount: meetingCount)
@@ -712,27 +763,41 @@ struct MeetingsView: View {
 
     @ViewBuilder
     private func browserHeaderMeta(meetingCount: Int) -> some View {
-        HStack(spacing: MuesliTheme.spacing8) {
-            Text("\(meetingCount) meeting\(meetingCount == 1 ? "" : "s")")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .fixedSize()
+        let count = Text("\(meetingCount) meeting\(meetingCount == 1 ? "" : "s")")
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textSecondary)
+        let hint = Text("Open a meeting to review notes, transcript, and template-driven summaries")
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textTertiary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: MuesliTheme.spacing8) {
+                count.fixedSize()
+                Text("\u{2022}")
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .fixedSize()
+                hint
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("\u{2022}")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textTertiary)
-                .fixedSize()
-
-            Text("Open a meeting to review notes, transcript, and template-driven summaries")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textTertiary)
+            VStack(alignment: .leading, spacing: 2) {
+                count
+                hint
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var browserHeaderActions: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            browserHeaderActionItems
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
-    private var browserHeaderActions: some View {
-        HStack(spacing: MuesliTheme.spacing8) {
+    private var browserHeaderActionItems: some View {
+        Group {
             Button {
                 controller.startQuickNoteMeeting(folderID: appState.selectedFolderID)
             } label: {
@@ -806,12 +871,34 @@ struct MeetingsView: View {
             .buttonStyle(.plain)
             .fixedSize()
         }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
     private func activeMeetingBanner(_ meeting: MeetingRecord) -> some View {
-        HStack(spacing: MuesliTheme.spacing12) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                activeMeetingInfo(meeting)
+                Spacer(minLength: MuesliTheme.spacing12)
+                HStack(spacing: MuesliTheme.spacing12) { activeMeetingActions(meeting) }
+                    .fixedSize()
+            }
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                activeMeetingInfo(meeting)
+                WrappingHStack(spacing: MuesliTheme.spacing8, lineSpacing: MuesliTheme.spacing8) {
+                    activeMeetingActions(meeting)
+                }
+            }
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+    private func activeMeetingInfo(_ meeting: MeetingRecord) -> some View {
             HStack(spacing: 8) {
                 Circle()
                     .fill(activeMeetingStatusColor(for: meeting))
@@ -826,9 +913,10 @@ struct MeetingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
             }
+    }
 
-            Spacer(minLength: MuesliTheme.spacing12)
-
+    @ViewBuilder
+    private func activeMeetingActions(_ meeting: MeetingRecord) -> some View {
             Button {
                 controller.showMeetingDocument(id: meeting.id)
             } label: {
@@ -887,14 +975,6 @@ struct MeetingsView: View {
                 .buttonStyle(.plain)
                 .disabled(!appState.isMeetingRecording)
             }
-        }
-        .padding(MuesliTheme.spacing12)
-        .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
     }
 
     private func activeMeetingStatusText(for meeting: MeetingRecord) -> String {

@@ -212,6 +212,9 @@ struct PageTitle: View {
         Text(text)
             .font(MuesliTheme.title1())
             .foregroundStyle(MuesliTheme.textPrimary)
+            // A narrow pane shrinks the title rather than breaking it mid-word ("Meeting" / "s").
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
