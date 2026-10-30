@@ -496,6 +496,9 @@ public final class MuesliController: NSObject {
     private var searchTask: Task<Void, Never>?
     private var onboardingModelPreparationTask: Task<Void, Never>?
     private var openRouterSummaryCatalogTask: Task<Void, Never>?
+    private var customLLMModelsTask: Task<Void, Never>?
+    /// How the Settings picker lists models. A seam for tests.
+    var customLLMModelsFetch: @Sendable (AppConfig) async throws -> [String] = { try await CustomLLMModelCatalog.fetch(config: $0) }
     private var openRouterTranscriptionCatalogTask: Task<Void, Never>?
     private var openRouterTranscriptionCatalogGeneration = 0
     private var maraudersMapCountdown: MaraudersMapCountdownController?
@@ -4017,6 +4020,33 @@ public final class MuesliController: NSObject {
     func manageOpenRouterKey() {
         guard let url = openRouterAuth.manageKeyURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    /// Lists the models the Custom LLM endpoint serves. Skipped when the list for this exact connection is
+    /// already loaded or loading; a changed endpoint, key or header starts a new listing and drops the old one.
+    func loadCustomLLMModels(force: Bool = false) {
+        let config = self.config
+        let fingerprint = CustomLLMModelCatalog.fingerprint(config)
+        let isCurrent = appState.customLLMModelsFingerprint == fingerprint
+        if !force, isCurrent, [.loaded, .loading].contains(appState.customLLMModelsState) { return }
+        customLLMModelsTask?.cancel()
+        if !isCurrent { appState.customLLMModels = [] }
+        appState.customLLMModelsFingerprint = fingerprint
+        appState.customLLMModelsState = .loading
+        customLLMModelsTask = Task { [weak self] in
+            do {
+                let models = try await self?.customLLMModelsFetch(config) ?? []
+                guard let self, !Task.isCancelled, self.appState.customLLMModelsFingerprint == fingerprint else { return }
+                self.appState.customLLMModels = models
+                self.appState.customLLMModelsState = .loaded
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, !Task.isCancelled, self.appState.customLLMModelsFingerprint == fingerprint else { return }
+                self.appState.customLLMModels = []
+                self.appState.customLLMModelsState = .failed(error.localizedDescription)
+            }
+        }
     }
 
     func loadOpenRouterModels(_ scope: OpenRouterModelCatalogScope, force: Bool = false) {

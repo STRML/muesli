@@ -138,6 +138,7 @@ struct SettingsView: View {
     }
 
     @State private var chatGPTSignInError: String?
+    @State private var customLLMManualModelEntry = false
     @State private var isSigningInChatGPT = false
     @State private var openRouterSignInError: String?
     @State private var isSigningInOpenRouter = false
@@ -1894,12 +1895,64 @@ struct SettingsView: View {
         }
         Divider().background(MuesliTheme.surfaceBorder)
         settingsRow("Model", controlWidth: meetingControlWidth) {
-            settingsModelTextField(
-                currentModel: model,
-                placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
-                    ? "claude-3-5-sonnet-20241022"
-                    : "custom-model-id"
-            ) { val in onModelChange(val) }
+            customLLMModelControl(model: model, onModelChange: onModelChange)
+        }
+        // Lists the endpoint's models once the user stops editing the connection settings.
+        .task(id: CustomLLMModelCatalog.fingerprint(appState.config)) {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            controller.loadCustomLLMModels()
+        }
+        if case .failed(let message) = appState.customLLMModelsState {
+            SettingsNote("Could not list models: \(message). Type a model id instead.", tone: .error)
+        }
+    }
+
+    /// The endpoint's own model list when it has one, with manual entry as the way out for servers that
+    /// do not list models or a model that is not on the list.
+    @ViewBuilder
+    private func customLLMModelControl(model: String, onModelChange: @escaping (String) -> Void) -> some View {
+        let models = appState.customLLMModels
+        let isLoading = appState.customLLMModelsState == .loading
+        HStack(spacing: 6) {
+            if !models.isEmpty, !customLLMManualModelEntry {
+                // The shared control keeps a saved model the endpoint no longer lists visible.
+                MuesliSettingControl(controller: controller, id: "summary_custom_llm_model")
+                Button {
+                    customLLMManualModelEntry = true
+                } label: {
+                    Image(systemName: "character.cursor.ibeam")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("Type a model id")
+                .accessibilityLabel("Type a model id")
+            } else {
+                settingsModelTextField(
+                    currentModel: model,
+                    placeholder: appState.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue
+                        ? "claude-3-5-sonnet-20241022"
+                        : "custom-model-id"
+                ) { val in onModelChange(val) }
+            }
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else {
+                Button {
+                    customLLMManualModelEntry = false
+                    controller.loadCustomLLMModels(force: true)
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("List the models this endpoint serves")
+                .accessibilityLabel("Refresh model list")
+            }
         }
     }
 

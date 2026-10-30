@@ -589,6 +589,8 @@ extension MuesliController {
             read: { $0.claudeCodeModel.trimmingCharacters(in: .whitespacesAndNewlines) }) { value in
             self.updateConfig { $0.claudeCodeModel = value }
         }
+        // The endpoint's own model list; a server that lists none keeps the manual text field in Settings.
+        textMenu("summary_custom_llm_model", "Custom LLM meeting summary model", appState.customLLMModels.map { .init(id: $0, label: $0) }, \.customLLMModel)
         textMenu("summary_openrouter_model", "OpenRouter meeting summary model", appState.openRouterSummaryModels.map { .init(id: $0.id, label: $0.label) }, \.openRouterModel)
         add("openrouter_dictation_model", "OpenRouter dictation model", appState.openRouterTranscriptionModels.map { .init(id: $0.id, label: $0.label) },
             read: { $0.openRouterDictationModel }) { self.selectOpenRouterDictationModel($0) }

@@ -201,6 +201,8 @@ case "${shard}" in
       CustomLLMAPIKeyResolutionTests
       CustomLLMHeaderPropagationTests
       CustomLLMRequestHeadersTests
+      CustomLLMModelCatalogTests
+      CustomLLMModelListControllerTests
       SettingsModelFieldTests
       MeetingSummaryClientTests
       MeetingChatStoreTests

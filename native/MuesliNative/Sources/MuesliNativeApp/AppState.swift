@@ -157,6 +157,13 @@ enum OpenRouterModelCatalogLoadState: Equatable {
     case failed(String)
 }
 
+enum CustomLLMModelCatalogLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
+}
+
 @MainActor
 @Observable
 final class AppState {
@@ -219,6 +226,11 @@ final class AppState {
     var hasStoredOpenRouterCredential: Bool = false
     var openRouterSummaryModels: [SummaryModelPreset] = []
     var openRouterSummaryCatalogState: OpenRouterModelCatalogLoadState = .idle
+    /// Models the Custom LLM endpoint reports, for the Settings picker. `customLLMModelsFingerprint`
+    /// names the connection they were listed for, so a stale answer is never shown for a new endpoint.
+    var customLLMModels: [String] = []
+    var customLLMModelsState: CustomLLMModelCatalogLoadState = .idle
+    var customLLMModelsFingerprint = ""
     var openRouterTranscriptionModels: [SummaryModelPreset] = []
     var openRouterTranscriptionCatalogState: OpenRouterModelCatalogLoadState = .idle
     var upcomingCalendarEvents: [UnifiedCalendarEvent] = []
