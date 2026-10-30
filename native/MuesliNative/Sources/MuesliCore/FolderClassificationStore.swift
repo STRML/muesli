@@ -242,7 +242,24 @@ public struct FolderClassificationStore: Sendable {
                 "UPDATE meetings SET folder_id = ? WHERE id = ? AND folder_id IS NULL",
                 [.integer(candidate.folderID), .integer(meetingID)], db: db
             )
-            return sqlite3_changes(db) > 0
+            guard sqlite3_changes(db) > 0 else { return false }
+            // Filing into a private folder makes the meeting private. Mark it for sync with a newer
+            // updated_at, as DictationStore.moveMeeting does, so iCloud replaces any copy with a tombstone.
+            try MeetingChatSQL.execute(
+                """
+                WITH RECURSIVE ancestors(id) AS (
+                    SELECT ?1
+                    UNION
+                    SELECT f.parent_id FROM meeting_folders f JOIN ancestors a ON f.id = a.id
+                    WHERE f.parent_id IS NOT NULL
+                )
+                UPDATE meetings SET sync_dirty = 1, updated_at = MAX(?2, updated_at + 0.001)
+                WHERE id = ?3 AND deleted_at IS NULL AND is_private = 0
+                  AND EXISTS(SELECT 1 FROM meeting_folders WHERE is_private = 1 AND id IN (SELECT id FROM ancestors))
+                """,
+                [.integer(candidate.folderID), .real(now.timeIntervalSince1970), .integer(meetingID)], db: db
+            )
+            return true
         } }
     }
 
