@@ -357,6 +357,8 @@ struct InsightsView: View {
             return "OpenAI · " + (row.endpoint.flatMap { URL(string: $0)?.host } ?? "Endpoint not recorded")
         case "openrouter-stt":
             return "OpenRouter · " + (row.endpoint.flatMap { URL(string: $0)?.host } ?? "Endpoint not recorded")
+        case SyncedEngine.backend:
+            return "Synced from iPhone or iPad"
         case .some(let backend):
             if let endpoint = row.endpoint { return URL(string: endpoint)?.host ?? endpoint }
             return "On-device · \(backend)"
