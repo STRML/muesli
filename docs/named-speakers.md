@@ -25,7 +25,8 @@ A voice matches a person only when:
 - and it beats the next-best person by at least 0.10,
 - and no other speaker in the same meeting claims that person with a better score.
 
-Anything else stays "Speaker N". "You" (the microphone) is never matched. These thresholds are
+Anything else stays "Speaker N". The microphone side is never matched: neither "You" nor the
+"Local speaker N" labels that "Identify in-room speakers" gives in-person voices. These thresholds are
 starting values and have not been tuned on real meetings, so check the first few matches.
 
 ## What is stored
