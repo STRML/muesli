@@ -2503,7 +2503,11 @@ struct SettingsView: View {
                         controller.classifyUnfiledMeetings()
                     }
                 }
-                settingsDescription("Suggestions appear in the Meetings Inbox. Muesli learns from where you file meetings: recurring series, attendees and titles. When nothing matches, your summary model may suggest a folder; private meetings are only sent to backends you trust. AI suggestions are never filed automatically.")
+                Text("Suggestions appear in the Meetings Inbox. Muesli learns from where you file meetings: recurring series, attendees and titles. When nothing matches, your summary model may suggest a folder; private meetings are only sent to backends you trust. AI suggestions are never filed automatically.")
+                    .font(MuesliTheme.caption())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, MuesliTheme.spacing8)
             }
 
             settingsSection("Meeting Notifications") {
