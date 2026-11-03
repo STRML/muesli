@@ -64,6 +64,7 @@ __pycache__/
 
 # Build artifacts
 dist-native/
+.build/
 native/MuesliNative/.build/
 native/MuesliNative/.build-direct/
 native/MuesliNative/.xcodebuild/
