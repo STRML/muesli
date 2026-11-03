@@ -9,8 +9,10 @@ final class CalendarMenuMeetingPayload: NSObject {
     let calendarOccurrence: CalendarOccurrenceReference
     let endDate: Date
     let autoStopSource: MeetingAutoStopSource?
+    let meetingURL: URL?
 
     init(event: UnifiedCalendarEvent) {
+        self.meetingURL = event.meetingURL
         self.event = event
         self.title = event.title
         self.calendarOccurrence = event.resolvedCalendarOccurrence
@@ -95,7 +97,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     func updateMenuBarTitle() {
         let detail: String?
-        if let countdownOverride {
+        if controller.appState.isMeetingCallEnded {
+            // Visible even with the main window closed; the menu below has Stop.
+            detail = "Call ended?"
+        } else if let countdownOverride {
             detail = countdownOverride
         } else if controller.config.showNextMeetingInMenuBar {
             let now = Date()
@@ -206,6 +211,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             menu.addItem(actionItem(
                 title: "Start Meeting Recording",
                 action: #selector(MuesliController.startMeetingRecordingFromMenuBar)
+            ))
+            menu.addItem(actionItem(
+                title: "Start In-Person Meeting",
+                action: #selector(MuesliController.startInPersonMeetingRecording)
             ))
         }
         menu.addItem(.separator())
@@ -504,6 +513,12 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let record = actionItem(title: "Record Meeting", action: #selector(MuesliController.startMeetingFromCalendarMenuItem(_:)))
             record.representedObject = payload
             actions.addItem(record)
+            if payload.meetingURL != nil {
+                let join = actionItem(title: "Record and Join", action: #selector(MuesliController.joinAndRecordFromCalendarMenuItem(_:)))
+                join.representedObject = payload
+                join.toolTip = "Open the meeting link and start transcribing."
+                actions.addItem(join)
+            }
             let hide = actionItem(title: "Hide from muesli", action: #selector(MuesliController.hideCalendarEventFromMenuItem(_:)))
             hide.representedObject = payload
             hide.toolTip = "Hide this occurrence from Coming Up and reminders. The calendar event is not deleted."

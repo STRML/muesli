@@ -565,14 +565,20 @@ private actor MeetingDetectionService {
             signalRefreshState.lastActiveTabFallbackAttemptAtByBundleID[bundleID] = now
         }
 
-        let rawAudioInputProcesses = mergedAudioInputProcesses(
+        let liveSource: MeetingAutoStopSource?
+        if case .sourceLiveness(_, let source) = context.monitoringMode {
+            liveSource = source
+        } else {
+            liveSource = nil
+        }
+        let rawAudioInputProcesses = MeetingAutoStopPolicy.livenessAudioProcesses(
             context.monitoringMode.allowsFullAudioAttribution
                 && refreshDecision.audioAttributionEpisode != nil
                 ? audioResult.processes
                 : [],
             sensorAttributions: context.sensorAttributions,
             runningProcessIDsByBundleID: collectedSignals.runningProcessIDsByBundleID,
-            monitoringMode: context.monitoringMode
+            source: liveSource
         )
         let mediaSignals = MeetingMediaSignalFilter.apply(
             deviceMicActive: deviceMicActive,
@@ -583,7 +589,7 @@ private actor MeetingDetectionService {
             selfBundleID: resolver.selfBundleID
         )
 
-        let snapshot = MeetingSignalSnapshot(
+        let rawSnapshot = MeetingSignalSnapshot(
             micActive: mediaSignals.micActive,
             cameraActive: mediaSignals.cameraActive,
             calendarEvent: context.calendarEvent,
@@ -593,6 +599,7 @@ private actor MeetingDetectionService {
             foregroundBundleID: collectedSignals.foregroundBundleID,
             now: now
         )
+        let snapshot = scopedSnapshot(rawSnapshot, monitoringMode: context.monitoringMode)
 
         let resolverStart = Date()
         let resolvedActivityCandidate = scopedActivityCandidate(
@@ -807,62 +814,14 @@ private actor MeetingDetectionService {
         }
     }
 
-    private func mergedAudioInputProcesses(
-        _ coreAudioProcesses: [AudioProcessActivity],
-        sensorAttributions: SensorAttributionSnapshot,
-        runningProcessIDsByBundleID: [String: pid_t],
+    private func scopedSnapshot(
+        _ snapshot: MeetingSignalSnapshot,
         monitoringMode: MeetingMonitoringMode
-    ) -> [AudioProcessActivity] {
-        var processes = coreAudioProcesses
-        let existingBundleIDs = Set(coreAudioProcesses.map(\.bundleID))
-
-        let sourceBundleID: String?
-        switch monitoringMode {
-        case .sourceLiveness(_, let source):
-            sourceBundleID = source.sourceBundleID
-        case .discovery, .suspended:
-            sourceBundleID = nil
-        }
-
-        let sensorBundleIDs = sensorAttributions.micBundleIDs
-            .union(sensorAttributions.cameraBundleIDs)
-            .sorted()
-
-        for attributedBundleID in sensorBundleIDs {
-            let bundleID: String
-            if let sourceBundleID {
-                guard MeetingAutoStopPolicy.bundleIDsReferToSameApp(attributedBundleID, sourceBundleID) else { continue }
-                bundleID = sourceBundleID
-            } else {
-                bundleID = attributedBundleID
-            }
-
-            let appName = MeetingCandidateResolver.browserApps[bundleID]
-                ?? MeetingCandidateResolver.dedicatedApps[bundleID]?.name
-            guard let appName else { continue }
-            guard !existingBundleIDs.contains(bundleID),
-                  !existingBundleIDs.contains(where: { helperBundleID in
-                      MeetingAutoStopPolicy.bundleIDsReferToSameApp(helperBundleID, bundleID)
-                  }) else {
-                continue
-            }
-
-            let isDedicatedSourceLiveness = sourceBundleID != nil
-                && MeetingCandidateResolver.dedicatedApps[bundleID] != nil
-            processes.append(AudioProcessActivity(
-                pid: runningProcessIDsByBundleID[bundleID] ?? 0,
-                bundleID: bundleID,
-                appName: appName,
-                isRunningInput: true,
-                // Full-duplex was established during discovery. While tracking
-                // that exact source, a current Control Center attribution is
-                // sufficient positive liveness evidence without another HAL
-                // process enumeration.
-                isRunningOutput: isDedicatedSourceLiveness
-            ))
-        }
-
-        return processes
+    ) -> MeetingSignalSnapshot {
+        guard case .sourceLiveness(_, let source) = monitoringMode else { return snapshot }
+        return snapshot.replacingBrowserMeetings(
+            MeetingAutoStopPolicy.scopedBrowserMeetings(snapshot.browserMeetings, source: source)
+        )
     }
 
     private func scopedActivityCandidate(
@@ -872,8 +831,7 @@ private actor MeetingDetectionService {
         guard case .sourceLiveness(_, let source) = monitoringMode else {
             return candidate
         }
-        guard let candidate else { return nil }
-        return MeetingAutoStopPolicy.matches(candidate: candidate, source: source) ? candidate : nil
+        return MeetingAutoStopPolicy.followedCandidate(candidate, source: source)
     }
 
     private func debounceDelay(for trigger: MeetingDetectionTrigger) -> TimeInterval {

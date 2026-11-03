@@ -151,11 +151,11 @@ Paths below are relative to `native/MuesliNative/` unless stated otherwise. New 
 
 ## Commands and execution handoff
 
-For task verification, use a unique test scratch path and matching filter, for example:
+For task verification, use the worktree's test scratch path and a matching filter, for example:
 
 ```sh
 swift test --package-path native/MuesliNative \
-  --scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/ask-meetings/test" \
+  --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)" \
   --filter MeetingChatStoreTests
 ```
 

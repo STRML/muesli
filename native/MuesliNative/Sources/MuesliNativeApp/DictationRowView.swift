@@ -67,168 +67,196 @@ struct DictationRowView: View {
         SyncOriginDisplay.badgeLabel(forDictationSource: record.source)
     }
 
+    private var timeLabel: some View {
+        Text(timeOnly)
+            .font(.system(size: 13, weight: .medium, design: .monospaced))
+            .foregroundStyle(MuesliTheme.textTertiary)
+            .fixedSize()
+    }
+
+    private var textColumn: some View {
+        VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+            HStack(alignment: .firstTextBaseline, spacing: MuesliTheme.spacing8) {
+                if isComputerUseCommand {
+                    Text("CUA")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(MuesliTheme.accentText)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+
+                if isQuilTransformation {
+                    HStack(spacing: 3) {
+                        Image(nsImage: QuillIcon.image())
+                            .renderingMode(.template)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 10, height: 10)
+                        Text("QUILL")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    }
+                        .foregroundStyle(MuesliTheme.accentText)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(MuesliTheme.accentSubtle)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+
+                if let syncOriginBadgeLabel {
+                    SyncOriginBadge(label: syncOriginBadgeLabel)
+                }
+
+                Text(displayedText)
+                    .font(MuesliTheme.reading())
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(showsFullText || !canExpandText ? nil : 3)
+                    .lineSpacing(3)
+                    .muesliRowActivation {
+                        if hasExpandableDetails {
+                            withAnimation(rowAnimation) { isExpanded.toggle() }
+                        } else {
+                            copy(.copy, using: onCopy)
+                        }
+                    }
+                    .accessibilityHint(hasExpandableDetails ? "Show or hide details" : "Copy dictation")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let trace = record.computerUseTrace, !isQuilTransformation {
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        if trace.finalStatus.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running" {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Computer use in progress")
+                        }
+                        Text(Self.displayFinalStatus(trace.finalStatus))
+                            .font(MuesliTheme.captionMedium())
+                            .foregroundStyle(statusColor(trace.finalStatus))
+                    }
+                }
+            }
+
+            if canExpandText {
+                Button {
+                    showsFullText.toggle()
+                } label: {
+                    Text(showsFullText ? "Show less" : "Show more")
+                        .font(MuesliTheme.captionMedium())
+                        .foregroundStyle(MuesliTheme.accentText)
+                        .padding(.horizontal, 6)
+                        .frame(minHeight: 28)
+                }
+                .buttonStyle(.muesli(.quiet))
+                // Text stays aligned with the dictation and keeps its row spacing;
+                // the invisible padding only extends the target.
+                .padding(.leading, -6)
+                .padding(.vertical, -6)
+                .accessibilityLabel(showsFullText ? "Collapse dictation text" : "Show full dictation text")
+                .accessibilityIdentifier("dictation.expand.\(record.id)")
+            }
+
+            if isExpanded, let trace = record.computerUseTrace {
+                computerUseTraceView(trace)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var targetIcon: some View {
+        if let targetAppName = record.targetAppName {
+            TargetApplicationIconView(
+                appName: targetAppName,
+                bundleIdentifier: record.targetAppBundleID
+            )
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 2) {
+            if let copiedAction {
+                Text(copiedAction == .copyTrace ? "Trace copied" : "Copied")
+                    .font(MuesliTheme.captionMedium())
+                    .foregroundStyle(MuesliTheme.successText)
+                    .padding(.trailing, 4)
+                    .transition(.opacity)
+            }
+
+            if hasExpandableDetails {
+                Button {
+                    withAnimation(rowAnimation) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .frame(width: actionSize, height: actionSize)
+                }
+                .buttonStyle(.muesli(.quiet))
+                .focused($focusedAction, equals: .details)
+                .help(isExpanded ? "Hide details" : "Show details")
+                .accessibilityLabel(isExpanded ? "Hide details" : "Show details")
+            }
+
+            if !isQuilTransformation, record.computerUseTrace != nil, let onCopyTrace {
+                Button { copy(.copyTrace, using: onCopyTrace) } label: {
+                    Image(systemName: copiedAction == .copyTrace ? "checkmark" : "list.bullet.clipboard")
+                        .font(.system(size: 12))
+                        .foregroundStyle(copiedAction == .copyTrace ? MuesliTheme.successText : MuesliTheme.textTertiary)
+                        .frame(width: actionSize, height: actionSize)
+                }
+                .buttonStyle(.muesli(.quiet))
+                .focused($focusedAction, equals: .copyTrace)
+                .help(copiedAction == .copyTrace ? "CUA trace copied" : "Copy CUA trace")
+                .accessibilityLabel("Copy CUA trace")
+            }
+
+            TimelineRowActionButton(
+                symbol: copiedAction == .copy ? "checkmark" : "doc.on.doc",
+                label: "Copy dictation", help: copiedAction == .copy ? "Dictation copied" : "Copy dictation",
+                color: copiedAction == .copy ? MuesliTheme.successText : MuesliTheme.textTertiary
+            ) { copy(.copy, using: onCopy) }
+            .focused($focusedAction, equals: .copy)
+
+            if onDelete != nil {
+                TimelineRowActionButton(symbol: "trash", label: "Delete dictation",
+                                        help: "Delete dictation", color: MuesliTheme.destructiveText) {
+                    showDeleteConfirmation = true
+                }
+                .focused($focusedAction, equals: .delete)
+            }
+        }
+        // Glyphs keep their former vertical position beside the first text line.
+        .padding(.vertical, -(actionSize - 14) / 2)
+        .opacity(isHovered || isExpanded || hasExpandableDetails || focusedAction != nil || copiedAction != nil ? 1 : 0)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: MuesliTheme.spacing20) {
-                Text(timeOnly)
-                    .font(.system(size: 13, weight: .medium, design: .monospaced))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .frame(width: 80, alignment: .leading)
-                    .padding(.top, 2)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: MuesliTheme.spacing20) {
+                    timeLabel
+                        .frame(width: 80, alignment: .leading)
+                        .padding(.top, 2)
+                    textColumn
+                        .frame(minWidth: 0, idealWidth: 240, maxWidth: .infinity, alignment: .leading)
+                    targetIcon
+                    actionButtons
+                }
 
+                // A narrow pane: the time, app and actions share a line above the text.
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
-                    HStack(alignment: .firstTextBaseline, spacing: MuesliTheme.spacing8) {
-                        if isComputerUseCommand {
-                            Text("CUA")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(MuesliTheme.accentText)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-
-                        if isQuilTransformation {
-                            HStack(spacing: 3) {
-                                Image(nsImage: QuillIcon.image())
-                                    .renderingMode(.template)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .frame(width: 10, height: 10)
-                                Text("QUILL")
-                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            }
-                                .foregroundStyle(MuesliTheme.accentText)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 2)
-                                .background(MuesliTheme.accentSubtle)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-
-                        if let syncOriginBadgeLabel {
-                            SyncOriginBadge(label: syncOriginBadgeLabel)
-                        }
-
-                        Text(displayedText)
-                            .font(MuesliTheme.reading())
-                            .foregroundStyle(MuesliTheme.textPrimary)
-                            .lineLimit(showsFullText || !canExpandText ? nil : 3)
-                            .lineSpacing(3)
-                            .muesliRowActivation {
-                                if hasExpandableDetails {
-                                    withAnimation(rowAnimation) { isExpanded.toggle() }
-                                } else {
-                                    copy(.copy, using: onCopy)
-                                }
-                            }
-                            .accessibilityHint(hasExpandableDetails ? "Show or hide details" : "Copy dictation")
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if let trace = record.computerUseTrace, !isQuilTransformation {
-                            HStack(spacing: MuesliTheme.spacing8) {
-                                if trace.finalStatus.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "running" {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                        .accessibilityLabel("Computer use in progress")
-                                }
-                                Text(Self.displayFinalStatus(trace.finalStatus))
-                                    .font(MuesliTheme.captionMedium())
-                                    .foregroundStyle(statusColor(trace.finalStatus))
-                            }
-                        }
+                    HStack(spacing: MuesliTheme.spacing8) {
+                        timeLabel
+                        Spacer(minLength: 0)
+                        targetIcon
+                        actionButtons
                     }
-
-                    if canExpandText {
-                        Button {
-                            showsFullText.toggle()
-                        } label: {
-                            Text(showsFullText ? "Show less" : "Show more")
-                                .font(MuesliTheme.captionMedium())
-                                .foregroundStyle(MuesliTheme.accentText)
-                                .padding(.horizontal, 6)
-                                .frame(minHeight: 28)
-                        }
-                        .buttonStyle(.muesli(.quiet))
-                        // Text stays aligned with the dictation and keeps its row spacing;
-                        // the invisible padding only extends the target.
-                        .padding(.leading, -6)
-                        .padding(.vertical, -6)
-                        .accessibilityLabel(showsFullText ? "Collapse dictation text" : "Show full dictation text")
-                        .accessibilityIdentifier("dictation.expand.\(record.id)")
-                    }
-
-                    if isExpanded, let trace = record.computerUseTrace {
-                        computerUseTraceView(trace)
-                    }
+                    textColumn
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if let targetAppName = record.targetAppName {
-                    TargetApplicationIconView(
-                        appName: targetAppName,
-                        bundleIdentifier: record.targetAppBundleID
-                    )
-                }
-
-                // 28pt targets so near-misses land on the action rather than the row's copy tap.
-                HStack(spacing: 2) {
-                    if let copiedAction {
-                        Text(copiedAction == .copyTrace ? "Trace copied" : "Copied")
-                            .font(MuesliTheme.captionMedium())
-                            .foregroundStyle(MuesliTheme.successText)
-                            .padding(.trailing, 4)
-                            .transition(.opacity)
-                    }
-
-                    if hasExpandableDetails {
-                        Button {
-                            withAnimation(rowAnimation) {
-                                isExpanded.toggle()
-                            }
-                        } label: {
-                            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(MuesliTheme.textTertiary)
-                                .frame(width: actionSize, height: actionSize)
-                        }
-                        .buttonStyle(.muesli(.quiet))
-                        .focused($focusedAction, equals: .details)
-                        .help(isExpanded ? "Hide details" : "Show details")
-                        .accessibilityLabel(isExpanded ? "Hide details" : "Show details")
-                    }
-
-                    if !isQuilTransformation, record.computerUseTrace != nil, let onCopyTrace {
-                        Button { copy(.copyTrace, using: onCopyTrace) } label: {
-                            Image(systemName: copiedAction == .copyTrace ? "checkmark" : "list.bullet.clipboard")
-                                .font(.system(size: 12))
-                                .foregroundStyle(copiedAction == .copyTrace ? MuesliTheme.successText : MuesliTheme.textTertiary)
-                                .frame(width: actionSize, height: actionSize)
-                        }
-                        .buttonStyle(.muesli(.quiet))
-                        .focused($focusedAction, equals: .copyTrace)
-                        .help(copiedAction == .copyTrace ? "CUA trace copied" : "Copy CUA trace")
-                        .accessibilityLabel("Copy CUA trace")
-                    }
-
-                    TimelineRowActionButton(
-                        symbol: copiedAction == .copy ? "checkmark" : "doc.on.doc",
-                        label: "Copy dictation", help: copiedAction == .copy ? "Dictation copied" : "Copy dictation",
-                        color: copiedAction == .copy ? MuesliTheme.successText : MuesliTheme.textTertiary
-                    ) { copy(.copy, using: onCopy) }
-                    .focused($focusedAction, equals: .copy)
-
-                    if onDelete != nil {
-                        TimelineRowActionButton(symbol: "trash", label: "Delete dictation",
-                                                help: "Delete dictation", color: MuesliTheme.destructiveText) {
-                            showDeleteConfirmation = true
-                        }
-                        .focused($focusedAction, equals: .delete)
-                    }
-                }
-                // Glyphs keep their former vertical position beside the first text line.
-                .padding(.vertical, -(actionSize - 14) / 2)
-                .opacity(isHovered || isExpanded || hasExpandableDetails || focusedAction != nil || copiedAction != nil ? 1 : 0)
             }
         }
         .task(id: copyConfirmation) {
