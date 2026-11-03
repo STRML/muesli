@@ -227,6 +227,7 @@ case "${shard}" in
       InstallerVolumeScanTests
       SettingsModelFieldTests
       MeetingSummaryClientTests
+      MeetingPipelineStatusTests
       MeetingChatStoreTests
       GemmaMeetingChatTests
       LocalChatToolTests
