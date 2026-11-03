@@ -103,18 +103,21 @@ requirement.
 
 ## Telemetry in Development
 
-Use `scripts/dev-test.sh` for local app testing. It routes anonymous telemetry
-to the dedicated `MuesliDev` TelemetryDeck app and labels every signal with
-`muesli.channel=dev`; named lanes A, B, and C use the same dev destination with
-their own bundle IDs. This keeps contributor and maintainer test traffic out of
-the production and preprod TelemetryDeck apps.
+Build scripts compile no TelemetryDeck app ID unless `MUESLI_ENABLE_TELEMETRY=1`
+is set, and even then the app sends nothing until the user turns on "Share
+anonymous usage analytics" in Settings (off by default). With the variable set,
+`scripts/dev-test.sh` routes anonymous telemetry to the dedicated `MuesliDev`
+TelemetryDeck app and labels every signal with `muesli.channel=dev`; named lanes
+A, B, and C use the same dev destination with their own bundle IDs. This keeps
+contributor and maintainer test traffic out of the production and preprod
+TelemetryDeck apps.
 
 Direct SwiftPM or otherwise unconfigured source builds leave telemetry
 disabled. Do not enable production or preprod telemetry for local testing, and
 do not hardcode TelemetryDeck app IDs in application code or new scripts. Build
 scripts that need telemetry routing must use the centralized public identifiers
-in `scripts/muesli_telemetry_channels.sh` and select the appropriate non-production
-channel explicitly.
+and `muesli_telemetry_build_env` in `scripts/muesli_telemetry_channels.sh` and
+select the appropriate non-production channel explicitly.
 
 New telemetry events must remain anonymous and must not include audio,
 transcripts, meeting or calendar titles, clipboard or screen contents, API
@@ -143,16 +146,20 @@ packaging.
 ## SwiftPM Build Cache
 
 SwiftPM writes build artifacts to `native/MuesliNative/.build` by default,
-which can become large across worktrees. Use a shared scratch path for local
-testing:
+which can become large across worktrees. The build scripts instead use a
+per-worktree scratch path under `~/Library/Caches/muesli-spm/worktrees/`.
+On first use, a new worktree's path is seeded with an APFS clone of an idle
+donor's (the main checkout's first), so it shares unchanged blocks and skips
+dependency resolution. For direct SwiftPM runs, ask for the same path:
 
 ```bash
-MUESLI_SWIFTPM_SCRATCH_PATH="$HOME/Library/Caches/muesli-spm/dev" \
-  MUESLI_SKIP_SIGN=1 ./scripts/dev-test.sh
+swift build --package-path native/MuesliNative \
+  --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)" --build-tests
 ```
 
 Do not run concurrent builds from different worktrees into the same scratch
-path. Use separate names such as `dev`, `test`, or `agent-1`.
+path. To reclaim space from worktrees you have removed, run
+`scripts/muesli_spm_gc.sh` (a dry run) and then `scripts/muesli_spm_gc.sh --apply`.
 
 ## Tests
 
@@ -170,11 +177,11 @@ For CI-sized local checks, use the shard script:
 ./scripts/run_ci_test_shard.sh meetings
 ```
 
-For direct SwiftPM test runs with a shared cache:
+For direct SwiftPM test runs with the worktree's cache:
 
 ```bash
 swift test --package-path native/MuesliNative \
-  --scratch-path "$HOME/Library/Caches/muesli-spm/test"
+  --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)"
 ```
 
 ## Pull Requests
