@@ -4,7 +4,7 @@ import MuesliCore
 struct MeetingTextGenerationRequest {
     let system: String
     let user: String
-    let config: AppConfig
+    var config: AppConfig
     var maxOutputTokens: Int = 1_500
     var sessionID: UUID = UUID()
     var onReasoningSummary: (@Sendable (String) async -> Void)? = nil
@@ -122,7 +122,7 @@ struct MeetingTextGenerationClient: MeetingTextGenerating {
         guard supportsNativeTools(config: request.base.config) else { throw MeetingTextGenerationError.invalidEndpoint }
         let credential = try await credentialResolver(request.base.config)
         try Task.checkCancellation()
-        var headerOnly = request.base
+        var headerOnly = try await request.base.resolvingEndpointURLCommand()
         headerOnly.images = []
         var urlRequest = try Self.makeRequest(headerOnly, credential: credential)
         if provider == .openRouter { urlRequest.url = URL(string: "https://openrouter.ai/api/v1/responses")! }
@@ -155,7 +155,10 @@ struct MeetingTextGenerationClient: MeetingTextGenerating {
         if MeetingSummaryBackendOption.resolved(request.config.meetingSummaryBackend) == .customLLM {
             _ = try CustomLLMRequestHeaders.validated(request.config.customLLMHeaders)
         }
-        let urlRequest = try Self.makeRequest(request, credential: await credentialResolver(request.config))
+        let urlRequest = try Self.makeRequest(
+            await request.resolvingEndpointURLCommand(),
+            credential: await credentialResolver(request.config)
+        )
         let (data, response) = try await load(urlRequest)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw MeetingTextGenerationError.emptyResponse }

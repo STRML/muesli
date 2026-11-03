@@ -91,6 +91,7 @@ struct MeetingDetailView: View {
     let onBack: (() -> Void)?
     let backLabel: String
     @Environment(\.usesCompactQuickNotes) private var usesCompactQuickNotes
+    @State private var recordingPinned = false
     @State private var showRecordingDetails = false
     @State private var hasNotesSelection = false
     private var isInProgress: Bool { meeting?.status == .recording || meeting?.status == .processing }
@@ -186,18 +187,22 @@ struct MeetingDetailView: View {
                 }
                 .background(MuesliTheme.backgroundBase)
                 .onAppear {
+                    selectLiveTabIfRecordingStarted(meeting)
                     threadContext = controller.meetingThreadContext(for: meeting.id)
                     if controller.canUseSummaryProvider(.openRouter) {
                         controller.loadOpenRouterModels(.text)
                     }
                 }
                 .onChange(of: meeting.id) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: meeting.status) { _, _ in
+                    selectLiveTabIfRecordingStarted(meeting)
                     syncLocalState(with: meeting)
                 }
                 .onChange(of: appState.meetingNotesFocusRequest) { _, _ in
+                    appState.liveTabAutoSelect.noteUserPick(meetingID: meeting.id)
                     recordingMode = .notes
                 }
                 .onChange(of: meeting.manualNotes) { _, _ in
@@ -418,6 +423,7 @@ struct MeetingDetailView: View {
                     } else {
                         MeetingParticipantsView(meetingID: meeting.id, controller: controller)
                             .frame(maxWidth: 150)
+                        MeetingSpeakersView(meetingID: meeting.id, controller: controller)
                     }
                     Spacer(minLength: 0)
                     detailModePicker(for: meeting)
@@ -566,6 +572,7 @@ struct MeetingDetailView: View {
                 meetingID: meeting.id,
                 controller: controller
             )
+            MeetingSpeakersView(meetingID: meeting.id, controller: controller)
         }
     }
 
@@ -807,10 +814,20 @@ struct MeetingDetailView: View {
         return target
     }
 
+    private func selectLiveTabIfRecordingStarted(_ meeting: MeetingRecord) {
+        let isRecording = meeting.status == .recording && showsManualNotesEditor(for: meeting)
+        if appState.liveTabAutoSelect.shouldSelectLive(meetingID: meeting.id, isRecording: isRecording) {
+            recordingMode = .live
+        }
+    }
+
     private var recordingModePicker: some View {
         HStack(spacing: 24) {
             ForEach([RecordingContentMode.notes, .live], id: \.self) { mode in
-                Button { recordingMode = mode } label: {
+                Button {
+                    if let id = meeting?.id { appState.liveTabAutoSelect.noteUserPick(meetingID: id) }
+                    recordingMode = mode
+                } label: {
                     Text(mode == .notes ? "Notes" : "Live")
                         .foregroundStyle(recordingMode == mode ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
                         .padding(.vertical, 8)
@@ -846,12 +863,36 @@ struct MeetingDetailView: View {
             && !appState.isMeetingRecording
     }
 
+    /// A lock that shows whether the meeting is private and toggles the meeting's own flag.
+    /// A meeting that is private only through its folder cannot be unlocked from here.
+    @ViewBuilder
+    private func privateToggle(for meeting: MeetingRecord) -> some View {
+        let isPrivate = appState.privateMeetingIDs.contains(meeting.id)
+        let isDirect = appState.directlyPrivateMeetingIDs.contains(meeting.id)
+        let inheritedOnly = isPrivate && !isDirect
+        Button {
+            controller.setMeetingPrivate(id: meeting.id, isPrivate: !isDirect)
+        } label: {
+            Image(systemName: isPrivate ? "lock.fill" : "lock.open")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isPrivate ? MuesliTheme.accent : MuesliTheme.textSecondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(inheritedOnly)
+        .help(inheritedOnly
+            ? "Private because its folder is private. Remove the mark from the folder to change this."
+            : (isPrivate ? "Private meeting. Click to remove the mark." : "Mark this meeting private"))
+        .accessibilityLabel(isPrivate ? "Private meeting" : "Mark meeting private")
+        .accessibilityIdentifier("meeting.private.toggle")
+    }
+
     @ViewBuilder
     private func compactHeaderActions(for meeting: MeetingRecord, appliedTemplate: MeetingTemplateSnapshot) -> some View {
         HStack(spacing: MuesliTheme.spacing8) {
             pipelineStatusChips(for: meeting)
             recordingRecoveryHeaderAction(for: meeting)
             resumeChooserIfAvailable(for: meeting)
+            privateToggle(for: meeting)
             exportMenu(for: meeting)
 
             if isEditingNotes || isEditingTranscript {
@@ -920,6 +961,8 @@ struct MeetingDetailView: View {
                 syncPendingTemplateSelectionIfNeeded(
                     for: controller.meeting(id: meeting.id) ?? meeting
                 )
+                // A summary cancelled by Resume is not an error.
+                guard !(error is CancellationError) else { return }
                 summaryErrorMessage = error.localizedDescription
             }
         }
@@ -1395,7 +1438,9 @@ struct MeetingDetailView: View {
             Text(label)
                 .font(MuesliTheme.font(size: 12, weight: .semibold))
                 .foregroundStyle(MuesliTheme.textSecondary)
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .padding(.horizontal, MuesliTheme.spacing8)
         .padding(.vertical, 6)
         .background(MuesliTheme.surfacePrimary)
@@ -1435,23 +1480,31 @@ struct MeetingDetailView: View {
                 statusChip(for: meeting)
                 deleteButton
             }
+        } else if meeting.status == .processing {
+            HStack(spacing: MuesliTheme.spacing8) {
+                statusChip(for: meeting)
+                resumeChooserIfAvailable(for: meeting)
+            }
         } else {
             statusChip(for: meeting)
         }
     }
 
-    /// The resume control only makes sense on a finished meeting when no other
-    /// recording/editing workflow is active.
+    /// Resume stays on screen for a finished or finalizing meeting (including while it is being
+    /// summarized). The controller hides it only while a recording is active or starting, and the
+    /// control is disabled, with a tooltip saying why, while re-transcription or editing blocks it.
     @ViewBuilder
     private func resumeChooserIfAvailable(for meeting: MeetingRecord) -> some View {
-        if controller.canResumeFinishedMeeting(meeting),
-           !appState.isMeetingRecording,
-           !appState.isMeetingStarting,
-           !isEditingNotes,
-           !isEditingTranscript,
-           !isSummarizing,
-           !isRetranscribing {
-            resumeRecordingButton(for: meeting)
+        switch controller.resumeAvailability(for: meeting) {
+        case .hidden:
+            EmptyView()
+        case .disabled(let reason):
+            resumeRecordingButton(for: meeting, disabledReason: reason)
+        case .enabled:
+            let editingReason = (isEditingNotes || isEditingTranscript)
+                ? "Finish editing before resuming this meeting."
+                : nil
+            resumeRecordingButton(for: meeting, disabledReason: editingReason)
         }
     }
 
@@ -1577,6 +1630,14 @@ struct MeetingDetailView: View {
                     }
                 }
 
+                if meeting.savedRecordingPath != nil {
+                    Button {
+                        setRecordingPinned(!recordingPinned, meetingID: meeting.id)
+                    } label: {
+                        Label(recordingPinned ? "Allow Pruning" : "Keep Recording", systemImage: recordingPinned ? "pin.slash" : "pin")
+                    }
+                }
+
                 if controller.canDeleteMeeting(meeting) {
                     Button(role: .destructive) {
                         showDeleteConfirmation = true
@@ -1600,6 +1661,24 @@ struct MeetingDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .help("More actions")
+        .overlay(alignment: .topTrailing) {
+            if recordingPinned {
+                Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(MuesliTheme.textSecondary).allowsHitTesting(false)
+            }
+        }
+        .task(id: meeting.id) {
+            let service = controller.recordingRetentionService
+            let id = meeting.id
+            recordingPinned = await Task.detached { (try? service.isPinned(meetingID: id)) ?? false }.value
+        }
+    }
+
+    private func setRecordingPinned(_ pinned: Bool, meetingID: Int64) {
+        let service = controller.recordingRetentionService
+        Task {
+            let saved = await Task.detached { (try? service.setPinned(pinned, meetingID: meetingID)) != nil }.value
+            if saved { recordingPinned = pinned }
+        }
     }
 
     private func templateMenuItem(title: String, systemImage: String, isSelected: Bool) -> some View {
@@ -1684,7 +1763,7 @@ struct MeetingDetailView: View {
     /// (Not `Menu(primaryAction:)` — with a plain custom label on macOS the
     /// chevron segment doesn't render, leaving the menu unreachable.)
     @ViewBuilder
-    private func resumeRecordingButton(for meeting: MeetingRecord) -> some View {
+    private func resumeRecordingButton(for meeting: MeetingRecord, disabledReason: String? = nil) -> some View {
         HStack(spacing: 1) {
             Button {
                 controller.resumeFinishedMeeting(meetingID: meeting.id)
@@ -1701,7 +1780,7 @@ struct MeetingDetailView: View {
                 .background(MuesliTheme.accent)
             }
             .buttonStyle(.plain)
-            .help("Resume recording")
+            .help(disabledReason ?? "Resume recording")
 
             Menu {
                 Button {
@@ -1714,6 +1793,7 @@ struct MeetingDetailView: View {
                 } label: {
                     Label("Start a follow-up", systemImage: "arrow.turn.down.right")
                 }
+                .disabled(!controller.canStartFollowUpMeeting(meeting))
             } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
@@ -1725,9 +1805,11 @@ struct MeetingDetailView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: true, vertical: false)
-            .help("Resume recording, or start a follow-up meeting")
+            .help(disabledReason ?? "Resume recording, or start a follow-up meeting")
             .accessibilityLabel("More resume options")
         }
+        .disabled(disabledReason != nil)
+        .opacity(disabledReason == nil ? 1 : 0.5)
         .fixedSize()
         .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
         .overlay(
@@ -2243,6 +2325,7 @@ struct MeetingDetailView: View {
                     syncLocalState(with: refreshed)
                 }
             case .failure(let error):
+                guard !(error is CancellationError) else { return }
                 summaryErrorMessage = error.localizedDescription
             }
         }

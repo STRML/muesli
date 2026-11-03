@@ -201,7 +201,7 @@ struct DictationsView: View {
     }
 
     private var dictationFilterBar: some View {
-        HStack(spacing: MuesliTheme.spacing12) {
+        WrappingHStack(spacing: MuesliTheme.spacing12, lineSpacing: MuesliTheme.spacing8) {
             if appState.showsDeviceOriginFilter {
                 RecordOriginPicker(selection: Binding(
                     get: { appState.dictationOriginFilter },
@@ -215,9 +215,9 @@ struct DictationsView: View {
                     onSelect: { controller.filterDictations(application: $0) }
                 )
             }
-            Spacer(minLength: 0)
             dateFilterButton
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var voiceNoteButton: some View {

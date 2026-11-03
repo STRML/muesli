@@ -10,11 +10,20 @@ struct MeetingResumePolicyTests {
         #expect(MeetingResumePolicy.canResume(status: .completed))
     }
 
-    @Test("non-completed meetings cannot be resumed")
-    func nonCompletedCannotResume() {
-        for status in [MeetingStatus.recording, .processing, .noteOnly, .failed] {
+    @Test("a processing meeting can be resumed; recording, note-only and failed rows cannot")
+    func onlyFinishedOrProcessingCanResume() {
+        #expect(MeetingResumePolicy.canResume(status: .processing))
+        for status in [MeetingStatus.recording, .noteOnly, .failed] {
             #expect(!MeetingResumePolicy.canResume(status: status))
         }
+    }
+
+    @Test("a resumed calendar meeting stops with the call; a hand-made note does not")
+    func resumeStartOrigin() {
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true) == .scheduledMeetingPrompt)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: false) == .manual)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: true).signalLossResponse == .stopWithNotice)
+        #expect(MeetingResumePolicy.startOrigin(hasCalendarEvent: false).signalLossResponse == .transcriptInactivity)
     }
 
     @Test("combined transcript keeps the prior text and appends the new with a separator")

@@ -237,6 +237,20 @@ struct BackendOption: Equatable {
         .senseVoiceSmall, .gemma4E2BLiteRT, .gemma4E4BLiteRT, .qwen3Asr,
     ]
 
+    /// Experimental models the Models tab offers on this macOS version. Models that need a newer
+    /// macOS stay listed with their reason. Models known not to load on this one are hidden unless
+    /// downloaded, so the card can explain why and offer Delete.
+    static func offeredExperimental(
+        currentOSVersion: OperatingSystemVersion = Self.currentOSVersion,
+        isDownloaded: (BackendOption) -> Bool = { $0.isDownloaded }
+    ) -> [BackendOption] {
+        experimental.filter { option in
+            guard let ceiling = option.unsupportedFromOSMajorVersion,
+                  currentOSVersion.majorVersion >= ceiling else { return true }
+            return isDownloaded(option)
+        }
+    }
+
     /// Native streaming backends used by low-latency product surfaces.
     /// Meeting-only helpers such as Parakeet Realtime EOU are managed by their
     /// dedicated model store and displayed alongside these options in Models.
@@ -388,7 +402,24 @@ struct BackendOption: Equatable {
         }
     }
 
+    /// First macOS major version on which this model is known not to load, or nil if none.
+    var unsupportedFromOSMajorVersion: Int? {
+        switch backend {
+        case "qwen":
+            // The Qwen3 ASR 0.6B CoreML export fails to load on macOS 27.0.1: the stateful decoder
+            // hits an `mps_spi.sdpa` mask mismatch (mask 1x1x1x53 vs key cache length 0) and the
+            // ANE/CPU fallback returns error -14. It needs a re-export. Only 27.0.1 was observed;
+            // 26.x is unconfirmed, so the model stays offered there.
+            return 27
+        default:
+            return nil
+        }
+    }
+
     func isCompatible(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> Bool {
+        if let ceiling = unsupportedFromOSMajorVersion, currentOSVersion.majorVersion >= ceiling {
+            return false
+        }
         let minimum = minimumOSVersion
         return (currentOSVersion.majorVersion, currentOSVersion.minorVersion, currentOSVersion.patchVersion)
             >= (minimum.majorVersion, minimum.minorVersion, minimum.patchVersion)
@@ -397,6 +428,9 @@ struct BackendOption: Equatable {
     /// Applies even to installed models; download state does not establish OS compatibility.
     func incompatibilityReason(currentOSVersion: OperatingSystemVersion = Self.currentOSVersion) -> String? {
         guard !isCompatible(currentOSVersion: currentOSVersion) else { return nil }
+        if let ceiling = unsupportedFromOSMajorVersion, currentOSVersion.majorVersion >= ceiling {
+            return "\(label) does not load on macOS \(ceiling) or later yet. Choose another model."
+        }
         let minimum = minimumOSVersion
         let required = minimum.minorVersion == 0 ? "\(minimum.majorVersion)" : Self.label(for: minimum)
         return "\(label) requires macOS \(required) or later (you're on macOS \(Self.label(for: currentOSVersion)))."
@@ -2166,6 +2200,38 @@ enum OnboardingUseCase: String, Codable, CaseIterable {
 }
 
 extension AppConfig {
+    /// Reverts any change to the summary backend while `lockedSummaryBackend` is set.
+    mutating func enforceSummaryBackendLock() {
+        let locked = lockedSummaryBackend.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !locked.isEmpty, meetingSummaryBackend != locked { meetingSummaryBackend = locked }
+    }
+
+    /// Writes the summary provider picked during onboarding, with its key. A nil choice
+    /// changes nothing, so an already configured backend and its credentials stay as they are.
+    mutating func applyOnboardingSummaryChoice(
+        _ choice: MeetingSummaryBackendOption?,
+        apiKey: String?,
+        anthropicWorkspaceID: String?,
+        retainLegacyOpenRouterKey: Bool
+    ) {
+        if let choice {
+            meetingSummaryBackend = choice.backend
+        }
+        if choice == .anthropic, let anthropicWorkspaceID {
+            self.anthropicWorkspaceID = anthropicWorkspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let apiKey, !apiKey.isEmpty else { return }
+        if choice == .openAI {
+            openAIAPIKey = apiKey
+        } else if choice == .anthropic {
+            anthropicAPIKey = apiKey
+        } else if choice == .openRouter, retainLegacyOpenRouterKey {
+            // ConfigStore retries the migration and preserves this
+            // fallback if protected credential storage remains unavailable.
+            openRouterAPIKey = apiKey
+        }
+    }
+
     /// Remembers (or, with nil, clears) the folder picked for an upcoming meeting, and drops
     /// choices for meetings that started more than a week ago. `currentStartTimes` maps occurrence
     /// keys to the start the calendar reports now, so a postponed event keeps its choice.
@@ -2322,10 +2388,19 @@ struct AppConfig: Codable, Equatable {
     var meetingTranscriptionBackend: String = BackendOption.whisper.backend
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
+    /// Disk budget for saved meeting audio in GB. 0 means unlimited: never prune.
+    var recordingsBudgetGB: Int = 0
+    var recordingsMinimumAgeDays: Int = 7
     var defaultMeetingTemplateID: String = MeetingTemplates.autoID
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
     var autoRecordMeetings: Bool = false
+    /// Open the meeting link and start transcribing when a calendar meeting starts. Off by default.
+    var autoJoinMeetingsAtStart: Bool = false
+    /// Start transcribing by itself a few seconds after a call is detected. On by default.
+    var autoRecordDetectedCalls: Bool = true
+    /// Read the names on a browser call's page while recording, to list who attended and name speakers.
+    var readCallParticipants: Bool = true
     var upcomingMeetingsHourCount: Int?
     var upcomingMeetingsWindow: UpcomingMeetingsWindow {
         .resolve(dayCount: upcomingMeetingsDayCount, hourCount: upcomingMeetingsHourCount)
@@ -2395,10 +2470,13 @@ struct AppConfig: Codable, Equatable {
     var meetingSummaryMaxOutputTokens: Int? = nil
     var meetingSummaryRetryCount: Int = MeetingSummaryRetryPolicy.defaultRetryCount
     var ollamaURL: String = "http://localhost:11434"
+    var ollamaURLCommand: String = ""
     var ollamaModel: String = "qwen3.5"
     var lmStudioURL: String = "http://localhost:1234"
+    var lmStudioURLCommand: String = ""
     var lmStudioModel: String = ""
     var customLLMURL: String = ""
+    var customLLMURLCommand: String = ""
     var customLLMAPIKey: String = ""
     var customLLMAPIKeyCommand: String = ""
     var customLLMHeaders: [CustomLLMRequestHeader] = []
@@ -2471,6 +2549,8 @@ struct AppConfig: Codable, Equatable {
     var recapIncludeVidshots: Bool = false
     var timeTurnerExcludedApps: String = ""
     var enableScreenContext: Bool = false
+    /// Opt-in for TelemetryDeck usage signals; off until the user turns it on in Settings.
+    var shareUsageAnalytics: Bool = false
     var enableDictationOCRContext: Bool = false
     var cotypistSuggestionLength: CotypistSuggestionLength = .sentence
     var cotypistFrequency: CotypistFrequency = .balanced
@@ -2484,6 +2564,9 @@ struct AppConfig: Codable, Equatable {
     var useCoreAudioTap: Bool = true
     /// Enables the explicitly selected live meeting transcription mode.
     var enableLiveStreamingPartials: Bool = false
+    /// Labels system audio as Speaker 1, 2, ... in the Live tab while recording.
+    /// Provisional: the Stop-time diarization pass stays the source of truth.
+    var enableLiveSpeakerLabels: Bool = false
     var meetingLiveCaptionBackend: String = MeetingLiveCaptionBackend.defaultBackend.rawValue
     /// Reveals a compact live transcript beside the meeting waveform while the
     /// pointer is over either floating surface.
@@ -2495,9 +2578,24 @@ struct AppConfig: Codable, Equatable {
     var autoExportMarkdownFolderPath: String = ""
     var autoExportMarkdownContent: String = MeetingExportContent.notes.rawValue
     var autoExportFileFormat: String = MeetingAutoExportFileFormat.markdown.rawValue
+    /// Summary backend ids allowed to receive private meetings. Empty by default,
+    /// so private meetings are never sent anywhere until the user opts a backend in.
+    var privateTrustedBackends: [String] = []
+    /// When non-empty, `meetingSummaryBackend` is pinned to this id. Onboarding, ChatGPT sign-in or any
+    /// other writer that sets a different backend is reverted, so text can only go where you chose.
+    var lockedSummaryBackend: String = ""
     /// Folder picked on an upcoming calendar event, keyed by the occurrence's identity key. The
     /// meeting is only created when a note or recording starts, and it then lands in this folder.
     var plannedCalendarFolders: [String: PlannedCalendarFolder] = [:]
+    /// Keep one vault note per meeting up to date (stable name, updated in place, removed when the
+    /// meeting is deleted or becomes private) instead of appending a new file per export.
+    var autoExportKeepInSync: Bool = false
+    /// With keep-in-sync, file each note under its meeting folder.
+    var autoExportByFolder: Bool = true
+    /// Generate folder suggestions for unfiled meetings after they finish.
+    var autoClassifyMeetings: Bool = true
+    /// File a meeting automatically when a learned rule is decisive. LLM suggestions are never applied.
+    var autoApplyFolderSuggestions: Bool = false
     var iCloudSyncEnabled: Bool = false
     var showIOSCompanionPrompt: Bool = true
     var contributionPromptNextWordCount: Int?
@@ -2543,10 +2641,15 @@ struct AppConfig: Codable, Equatable {
         case meetingTranscriptionBackend = "meeting_transcription_backend"
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
+        case recordingsBudgetGB = "recordings_budget_gb"
+        case recordingsMinimumAgeDays = "recordings_minimum_age_days"
         case defaultMeetingTemplateID = "default_meeting_template_id"
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
         case autoRecordMeetings = "auto_record_meetings"
+        case autoJoinMeetingsAtStart = "auto_join_meetings_at_start"
+        case autoRecordDetectedCalls = "auto_record_detected_calls"
+        case readCallParticipants = "read_call_participants"
         case upcomingMeetingsHourCount = "upcoming_meetings_hour_count"
         case upcomingMeetingsDayCount = "upcoming_meetings_day_count"
         case showScheduledMeetingNotifications = "show_scheduled_meeting_notifications"
@@ -2594,10 +2697,13 @@ struct AppConfig: Codable, Equatable {
         case meetingSummaryMaxOutputTokens = "meeting_summary_max_output_tokens"
         case meetingSummaryRetryCount = "meeting_summary_retry_count"
         case ollamaURL = "ollama_url"
+        case ollamaURLCommand = "ollama_url_command"
         case ollamaModel = "ollama_model"
         case lmStudioURL = "lmstudio_url"
+        case lmStudioURLCommand = "lmstudio_url_command"
         case lmStudioModel = "lmstudio_model"
         case customLLMURL = "custom_llm_url"
+        case customLLMURLCommand = "custom_llm_url_command"
         case customLLMAPIKey = "custom_llm_api_key"
         case customLLMAPIKeyCommand = "custom_llm_api_key_command"
         case customLLMHeaders = "custom_llm_headers"
@@ -2668,6 +2774,7 @@ struct AppConfig: Codable, Equatable {
         case recapIncludeVidshots = "recap_include_vidshots"
         case timeTurnerExcludedApps = "time_turner_excluded_apps"
         case enableScreenContext = "enable_screen_context"
+        case shareUsageAnalytics = "share_usage_analytics"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case cotypistSuggestionLength = "cotypist_suggestion_length"
         case cotypistFrequency = "cotypist_frequency"
@@ -2678,6 +2785,7 @@ struct AppConfig: Codable, Equatable {
         case cotypistModel = "cotypist_model"
         case useCoreAudioTap = "use_core_audio_tap"
         case enableLiveStreamingPartials = "enable_live_streaming_partials"
+        case enableLiveSpeakerLabels = "enable_live_speaker_labels"
         case meetingLiveCaptionBackend = "meeting_live_caption_backend"
         case showMeetingTranscriptOnIndicatorHover = "show_meeting_transcript_on_indicator_hover"
         case meetingHookEnabled = "meeting_hook_enabled"
@@ -2687,7 +2795,13 @@ struct AppConfig: Codable, Equatable {
         case autoExportMarkdownFolderPath = "auto_export_markdown_folder_path"
         case autoExportMarkdownContent = "auto_export_markdown_content"
         case autoExportFileFormat = "auto_export_file_format"
+        case privateTrustedBackends = "private_trusted_backends"
+        case lockedSummaryBackend = "locked_summary_backend"
         case plannedCalendarFolders = "planned_calendar_folders"
+        case autoExportKeepInSync = "auto_export_keep_in_sync"
+        case autoExportByFolder = "auto_export_by_folder"
+        case autoClassifyMeetings = "auto_classify_meetings"
+        case autoApplyFolderSuggestions = "auto_apply_folder_suggestions"
         case iCloudSyncEnabled = "icloud_sync_enabled"
         case showIOSCompanionPrompt = "show_ios_companion_prompt"
         case contributionPromptNextWordCount = "contribution_prompt_next_word_count"
@@ -2754,10 +2868,16 @@ struct AppConfig: Codable, Equatable {
             meetingTranscriptionBackend = migrated.backend; meetingTranscriptionModel = migrated.model
         }
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
+        // A corrupt budget must never start deleting audio: anything outside 0...100_000 means "unlimited".
+        recordingsBudgetGB = (try? c.decode(Int.self, forKey: .recordingsBudgetGB)).flatMap { (0...100_000).contains($0) ? $0 : nil } ?? defaults.recordingsBudgetGB
+        recordingsMinimumAgeDays = (try? c.decode(Int.self, forKey: .recordingsMinimumAgeDays)).flatMap { (1...3_650).contains($0) ? $0 : nil } ?? defaults.recordingsMinimumAgeDays
         defaultMeetingTemplateID = (try? c.decode(String.self, forKey: .defaultMeetingTemplateID)) ?? defaults.defaultMeetingTemplateID
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
+        autoJoinMeetingsAtStart = (try? c.decode(Bool.self, forKey: .autoJoinMeetingsAtStart)) ?? defaults.autoJoinMeetingsAtStart
+        autoRecordDetectedCalls = (try? c.decode(Bool.self, forKey: .autoRecordDetectedCalls)) ?? defaults.autoRecordDetectedCalls
+        readCallParticipants = (try? c.decode(Bool.self, forKey: .readCallParticipants)) ?? defaults.readCallParticipants
         let decodedHours = try? c.decode(Int.self, forKey: .upcomingMeetingsHourCount)
         upcomingMeetingsHourCount = [6, 12].contains(decodedHours ?? 0) ? decodedHours : nil
         if c.contains(.upcomingMeetingsDayCount) {
@@ -2863,10 +2983,13 @@ struct AppConfig: Codable, Equatable {
             (try? c.decode(Int.self, forKey: .meetingSummaryRetryCount)) ?? defaults.meetingSummaryRetryCount
         )
         ollamaURL = (try? c.decode(String.self, forKey: .ollamaURL)) ?? defaults.ollamaURL
+        ollamaURLCommand = (try? c.decode(String.self, forKey: .ollamaURLCommand)) ?? defaults.ollamaURLCommand
         ollamaModel = (try? c.decode(String.self, forKey: .ollamaModel)) ?? defaults.ollamaModel
         lmStudioURL = (try? c.decode(String.self, forKey: .lmStudioURL)) ?? defaults.lmStudioURL
+        lmStudioURLCommand = (try? c.decode(String.self, forKey: .lmStudioURLCommand)) ?? defaults.lmStudioURLCommand
         lmStudioModel = (try? c.decode(String.self, forKey: .lmStudioModel)) ?? defaults.lmStudioModel
         customLLMURL = (try? c.decode(String.self, forKey: .customLLMURL)) ?? defaults.customLLMURL
+        customLLMURLCommand = (try? c.decode(String.self, forKey: .customLLMURLCommand)) ?? defaults.customLLMURLCommand
         customLLMAPIKey = (try? c.decode(String.self, forKey: .customLLMAPIKey)) ?? defaults.customLLMAPIKey
         customLLMAPIKeyCommand = (try? c.decode(String.self, forKey: .customLLMAPIKeyCommand)) ?? defaults.customLLMAPIKeyCommand
         customLLMHeaders = (try? c.decode([CustomLLMRequestHeader].self, forKey: .customLLMHeaders)) ?? defaults.customLLMHeaders
@@ -2981,6 +3104,7 @@ struct AppConfig: Codable, Equatable {
         recapIncludeVidshots = (try? c.decode(Bool.self, forKey: .recapIncludeVidshots)) ?? false
         timeTurnerExcludedApps = (try? c.decode(String.self, forKey: .timeTurnerExcludedApps)) ?? ""
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
+        shareUsageAnalytics = (try? c.decode(Bool.self, forKey: .shareUsageAnalytics)) ?? defaults.shareUsageAnalytics
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         cotypistSuggestionLength = (try? c.decode(CotypistSuggestionLength.self, forKey: .cotypistSuggestionLength)) ?? defaults.cotypistSuggestionLength
         cotypistFrequency = (try? c.decode(CotypistFrequency.self, forKey: .cotypistFrequency)) ?? defaults.cotypistFrequency
@@ -2991,6 +3115,7 @@ struct AppConfig: Codable, Equatable {
         cotypistModel = (try? c.decode(CotypistModel.self, forKey: .cotypistModel)) ?? defaults.cotypistModel
         useCoreAudioTap = (try? c.decode(Bool.self, forKey: .useCoreAudioTap)) ?? defaults.useCoreAudioTap
         enableLiveStreamingPartials = (try? c.decode(Bool.self, forKey: .enableLiveStreamingPartials)) ?? defaults.enableLiveStreamingPartials
+        enableLiveSpeakerLabels = (try? c.decode(Bool.self, forKey: .enableLiveSpeakerLabels)) ?? defaults.enableLiveSpeakerLabels
         meetingLiveCaptionBackend = MeetingLiveCaptionBackend
             .resolved(try? c.decode(String.self, forKey: .meetingLiveCaptionBackend))
             .rawValue
@@ -3004,8 +3129,14 @@ struct AppConfig: Codable, Equatable {
         autoExportMarkdownContent = MeetingExportContent(rawValue: decodedAutoExportMarkdownContent)?.rawValue ?? defaults.autoExportMarkdownContent
         let decodedAutoExportFileFormat = (try? c.decode(String.self, forKey: .autoExportFileFormat)) ?? defaults.autoExportFileFormat
         autoExportFileFormat = MeetingAutoExportFileFormat(rawValue: decodedAutoExportFileFormat)?.rawValue ?? defaults.autoExportFileFormat
+        privateTrustedBackends = (try? c.decode([String].self, forKey: .privateTrustedBackends)) ?? defaults.privateTrustedBackends
+        lockedSummaryBackend = (try? c.decode(String.self, forKey: .lockedSummaryBackend)) ?? defaults.lockedSummaryBackend
         plannedCalendarFolders = (try? c.decode([String: LossyPlannedCalendarFolder].self, forKey: .plannedCalendarFolders))?
             .compactMapValues(\.value) ?? defaults.plannedCalendarFolders
+        autoExportKeepInSync = (try? c.decode(Bool.self, forKey: .autoExportKeepInSync)) ?? defaults.autoExportKeepInSync
+        autoExportByFolder = (try? c.decode(Bool.self, forKey: .autoExportByFolder)) ?? defaults.autoExportByFolder
+        autoClassifyMeetings = (try? c.decode(Bool.self, forKey: .autoClassifyMeetings)) ?? defaults.autoClassifyMeetings
+        autoApplyFolderSuggestions = (try? c.decode(Bool.self, forKey: .autoApplyFolderSuggestions)) ?? defaults.autoApplyFolderSuggestions
         contributionPromptNextWordCount = try? c.decode(Int.self, forKey: .contributionPromptNextWordCount)
         contributionPromptNextMeetingCount = try? c.decode(Int.self, forKey: .contributionPromptNextMeetingCount)
         contributionGitHubStarClicked = (try? c.decode(Bool.self, forKey: .contributionGitHubStarClicked)) ?? defaults.contributionGitHubStarClicked

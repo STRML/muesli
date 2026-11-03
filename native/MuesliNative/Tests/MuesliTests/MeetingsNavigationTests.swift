@@ -2312,8 +2312,11 @@ struct MeetingsNavigationTests {
         #expect(controller.hostedDictationSessionPresenceForTesting.finalizing)
         #expect(controller.selectedDictationProvider == .local)
         #expect(controller.dictationBackendReadiness == .preparing)
-        #expect(controller.selectedMeetingSummaryBackend == .openAI)
-        #expect(controller.config.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+        // Sign-out never picks another summary provider (STRML/muesli#6). The next summary
+        // hits the existing not-configured path instead of going to OpenAI.
+        #expect(controller.selectedMeetingSummaryBackend == .openRouter)
+        #expect(controller.config.meetingSummaryBackend == MeetingSummaryBackendOption.openRouter.backend)
+        #expect(!controller.canUseSummaryProvider(.openRouter))
         #expect(controller.selectedPostProcessorBackend == .local)
         #expect(controller.config.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
         let availableQuillModel = Gemma4LiteRTModel.allCases.first {
@@ -2326,7 +2329,7 @@ struct MeetingsNavigationTests {
         }
 
         let persisted = configStore.load()
-        #expect(persisted.meetingSummaryBackend == MeetingSummaryBackendOption.openAI.backend)
+        #expect(persisted.meetingSummaryBackend == MeetingSummaryBackendOption.openRouter.backend)
         #expect(persisted.postProcessorBackend == TranscriptCleanupBackendOption.local.backend)
         #expect(persisted.quilBackend == TranscriptCleanupBackendOption.gemma4LiteRT.backend)
         #expect(persisted.quilModel == controller.config.quilModel)
