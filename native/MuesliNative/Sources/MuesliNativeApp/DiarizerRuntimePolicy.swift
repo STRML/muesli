@@ -2,7 +2,6 @@ import CoreML
 import Darwin
 import FluidAudio
 import Foundation
-import TelemetryDeck
 
 enum DiarizerComputePolicy: String, Sendable, Equatable {
     case all

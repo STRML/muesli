@@ -4,7 +4,7 @@ import MuesliCore
 struct MeetingTextGenerationRequest {
     let system: String
     let user: String
-    let config: AppConfig
+    var config: AppConfig
     var maxOutputTokens: Int = 1_500
     var sessionID: UUID = UUID()
     var onReasoningSummary: (@Sendable (String) async -> Void)? = nil
@@ -125,7 +125,7 @@ struct MeetingTextGenerationClient: MeetingTextGenerating {
         guard supportsNativeTools(config: request.base.config) else { throw MeetingTextGenerationError.invalidEndpoint }
         let credential = try await credentialResolver(request.base.config)
         try Task.checkCancellation()
-        var headerOnly = request.base
+        var headerOnly = try await request.base.resolvingEndpointURLCommand()
         headerOnly.images = []
         var urlRequest = try Self.makeRequest(headerOnly, credential: credential)
         if provider == .openRouter { urlRequest.url = URL(string: "https://openrouter.ai/api/v1/responses")! }
@@ -158,17 +158,18 @@ struct MeetingTextGenerationClient: MeetingTextGenerating {
         if MeetingSummaryBackendOption.resolved(request.config.meetingSummaryBackend) == .customLLM {
             _ = try CustomLLMRequestHeaders.validated(request.config.customLLMHeaders)
         }
-        let credential = try await credentialResolver(request.config)
-        var urlRequest = try Self.makeRequest(request, credential: credential)
-        let provider = MeetingSummaryBackendOption.resolved(request.config.meetingSummaryBackend)
-        let anthropicSummary = request.allowSummaryImageEndpoints && (provider == .anthropic ||
-            (provider == .customLLM && request.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue))
+        let resolved = try await request.resolvingEndpointURLCommand()
+        let credential = try await credentialResolver(resolved.config)
+        var urlRequest = try Self.makeRequest(resolved, credential: credential)
+        let provider = MeetingSummaryBackendOption.resolved(resolved.config.meetingSummaryBackend)
+        let anthropicSummary = resolved.allowSummaryImageEndpoints && (provider == .anthropic ||
+            (provider == .customLLM && resolved.config.customLLMFormat == CustomLLMFormat.anthropic.rawValue))
         if anthropicSummary {
             let limit = try await MeetingSummaryOutputPolicy.anthropicLimit(
-                model: Self.model(request.config), requested: request.config.meetingSummaryMaxOutputTokens,
+                model: Self.model(resolved.config), requested: resolved.config.meetingSummaryMaxOutputTokens,
                 messagesURL: urlRequest.url!, apiKey: credential,
-                workspaceID: provider == .anthropic ? MeetingSummaryClient.resolvedAnthropicWorkspaceID(config: request.config) : "",
-                extraHeaders: provider == .customLLM ? try CustomLLMRequestHeaders.validated(request.config.customLLMHeaders) : [:],
+                workspaceID: provider == .anthropic ? MeetingSummaryClient.resolvedAnthropicWorkspaceID(config: resolved.config) : "",
+                extraHeaders: provider == .customLLM ? try CustomLLMRequestHeaders.validated(resolved.config.customLLMHeaders) : [:],
                 send: load)
             guard let data = urlRequest.httpBody,
                   var body = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {

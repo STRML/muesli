@@ -1,5 +1,3 @@
-import TelemetryDeck
-
 enum DictationStartupTelemetry {
     static func send(_ report: DictationStartupReport) {
         MuesliTelemetry.signal(report.eventName, parameters: report.telemetryParameters)

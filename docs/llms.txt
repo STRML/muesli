@@ -8,9 +8,10 @@ Muesli is a free, open-source macOS application that provides hold-to-talk dicta
 
 - **Dictation**: Hold Left Cmd to speak, release to paste transcribed text at your cursor
 - **Meeting Transcription**: Records mic + system audio, merges into a timestamped transcript
-- **Meeting Notes**: Optional AI-generated structured summaries (BYOK OpenAI/OpenRouter)
+- **Meeting Notes**: Optional AI-generated structured summaries through a backend you choose: ChatGPT sign-in (default), OpenAI, Anthropic, Claude Code, OpenRouter, Ollama, LM Studio, or a custom OpenAI/Anthropic-format endpoint
 - **Local-First**: Core transcription runs entirely on-device via Fluid Audio / CoreML
-- **Privacy**: Audio stays local by default. Optional hosted dictation sends audio to the selected provider; hosted cleanup, Quill, and summaries send the input needed for those features when selected. iCloud sync transfers text and sync metadata, not audio
+- **Privacy**: Audio stays local by default. Optional hosted dictation sends audio to the selected provider; hosted cleanup, Quill, and summaries send the input needed for those features when selected. iCloud sync (off by default) transfers text and sync metadata, not audio
+- **Analytics**: Anonymous TelemetryDeck usage signals only after the user turns on "Share anonymous usage analytics" (off by default); builds without an analytics ID record none
 - **Free & Open Source**: MIT licensed, no subscriptions, no usage limits
 
 ## Technical Details

@@ -40,7 +40,7 @@ MUESLI_CUA_SETTINGS_MATRIX=1 \
 MUESLI_CUA_BENCHMARK_MODEL='local:gemma4-litert:litert-community/gemma-4-E4B-it-litert-lm' \
 MUESLI_CUA_MATRIX_REPORT=/tmp/cua-settings-matrix-results.json \
 swift test --package-path native/MuesliNative \
-  --scratch-path "$HOME/Library/Caches/muesli-spm/worktrees/b617-cua/test" \
+  --scratch-path "$(scripts/muesli_spm_scratch_path.sh test)" \
   --filter ComputerUseLocalPlannerBenchmarkTests.settingsLatencyMatrix
 ```
 

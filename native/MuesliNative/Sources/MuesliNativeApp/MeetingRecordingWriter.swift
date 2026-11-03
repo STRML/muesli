@@ -98,8 +98,16 @@ final class MeetingRecordingWriter: FeedbackCaptureAudioWriting {
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
     private let synchronize: (FileHandle) throws -> Void
+    /// No system track will ever arrive (in-person meetings), so mic samples are
+    /// written as they come instead of waiting to be paired with system audio.
+    private let micOnly: Bool
 
-    init(destination: URL? = nil, synchronize: @escaping (FileHandle) throws -> Void = { try $0.synchronize() }) throws {
+    init(
+        micOnly: Bool = false,
+        destination: URL? = nil,
+        synchronize: @escaping (FileHandle) throws -> Void = { try $0.synchronize() }
+    ) throws {
+        self.micOnly = micOnly
         self.synchronize = synchronize
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("muesli-meeting-recordings", isDirectory: true)
@@ -282,7 +290,7 @@ final class MeetingRecordingWriter: FeedbackCaptureAudioWriting {
     }
 
     private func writeMixedSamples(state: inout State, flushAll: Bool) {
-        let availableCount = flushAll
+        let availableCount = flushAll || micOnly
             ? max(state.pendingMic.count, state.pendingSystem.count)
             : min(state.pendingMic.count, state.pendingSystem.count)
         guard availableCount > 0 else { return }
