@@ -11,7 +11,8 @@ set -euo pipefail
 # - CloudKit/APNs dev signing is opt-in with --cloud-entitlements
 # - External contributors can set MUESLI_SKIP_SIGN=1 to build without the
 #   maintainer signing certificate
-# - Uses a shared, worktree-isolated SwiftPM scratch path by default; set
+# - Uses a worktree-private SwiftPM scratch path and DerivedData under
+#   ~/Library/Caches/muesli-spm, seeded from an idle donor's on first use; set
 #   MUESLI_DISABLE_SWIFTPM_SCRATCH_PATH=1 to use package-local .build instead
 # - Installs to /Applications/MuesliDev*.app
 #
@@ -153,13 +154,13 @@ BUILD_ENV=(
   MUESLI_SUPPORT_DIR_NAME="$DEV_APP_NAME"
   MUESLI_DISPLAY_NAME="${DEV_APP_NAME/#Muesli/muesli}"
   MUESLI_SPARKLE_FEED_URL=""
-  MUESLI_TELEMETRYDECK_APP_ID="$MUESLI_TELEMETRYDECK_DEV_APP_ID"
-  MUESLI_TELEMETRY_CHANNEL="dev"
   MUESLI_USE_XCODE_BUILD="$RESOLVED_USE_XCODE_BUILD"
 )
 if [[ -n "$LANE" ]]; then
   BUILD_ENV+=(MUESLI_EXECUTABLE_NAME="$DEV_APP_NAME")
 fi
+muesli_telemetry_build_env "$MUESLI_TELEMETRYDECK_DEV_APP_ID" dev
+BUILD_ENV+=("${MUESLI_TELEMETRY_BUILD_ENV[@]}")
 
 use_local_only_entitlements() {
   RESOLVED_PROVISIONING_PROFILE=""
@@ -261,8 +262,14 @@ fi
 env "${BUILD_ENV[@]}" "$ROOT/scripts/build_native_app.sh" "$BUILD_CONFIG"
 
 echo ""
-echo "Launching $DEV_APP_NAME..."
-open "$DEV_APP"
+if [[ "${MUESLI_DEV_NO_LAUNCH:-0}" == "1" ]]; then
+  # An unsigned build must not run: macOS ties permission grants to the signing identity, so
+  # launching it asks for every permission again. dev-test-local.sh signs it first.
+  echo "Not launching $DEV_APP_NAME (MUESLI_DEV_NO_LAUNCH=1)."
+else
+  echo "Launching $DEV_APP_NAME..."
+  open "$DEV_APP"
+fi
 
 echo ""
 echo "=== Dev Test Ready ==="
