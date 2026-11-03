@@ -330,6 +330,23 @@ struct InsightsTests {
         #expect(deleted.appUsage.first(where: { $0.id == "bundle:com.apple.Notes" })?.sessions == 1)
     }
 
+    @Test("Synced iPhone engine aliases count as one model row")
+    func syncedEngineAliasesGroupByDisplayName() throws {
+        let store = try makeStore()
+        let now = Date()
+        for (index, engine) in ["fluidaudio-parakeet-v3", "parakeet-v3", "remote-custom-llm"].enumerated() {
+            try store.upsertSyncedTextRecord(SyncTextRecord(
+                id: "dictation-ios-\(index)", kind: .dictation, text: "from the phone", source: "ios",
+                engineIdentifier: engine, createdAt: now, updatedAt: now, startedAt: now, endedAt: now,
+                durationSeconds: 2, wordCount: 3
+            ))
+        }
+        let rows = try store.insightsSnapshot(range: .allTime, now: now).modelUsage
+            .filter { $0.backend == SyncedEngine.backend }
+        #expect(rows.map(\.name).sorted() == ["Parakeet v3", "Remote (your server)"])
+        #expect(rows.first { $0.name == "Parakeet v3" }?.sessions == 2)
+    }
+
     @Test("Model usage retains the actual endpoint and keeps different routes separate")
     func modelEndpointAttribution() throws {
         let store = try makeStore()

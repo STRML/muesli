@@ -1020,6 +1020,102 @@ struct DictationStoreTests {
         #expect(try store.textRecordsNeedingSync().isEmpty)
     }
 
+    @Test("synced iOS dictation keeps its engine through a local edit and re-upload")
+    func syncedIOSDictationKeepsEngine() throws {
+        let store = try makeStore()
+        let createdAt = Date(timeIntervalSince1970: 1_770_000_000)
+        func phoneRecord(engine: String?, updatedAt: Date) -> SyncTextRecord {
+            SyncTextRecord(
+                id: "dictation-ios-engine", kind: .dictation, text: "Sent to my server",
+                source: "ios", engineIdentifier: engine, createdAt: createdAt, updatedAt: updatedAt,
+                durationSeconds: 2, wordCount: 4, cloudChangeTag: "tag-1"
+            )
+        }
+
+        #expect(try store.upsertSyncedTextRecord(phoneRecord(engine: "remote-custom-llm", updatedAt: createdAt)))
+        #expect(try modelAttribution(recordName: "dictation-ios-engine", store: store)
+            == [SyncedEngine.backend, "remote-custom-llm", "Remote (your server)"])
+        #expect(try store.textRecordsForSync(recordNames: ["dictation-ios-engine"])["dictation-ios-engine"]?
+            .engineIdentifier == "remote-custom-llm")
+
+        // A later copy without an engine (or iOS's "icloud" sentinel) must not erase it.
+        #expect(try store.upsertSyncedTextRecord(phoneRecord(engine: "icloud", updatedAt: createdAt.addingTimeInterval(1))))
+        #expect(try modelAttribution(recordName: "dictation-ios-engine", store: store)?[1] == "remote-custom-llm")
+
+        try setDictationDirtyText(recordName: "dictation-ios-engine", text: "Edited on the Mac",
+                                  updatedAt: createdAt.addingTimeInterval(60), store: store)
+        let outgoing = try #require(try store.textRecordsNeedingSync().first)
+        #expect(outgoing.engineIdentifier == "remote-custom-llm")
+    }
+
+    @Test("Mac dictations upload no engine identifier")
+    func macDictationsUploadNoEngine() throws {
+        let store = try makeStore()
+        let now = Date()
+        try store.insertDictation(text: "typed by voice", durationSeconds: 2, startedAt: now, endedAt: now,
+                                  transcriptionModel: .init(backend: "whisper", model: "small", name: "Whisper Small"))
+        let outgoing = try #require(try store.textRecordsNeedingSync().first)
+        #expect(outgoing.engineIdentifier == nil)
+    }
+
+    @Test("Mac edit of a phone dictation with no local engine leaves the iCloud engine alone")
+    func macEditWithoutLocalEngineKeepsCloudEngine() throws {
+        let store = try makeStore()
+        let createdAt = Date(timeIntervalSince1970: 1_770_000_000)
+        // A dictation that synced before engines were stored locally arrives with no engine.
+        #expect(try store.upsertSyncedTextRecord(SyncTextRecord(
+            id: "dictation-ios-pre-upgrade", kind: .dictation, text: "Said on the phone",
+            source: "ios", createdAt: createdAt, updatedAt: createdAt,
+            durationSeconds: 2, wordCount: 4, cloudChangeTag: "tag-1"
+        )))
+        try setDictationDirtyText(recordName: "dictation-ios-pre-upgrade", text: "Edited on the Mac",
+                                  updatedAt: createdAt.addingTimeInterval(60), store: store)
+        let outgoing = try #require(try store.textRecordsNeedingSync().first)
+        #expect(outgoing.engineIdentifier == nil)
+
+        // A fresh or system-fields-only upload must not send the field, or CloudKit
+        // (changedKeys save policy) deletes the engine the phone wrote.
+        let fresh = MuesliICloudSyncEngine.syncZoneCloudRecord(from: outgoing)
+        #expect(!fresh.changedKeys().contains("engineIdentifier"))
+        #expect(fresh["text"] as? String == "Edited on the Mac")
+
+        // A conflict retry over the server copy keeps the phone's engine.
+        let server = CKRecord(recordType: MuesliICloudSyncEngine.Schema.textRecordType,
+                              recordID: CKRecord.ID(recordName: outgoing.id, zoneID: MuesliICloudSyncEngine.Schema.syncZoneID))
+        server["engineIdentifier"] = "remote-custom-llm" as NSString
+        let merged = MuesliICloudSyncEngine.syncZoneCloudRecord(from: outgoing, baseRecord: server)
+        #expect(merged["engineIdentifier"] as? String == "remote-custom-llm")
+        #expect(merged["text"] as? String == "Edited on the Mac")
+    }
+
+    @Test("synced engine names match the iPhone app, and unknown IDs show as-is")
+    func syncedEngineDisplayNames() {
+        #expect(SyncedEngine.displayName(for: "remote-custom-llm") == "Remote (your server)")
+        #expect(SyncedEngine.displayName(for: "fluidaudio-parakeet-v3") == "Parakeet v3")
+        #expect(SyncedEngine.displayName(for: "whisper-large-turbo") == "Whisper Turbo")
+        #expect(SyncedEngine.displayName(for: "new-engine") == "new-engine")
+        #expect(SyncedEngine.identifier("  icloud ") == nil)
+        #expect(SyncedEngine.identifier("") == nil)
+        #expect(SyncedEngine.identifier(nil) == nil)
+    }
+
+    private func modelAttribution(recordName: String, store: DictationStore) throws -> [String]? {
+        var db: OpaquePointer?
+        guard sqlite3_open(store.databasePath().path, &db) == SQLITE_OK else {
+            throw sqliteTestError("failed to open test database")
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        let sql = "SELECT transcription_backend, transcription_model, transcription_model_name FROM dictations WHERE cloud_record_name = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw sqliteTestError("failed to prepare attribution query")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, (recordName as NSString).utf8String, -1, nil)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return (0..<3).map { sqlite3_column_text(statement, Int32($0)).map { String(cString: $0) } ?? "" }
+    }
+
     @Test("older synced dictation is skipped and reported as not applied")
     func olderSyncedDictationIsSkipped() throws {
         let store = try makeStore()

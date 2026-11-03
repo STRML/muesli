@@ -529,6 +529,41 @@ struct MeetingMicrophoneDeliveryTests {
         #expect(try pcm(urls.3) == expectedMic)
     }
 
+    @Test("in-person session retains the microphone alone, unmixed, with no system capture")
+    func inPersonSessionKeepsOnlyMic() async throws {
+        let producer = ContractProducer(useQueue: true)
+        let aec = MeetingNeuralAec(preloadedProcessor: ContractAecProcessor())
+        let route = RouteAwareMeetingMicRecorder(systemDefaultRecorder:
+            StreamingMeetingMicRecorderAdapter(recorder: producer, kind: .systemDefaultStreaming))
+        let session = MeetingSession(title: "in-person", calendarEventID: nil,
+            backend: .parakeetEnglish,
+            runtime: RuntimePaths(repoRoot: URL(fileURLWithPath: NSTemporaryDirectory()),
+                                  menuIcon: nil, appIcon: nil, bundlePath: nil),
+            config: AppConfig(),
+            templateSnapshot: .init(id: "test", name: "test", kind: .custom, prompt: ""),
+            transcriptionCoordinator: TranscriptionCoordinator(), meetingMicRecorder: route,
+            aec: aec, inPerson: true)
+        try await session.testingStartCapture()
+        var expectedMic: [Int16] = []
+        let captureStart = MicrophoneCaptureAudio.frame(atHostTime: mach_absolute_time()) - 4096
+        for index in 0..<8 {
+            try producer.emit(Array(repeating: index + 1, count: 512), at: captureStart + Int64(index * 512))
+            expectedMic += Array(repeating: Int16(Float(index + 1) / 16 * 32767), count: 512)
+        }
+        // Mic audio reaches the chunk pipeline immediately: no AEC wait for a reference that never comes.
+        var heldByAec = -1
+        session.testingPipelineBarrier { heldByAec = aec.flushStreamingMic().count }
+        #expect(heldByAec == 0)
+        let urls = await session.testingFinishCapture()
+        defer { for url in [urls.0, urls.1, urls.2].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) } }
+        func pcm(_ url: URL?) throws -> [Int16] {
+            try Data(contentsOf: try #require(url)).dropFirst(44).withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+        }
+        #expect(try pcm(urls.0) == expectedMic)
+        #expect(try pcm(urls.2) == expectedMic) // Full-length file for diarization: mic only.
+        #expect(urls.1 == nil) // No system chunk exists at all.
+    }
+
     @Test("steady microphone delivery never deduplicates consecutive PCM using timestamps",
           arguments: [0, -80, -4096, 800])
     func sameSourceJitter(offset: Int) {
@@ -1234,7 +1269,7 @@ struct MeetingMicrophoneDeliveryTests {
     }
 }
 
-private final class ContractGate {
+final class ContractGate {
     let entered = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
     func block() { entered.signal(); #expect(release.wait(timeout: .now() + 10) == .success) }
@@ -1246,7 +1281,7 @@ private final class ContractGate {
 
 /// Real producer, adapter and lifecycle; only the native device is
 /// replaced. Every output block goes through production admission and queues.
-private final class ContractProducer: StreamingDictationRecording, PausableStreamingDictationRecording, MicrophoneCaptureReporting {
+final class ContractProducer: StreamingDictationRecording, PausableStreamingDictationRecording, MicrophoneCaptureReporting {
     let driver: ContractQueueDriver?
     private let streaming: StreamingMicRecorder?
     private let child: StreamingDictationRecording & MicrophoneCaptureReporting
@@ -1320,7 +1355,7 @@ private final class ContractProducer: StreamingDictationRecording, PausableStrea
     func currentPower() -> Float { child.currentPower() }
 }
 
-private final class ContractQueueDriver {
+final class ContractQueueDriver {
     var onStop: (() -> Void)?
     private let queue = AudioQueueRef(bitPattern: 1)!
     private var callback: AudioQueueInputCallback?
@@ -1389,7 +1424,7 @@ private final class ContractQueueDriver {
     deinit { for buffer in buffers { buffer.pointee.mAudioData.deallocate(); buffer.deinitialize(count: 1); buffer.deallocate() } }
 }
 
-private final class ContractSystemAudio: SystemAudioCapturing {
+final class ContractSystemAudio: SystemAudioCapturing {
     var onPCMSamples: (([Int16]) -> Void)?
     var isRecording = false
     var isPaused = false
@@ -1400,7 +1435,7 @@ private final class ContractSystemAudio: SystemAudioCapturing {
     func stop() -> URL? { isRecording = false; return nil }
 }
 
-private final class ContractAecProcessor: MeetingAecProcessor {
+final class ContractAecProcessor: MeetingAecProcessor {
     let name = "test", frameSize = 4, sampleRate = 16_000
     var events: [String] = [] // Session pipeline queue only.
     var input: [Float] = []

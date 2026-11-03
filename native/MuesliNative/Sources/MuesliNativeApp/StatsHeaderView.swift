@@ -18,8 +18,12 @@ struct StatsHeaderView: View {
         }
     }
 
+    /// Four across when there is room, two by two in a narrow pane, one column below that.
     private var cards: some View {
-        HStack(spacing: MuesliTheme.spacing16) {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 92), spacing: MuesliTheme.spacing16)],
+            spacing: MuesliTheme.spacing16
+        ) {
             StatCard(
                 icon: "flame.fill",
                 iconColor: Color(hex: 0xF5A623),

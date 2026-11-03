@@ -16,7 +16,9 @@ enum TranscriptFormatter {
         diarizationSegments: [TimedSpeakerSegment]?,
         micDiarizationSegments: [TimedSpeakerSegment]? = nil,
         meetingStart: Date,
-        conservativeSpeakerAttribution: Bool = false
+        conservativeSpeakerAttribution: Bool = false,
+        speakerNames: [String: String] = [:],
+        undiarizedSystemSpeaker: String = "Others"
     ) -> String {
         // The formatter is intentionally source-agnostic: upstream capture decides
         // which mic/system segments are valid, then this layer only labels/merges.
@@ -42,7 +44,9 @@ enum TranscriptFormatter {
 
         let taggedSystem: [TaggedSegment]
         if let diarizationSegments, !diarizationSegments.isEmpty {
+            // "Speaker N" labels, replaced by a recognized person's name when one matched.
             let speakerLabelMap = speakerLabelMap(for: diarizationSegments, prefix: "Speaker")
+                .mapValues { speakerNames[$0] ?? $0 }
 
             taggedSystem = systemSegments.map { segment in
                 let speaker = conservativeSpeakerAttribution
@@ -51,7 +55,7 @@ enum TranscriptFormatter {
                 return TaggedSegment(segment: segment, speaker: speaker)
             }
         } else {
-            taggedSystem = systemSegments.map { TaggedSegment(segment: $0, speaker: "Others") }
+            taggedSystem = systemSegments.map { TaggedSegment(segment: $0, speaker: undiarizedSystemSpeaker) }
         }
 
         let tagged = (taggedMic + taggedSystem).sorted { $0.segment.start < $1.segment.start }
@@ -69,6 +73,12 @@ enum TranscriptFormatter {
             let text = taggedSegment.segment.text.trimmingCharacters(in: .whitespaces)
             return "[\(formatter.string(from: timestamp))] \(taggedSegment.speaker): \(text)"
         }.joined(separator: "\n")
+    }
+
+    /// Raw diarizer speaker ID -> "Speaker 1", "Speaker 2", ... in first-appearance order.
+    /// The speaker identity pipeline keys `meeting_speakers.label` on the same mapping.
+    static func speakerLabels(for diarizationSegments: [TimedSpeakerSegment]) -> [String: String] {
+        speakerLabelMap(for: diarizationSegments, prefix: "Speaker")
     }
 
     /// Raw diarizer ID → "<prefix> 1", "<prefix> 2", … in first-appearance order.

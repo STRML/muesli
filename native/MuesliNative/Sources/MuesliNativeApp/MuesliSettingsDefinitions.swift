@@ -241,6 +241,36 @@ extension MuesliController {
             }
         }
 
+        // Analytics consent is the user's call, so it is manual-only (never voice).
+        add("share_usage_analytics", "Share anonymous usage analytics",
+            [Choice(id: "on", label: "On"), Choice(id: "off", label: "Off")],
+            read: { $0.shareUsageAnalytics ? "on" : "off" },
+            voiceRestriction: "Analytics sharing can only be changed manually in Settings.",
+            unavailable: { value in
+                value == "on" && !TelemetryRuntimeConfiguration.buildHasAnalyticsDestination()
+                    ? "This build has no analytics destination, so there is nothing to share." : nil
+            }) { value in
+            self.setShareUsageAnalytics(value == "on")
+        }
+
+        // These delete user files, so they are manual-only (never voice).
+        let recordingsManualOnly = "Recording storage settings delete audio files and can only be changed manually in Settings."
+        add("recordings_budget", "Recordings storage budget",
+            [Choice(id: "off", label: "Off")] + [10, 25, 50, 100, 250, 500].map { Choice(id: String($0), label: "\($0) GB") },
+            read: { $0.recordingsBudgetGB == 0 ? "off" : String($0.recordingsBudgetGB) },
+            voiceRestriction: recordingsManualOnly) { value in
+            let gigabytes = value == "off" ? 0 : (Int(value) ?? 0)
+            self.updateConfig { $0.recordingsBudgetGB = gigabytes }
+            self.scheduleRecordingRetention(activeMeetingID: self.activeMeetingID)
+        }
+        add("recordings_min_age", "Keep recordings at least",
+            [3, 7, 14, 30].map { Choice(id: String($0), label: "\($0) days") },
+            read: { String($0.recordingsMinimumAgeDays) },
+            voiceRestriction: recordingsManualOnly) { value in
+            guard let days = Int(value), days > 0 else { return }
+            self.updateConfig { $0.recordingsMinimumAgeDays = days }
+            self.scheduleRecordingRetention(activeMeetingID: self.activeMeetingID)
+        }
         // Per-app formatting is mechanical, so these controls are voice eligible.
         // App identities remain behind one static discovery group.
         for rule in config.dictationAppFormattingRules {
@@ -637,8 +667,16 @@ extension MuesliController {
         settings.append(contentsOf: cleanupModelDefinitions(availability: availability))
 
         toggle("meeting_hover_transcript", "Show meeting transcript on hover", \.showMeetingTranscriptOnIndicatorHover)
+        toggle("live_speaker_labels", "Live speaker labels", \.enableLiveSpeakerLabels, apply: setLiveSpeakerLabelsEnabled)
         toggle("auto_record_meetings", "Auto-record calendar meetings", \.autoRecordMeetings)
+        toggle("auto_join_meetings", "Auto-join meetings at start", \.autoJoinMeetingsAtStart)
+        toggle("auto_record_detected_calls", "Auto-record detected calls", \.autoRecordDetectedCalls)
+        toggle("read_call_participants", "Read participant names from calls", \.readCallParticipants)
         toggle("auto_export_meetings", "Auto-export meetings", \.autoExportMarkdownEnabled)
+        toggle("auto_export_keep_in_sync", "Keep one note per meeting up to date", \.autoExportKeepInSync)
+        toggle("auto_export_by_folder", "File notes by meeting folder", \.autoExportByFolder)
+        toggle("auto_classify_meetings", "Suggest folders for meetings", \.autoClassifyMeetings)
+        toggle("auto_apply_folder_suggestions", "Auto-file confident folder matches", \.autoApplyFolderSuggestions)
         toggle("meeting_reminders", "Scheduled meeting notifications", \.showScheduledMeetingNotifications)
         toggle("calendar_meeting_links_only", "Only show events with a meeting link", \.calendarMeetingLinksOnly,
                apply: updateCalendarMeetingLinkFilter)
@@ -706,6 +744,16 @@ extension MuesliController {
             }) { value in
             if let option = MeetingSummaryBackendOption.all.first(where: { $0.backend == value }) { self.selectMeetingSummaryBackend(option) }
         }
+        // Which services may receive private meetings. Changing this is manual-only: it widens
+        // what leaves the Mac, so a voice command must never grant it.
+        for option in MeetingSummaryBackendOption.all {
+            add("private_trust_\(option.backend)", "Allow private meetings on \(option.label)",
+                [.init(id: "on", label: "On"), .init(id: "off", label: "Off")],
+                read: { PrivateMeetingPolicy.isTrusted(option.backend, in: $0.privateTrustedBackends) ? "on" : "off" },
+                voiceRestriction: "Choosing which services may receive private meetings can only be changed in Settings.") { value in
+                self.setBackendTrustedForPrivateMeetings(option.backend, trusted: value == "on")
+            }
+        }
         add("summary_gemma_model", "On-device Gemma chat and summary model",
             Gemma4LiteRTModel.generalPurpose.map { Choice(id: $0.nativeChatModelID, label: $0.label) },
             read: { $0.gemmaChatModel }, unavailable: { value in
@@ -726,6 +774,8 @@ extension MuesliController {
             read: { $0.claudeCodeModel.trimmingCharacters(in: .whitespacesAndNewlines) }) { value in
             self.updateConfig { $0.claudeCodeModel = value }
         }
+        // The endpoint's own model list; a server that lists none keeps the manual text field in Settings.
+        textMenu("summary_custom_llm_model", "Custom LLM meeting summary model", appState.customLLMModels.map { .init(id: $0, label: $0) }, \.customLLMModel)
         textMenu("summary_openrouter_model", "OpenRouter meeting summary model", appState.openRouterSummaryModels.map { .init(id: $0.id, label: $0.label) }, \.openRouterModel)
         add("openrouter_dictation_model", "OpenRouter dictation model", appState.openRouterTranscriptionModels.map { .init(id: $0.id, label: $0.label) },
             read: { $0.openRouterDictationModel }) { self.selectOpenRouterDictationModel($0) }

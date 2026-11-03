@@ -177,6 +177,8 @@ final class MeetingSession {
     private let templateSnapshot: MeetingTemplateSnapshot
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let systemAudioRecorder: SystemAudioCapturing
+    /// Microphone-only meeting whose mic transcript is diarized into "Speaker N".
+    private let inPerson: Bool
     private let captureLifecycle: MeetingCaptureLifecycle
     private let discardCleanup = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     /// One-shot: a repeated start must not reset timing, recorders or AEC of the
@@ -255,11 +257,20 @@ final class MeetingSession {
     var onSystemAudioHealthEpisode: ((MeetingSystemAudioHealthEvent) -> Void)?
     var manualNotesProvider: (() async -> String?)?
     var participantNamesProvider: (() async -> [String])?
+    /// Answers whether this meeting is private at the moment of the call. It is asked
+    /// before every outbound request because the flag can change during processing.
+    var isPrivateMeetingProvider: (() async -> Bool)?
+    /// Persists this meeting's diarized speakers and returns `Speaker N -> name` for
+    /// recognized voices. An empty map keeps the transcript exactly as before.
+    var speakerNamesProvider: (([MeetingSpeakerObservation]) async -> [String: String])?
     var liveTitleProvider: (() async -> String?)?
     /// Formatted notes of the predecessor meeting when this session records a
     /// follow-up; injected into the summary prompt for action-item carry-forward.
     var previousMeetingNotes: String?
-    var onChunkTranscribed: (([SpeechSegment], String) -> Void)?
+    /// Committed segments for a source ("You"/"Others"). `displaySpeakers`, when
+    /// present, holds one provisional label per segment for the Live tab only; the
+    /// durable checkpoint keeps `speaker`.
+    var onChunkTranscribed: (([SpeechSegment], String, [String]?) -> Void)?
     /// Display-only streaming partial for a source ("You"/"Others", tail text).
     /// Empty text clears the source's tail. Called on a background thread.
     var onPartialTranscript: ((String, String) -> Void)?
@@ -272,6 +283,9 @@ final class MeetingSession {
         var isShutDown = false
     }
     private let partialSessionsStorage = OSAllocatedUnfairLock(initialState: PartialSessionsStorage())
+    /// Provisional speaker labels for system audio. Created from the config
+    /// snapshot at start, so toggling the setting mid-meeting waits for the next one.
+    private let liveSpeakerSessionStorage = OSAllocatedUnfairLock<LiveSpeakerLabelSession?>(initialState: nil)
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
 
@@ -300,8 +314,10 @@ final class MeetingSession {
         meetingMicRecorder: MeetingMicRecording = RouteAwareMeetingMicRecorder(),
         systemAudioCapture: SystemAudioCapturing? = nil,
         aec: MeetingNeuralAec = MeetingNeuralAec(),
-        microphoneClock: @escaping () -> Int64 = { MicrophoneCaptureAudio.frame(atHostTime: mach_absolute_time()) }
+        microphoneClock: @escaping () -> Int64 = { MicrophoneCaptureAudio.frame(atHostTime: mach_absolute_time()) },
+        inPerson: Bool = false
     ) {
+        self.inPerson = inPerson
         self.title = title
         self.calendarEventID = calendarEventID
         backendLock.withLock { $0 = backend }
@@ -314,6 +330,8 @@ final class MeetingSession {
         self.microphoneClock = microphoneClock
         if let systemAudioCapture {
             self.systemAudioRecorder = systemAudioCapture
+        } else if inPerson {
+            self.systemAudioRecorder = NoOpSystemAudioCapture()
         } else if config.useCoreAudioTap {
             self.systemAudioRecorder = CoreAudioSystemRecorder()
         } else {
@@ -446,6 +464,15 @@ final class MeetingSession {
             systemChunkTimingTracker.start()
             try prepareRealtimeAudioPipeline(vadManager: vadManager)
             setupRetainedRecordingWriterIfNeeded()
+            // Created before the first system sample so its clock matches the chunk timing.
+            liveSpeakerSessionStorage.withLock {
+                $0 = Self.makeLiveSpeakerSession(
+                    config: config,
+                    inPerson: inPerson,
+                    modelAvailable: inPerson && LiveSpeakerModelStore.isDownloaded(),
+                    factory: LiveSpeakerModelStore.loadEngine
+                )
+            }
         }
         try await captureLifecycle.start()
         try Task.checkCancellation()
@@ -459,6 +486,7 @@ final class MeetingSession {
             // OCR screenshots are safe when using CoreAudio tap (no SCStream conflict)
             await screenContextCollector.startPeriodicCapture(useOCR: config.useCoreAudioTap)
         }
+        liveSpeakerSession()?.start()
         setupStreamingPartialsIfAvailable()
     }
 
@@ -539,6 +567,51 @@ final class MeetingSession {
                 fputs("[meeting-partials] \(backend.label) setup failed: \(ContentPrivacy.shared.logDescription(error))\n", stderr)
             }
         }
+    }
+
+    /// Returns nil when live speaker labels are off for this meeting. In-person
+    /// meetings label live by default, but only from a model already on disk: a
+    /// meeting never downloads anything, so a missing model means no session.
+    static func makeLiveSpeakerSession(
+        config: AppConfig,
+        inPerson: Bool = false,
+        modelAvailable: Bool = true,
+        factory: @escaping LiveSpeakerLabelSession.EngineFactory
+    ) -> LiveSpeakerLabelSession? {
+        guard inPerson ? modelAvailable : config.enableLiveSpeakerLabels else { return nil }
+        return LiveSpeakerLabelSession(factory: factory)
+    }
+
+    /// Display labels for committed system segments, one per segment. nil when
+    /// no live session exists; a failed session answers "Others".
+    static func liveDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?
+    ) async -> [String]? {
+        guard let session else { return nil }
+        var labels: [String] = []
+        for segment in segments {
+            labels.append(await session.label(start: segment.start, end: segment.end))
+        }
+        return labels
+    }
+
+    /// Display labels for committed in-person mic segments. nil (today's "You")
+    /// whenever the session cannot give real labels: none, still loading, or
+    /// failed, including a failure while this batch waited. A range with no
+    /// detected voice reads as the undiarized speaker, like the final pass.
+    static func liveMicDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?
+    ) async -> [String]? {
+        guard let session, session.isLabeling else { return nil }
+        guard let labels = await liveDisplaySpeakers(for: segments, using: session),
+              session.isLabeling else { return nil }
+        return labels.map { $0 == LiveSpeakerLabeler.fallbackLabel ? InPersonMeeting.undiarizedSpeaker : $0 }
+    }
+
+    private func liveSpeakerSession() -> LiveSpeakerLabelSession? {
+        liveSpeakerSessionStorage.withLock { $0 }
     }
 
     private func micPartialSession() -> MeetingStreamingPartialSession? {
@@ -645,7 +718,7 @@ final class MeetingSession {
                 chunkTimingTracker.start()
                 systemChunkTimingTracker.start()
                 try prepareRealtimeAudioPipeline(vadManager: nil)
-                retainedRecordingWriter = try MeetingRecordingWriter()
+                retainedRecordingWriter = try MeetingRecordingWriter(micOnly: inPerson)
             }
             try await captureLifecycle.start()
         } catch {
@@ -653,6 +726,10 @@ final class MeetingSession {
             discard()
             throw error
         }
+    }
+
+    func testingInstallLiveSpeakerSession(_ session: LiveSpeakerLabelSession?) {
+        liveSpeakerSessionStorage.withLock { $0 = session }
     }
 
     func testingPipelineBarrier(_ inspect: () -> Void = {}) { chunkRotationQueue.sync(execute: inspect) }
@@ -758,6 +835,7 @@ final class MeetingSession {
         micRecoveryCoordinator.finishMeeting()
         stopSystemAudioWatchdog()
         stopPartialSessions()
+        liveSpeakerSession()?.stop()
         vadController?.stop()
         vadController = nil
         systemVadController?.stop()
@@ -775,6 +853,9 @@ final class MeetingSession {
         systemChunkCollector.cancelAll()
         fputs("[meeting] recording discarded\n", stderr)
     }
+
+    /// Lets the controller drop this session's title and summary LLM stages when a Resume supersedes the pass.
+    let summaryGate = MeetingSummaryStageGate()
 
     func stop(template: MeetingTemplateSnapshot? = nil, onRecordingReady: ((URL?, Error?) async -> Void)? = nil) async throws -> MeetingSessionResult {
         let selected = currentBackend()
@@ -836,8 +917,16 @@ final class MeetingSession {
         // reject samples in the stopping phase. Only now is the coordinator's episode
         // state final; close any open degradation episode as unrecovered.
         micRecoveryCoordinator.finishMeeting()
+        // Every system sample callback ran before the barrier above, so the labeler
+        // flushes its last partial window now. Chunks still committing keep their
+        // text either way; at worst their live label is "Others".
+        liveSpeakerSession()?.stop()
         let retainedRecordingURL = retainedRecordingWriter?.stop()
         retainedRecordingWriter = nil
+        // The controller consumes the retained file as soon as it is handed over.
+        let inPersonDiarizationCopy = inPerson ? InPersonMeeting.diarizationCopy(of: retainedRecordingURL) : nil
+        // In-person meetings always write a mic file for diarization; only keep it if the policy allows.
+        let keptRecordingURL = config.meetingRecordingSavePolicy == .never ? nil : retainedRecordingURL
         if stoppedCapture.timedOut {
             fputs("[meeting] capture shutdown deadline exceeded; preserving completed chunks while drivers retire\n", stderr)
             onCaptureShutdownTimedOut?()
@@ -854,6 +943,9 @@ final class MeetingSession {
         // Persist retained audio before final ASR or summary work can fail.
         // Retention is best-effort and must not bypass ASR or session teardown.
         await onRecordingReady?(retainedRecordingURL, retainedRecordingWriterError)
+        if keptRecordingURL == nil, let retainedRecordingURL {
+            try? FileManager.default.removeItem(at: retainedRecordingURL)
+        }
 
         var micTailFinalized = false
         var systemTailFinalized = false
@@ -925,7 +1017,9 @@ final class MeetingSession {
         }
 
         var diarizationSegments: [TimedSpeakerSegment]?
-        if let systemAudioURL {
+        if inPerson {
+            diarizationSegments = await InPersonMeeting.diarize(copy: inPersonDiarizationCopy, using: transcriptionCoordinator)
+        } else if let systemAudioURL {
             // Run speaker diarization on system audio (batch post-processing)
             if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL) {
                 diarizationSegments = diarizationResult
@@ -963,6 +1057,12 @@ final class MeetingSession {
                 return lhs.text < rhs.text
             }
             return lhs.start < rhs.start
+        }
+
+        if inPerson {
+            // One mic is the only channel: its transcript is the diarized one, and nobody is "You".
+            systemSegments = micSegments
+            micSegments = []
         }
 
         if let systemAudioURL,
@@ -1015,15 +1115,23 @@ final class MeetingSession {
             : .catalog(provider: finalBackend.backend, model: finalBackend.model)
         let transcriptHadFailures = micChunkHealthTracker.snapshot().failedChunkCount > 0
             || systemChunkHealthTracker.snapshot().failedChunkCount > 0
+        let speakerObservations = SpeakerCentroidBuilder.observations(from: protectedTranscriptInputs.diarizationSegments ?? [])
+        let speakerNames = speakerObservations.isEmpty ? [:] : await speakerNamesProvider?(speakerObservations) ?? [:]
+
         let rawTranscript = TranscriptFormatter.merge(
             micSegments: protectedTranscriptInputs.micSegments,
             systemSegments: protectedTranscriptInputs.systemSegments,
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
             micDiarizationSegments: protectedTranscriptInputs.micDiarizationSegments,
-            meetingStart: meetingStart
+            meetingStart: meetingStart,
+            speakerNames: speakerNames,
+            undiarizedSystemSpeaker: inPerson ? InPersonMeeting.undiarizedSpeaker : "Others"
         )
 
         let titleManualNotes = await manualNotesProvider?()
+        let nothingToSummarize = MeetingSummaryClient.hasNothingToSummarize(
+            transcript: rawTranscript, manualNotes: titleManualNotes
+        )
         let generatedTitle: String
         onProgress?(.generatingTitle)
         if let liveTitle = await userEditedLiveTitle() {
@@ -1033,10 +1141,11 @@ final class MeetingSession {
             calendarEventID: calendarEventID
         ) {
             generatedTitle = calendarTitle
-        } else if let autoTitle = await MeetingSummaryClient.generateTitle(
+        } else if nothingToSummarize {
+            generatedTitle = title
+        } else if let autoTitle = await generateTitleUnlessSuperseded(
             transcript: rawTranscript,
-            manualNotes: titleManualNotes,
-            config: config
+            manualNotes: titleManualNotes
         ),
            !autoTitle.isEmpty {
             generatedTitle = autoTitle
@@ -1053,27 +1162,43 @@ final class MeetingSession {
         // must participate in this request, not the earlier title snapshot.
         let manualNotes = await manualNotesProvider?()
         let formattedNotes: String
-        do {
-            analytics.finish(transcriptHadFailures ? .partial : .success, model: analyticsModel)
-            formattedNotes = try await MeetingSummaryClient.summarize(
-                transcript: rawTranscript,
-                meetingTitle: generatedTitle,
-                config: config,
-                template: templateSnapshot,
-                existingNotes: nil,
-                manualNotesToRetain: manualNotes,
-                participantNames: participantNames,
-                visualContext: visualContext.isEmpty ? nil : visualContext,
-                previousMeetingNotes: previousMeetingNotes
-            )
-        } catch {
-            fputs("[meeting] summary generation failed: \(MeetingSummaryLog.category(for: error))\n", stderr)
-            formattedNotes = MeetingSummaryClient.summaryFailureNotes(
-                transcript: rawTranscript,
-                meetingTitle: generatedTitle,
-                error: error,
-                manualNotes: manualNotes
-            )
+        analytics.finish(transcriptHadFailures ? .partial : .success, model: analyticsModel)
+        if nothingToSummarize {
+            fputs("[meeting] empty recording, skipping title and summary generation\n", stderr)
+            formattedNotes = MeetingSummaryClient.emptyRecordingNotes
+        } else {
+            do {
+                let isPrivate = await isPrivateMeetingProvider?() ?? false
+                let summaryConfig = config
+                let summaryTemplate = templateSnapshot
+                let summaryPreviousNotes = previousMeetingNotes
+                let summaryVisualContext = visualContext.isEmpty ? nil : visualContext
+                let summarized = try await summaryGate.run {
+                    try await MeetingSummaryClient.summarize(
+                        transcript: rawTranscript,
+                        meetingTitle: generatedTitle,
+                        config: summaryConfig,
+                        template: summaryTemplate,
+                        existingNotes: nil,
+                        manualNotesToRetain: manualNotes,
+                        participantNames: participantNames,
+                        visualContext: summaryVisualContext,
+                        previousMeetingNotes: summaryPreviousNotes,
+                        isPrivateMeeting: isPrivate
+                    )
+                }
+                // Dropped on purpose (a Resume superseded this pass): the controller keeps the
+                // transcript and regenerates notes for the whole meeting on the next Stop.
+                formattedNotes = summarized ?? ""
+            } catch {
+                fputs("[meeting] summary generation failed: \(MeetingSummaryLog.category(for: error))\n", stderr)
+                formattedNotes = MeetingSummaryClient.summaryFailureNotes(
+                    transcript: rawTranscript,
+                    meetingTitle: generatedTitle,
+                    error: error,
+                    manualNotes: manualNotes
+                )
+            }
         }
 
         diagnostics?.writeFinalReport(
@@ -1109,12 +1234,27 @@ final class MeetingSession {
             durationSeconds: max(endTime.timeIntervalSince(meetingStart), 0),
             rawTranscript: rawTranscript,
             formattedNotes: formattedNotes,
-            retainedRecordingURL: retainedRecordingURL,
+            retainedRecordingURL: keptRecordingURL,
             retainedRecordingError: retainedRecordingWriterError,
             systemRecordingURL: systemAudioURL,
             templateSnapshot: templateSnapshot,
             visualContext: visualContext.isEmpty ? nil : visualContext
         )
+    }
+
+    /// Nil when the title stage was superseded by a Resume or the model produced none.
+    private func generateTitleUnlessSuperseded(transcript: String, manualNotes: String?) async -> String? {
+        let isPrivate = await isPrivateMeetingProvider?() ?? false
+        let titleConfig = config
+        let generated = try? await summaryGate.run {
+            await MeetingSummaryClient.generateTitle(
+                transcript: transcript,
+                manualNotes: manualNotes,
+                config: titleConfig,
+                isPrivateMeeting: isPrivate
+            )
+        }
+        return generated ?? nil
     }
 
     static func calendarTitleCandidate(originalTitle: String, calendarEventID: String?) -> String? {
@@ -1208,7 +1348,10 @@ final class MeetingSession {
                 guard self.micChunkCollector.retire(id: retireID, segments: resolvedSegments) else { return }
                 self.commitMicPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
-                self.onChunkTranscribed?(resolvedSegments, "You")
+                let displaySpeakers = self.inPerson
+                    ? await Self.liveMicDisplaySpeakers(for: resolvedSegments, using: self.liveSpeakerSession())
+                    : nil
+                self.onChunkTranscribed?(resolvedSegments, "You", displaySpeakers)
             }
         } else {
             task.cancel()
@@ -1301,7 +1444,11 @@ final class MeetingSession {
                 guard self.systemChunkCollector.retire(id: retireID, segments: resolvedSegments) else { return }
                 self.commitSystemPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
-                self.onChunkTranscribed?(resolvedSegments, "Others")
+                let displaySpeakers = await Self.liveDisplaySpeakers(
+                    for: resolvedSegments,
+                    using: self.liveSpeakerSession()
+                )
+                self.onChunkTranscribed?(resolvedSegments, "Others", displaySpeakers)
             }
         } else {
             task.cancel()
@@ -1312,10 +1459,10 @@ final class MeetingSession {
         retainedRecordingWriter = nil
         retainedRecordingWriterError = nil
 
-        guard config.meetingRecordingSavePolicy != .never else { return }
+        guard InPersonMeeting.shouldRetainWriter(policy: config.meetingRecordingSavePolicy, inPerson: inPerson) else { return }
 
         do {
-            retainedRecordingWriter = try MeetingRecordingWriter()
+            retainedRecordingWriter = try MeetingRecordingWriter(micOnly: inPerson)
         } catch {
             retainedRecordingWriterError = error
             fputs("[meeting] failed to prepare retained recording writer: \(ContentPrivacy.shared.logDescription(error))\n", stderr)
@@ -1399,7 +1546,8 @@ final class MeetingSession {
 
             // AEC: clean mic using position-aligned system reference
             self.screenMicSpans.append(start: audio.startFrame, count: rawSamples.count)
-            let cleanedFloat = self.neuralAec.processStreamingMic(floatSamples)
+            // No far-end reference exists in-person; AEC would hold mic audio waiting for one.
+            let cleanedFloat = self.inPerson ? floatSamples : self.neuralAec.processStreamingMic(floatSamples)
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
         }
     }
@@ -1421,6 +1569,7 @@ final class MeetingSession {
 
             let floatSamples = samples.map { Float($0) / 32767.0 }
             self.feedSystemPartialSession(floatSamples)
+            self.liveSpeakerSession()?.enqueue(floatSamples)
             self.neuralAec.feedSystemSamples(floatSamples)
             let cleanedFloat = self.neuralAec.processStreamingMic([])
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
@@ -1435,6 +1584,9 @@ final class MeetingSession {
         guard !cleanedFloat.isEmpty else { return }
         // Single funnel for all AEC'd mic audio — the streaming partial tail
         // must consume exactly the stream the mic chunks record.
+        // In-person has no system track, so the mic stream is what live speaker
+        // labels read; same samples, same clock as the chunk timing below.
+        if inPerson { liveSpeakerSession()?.enqueue(cleanedFloat) }
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
             Int16(max(-1.0, min(1.0, sample)) * 32767)
         }

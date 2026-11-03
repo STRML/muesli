@@ -29,6 +29,7 @@ final class ConfigStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
         migrateLegacyOpenRouterCredential(in: &config)
+        config.enforceSummaryBackendLock()
         let legacy = credentials(in: config)
         do {
             if let data = try credentialVault.read(ConfigCredentials.account) {
@@ -61,6 +62,7 @@ final class ConfigStore {
     func save(_ config: AppConfig) -> Bool {
         ensureDirectory()
         var persistedConfig = config
+        persistedConfig.enforceSummaryBackendLock()
         migrateLegacyOpenRouterCredential(in: &persistedConfig)
         do {
             // Never write a new credential to plaintext after migration is introduced.

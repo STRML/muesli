@@ -414,7 +414,7 @@ final class BrowserMeetingActivityCollector {
             return nil
         }
 
-        browser.delegate = BrowserScriptingBridgeErrorDelegate()
+        browser.delegate = BrowserScriptingBridgeErrorDelegate(bundleID: app.bundleID)
         browser.timeout = timeoutTicks
         return browser
     }
@@ -477,8 +477,18 @@ private struct CachedBrowserMeeting {
 }
 
 private final class BrowserScriptingBridgeErrorDelegate: NSObject, SBApplicationDelegate {
+    let bundleID: String
+
+    init(bundleID: String) {
+        self.bundleID = bundleID
+    }
+
+    /// -1743 means the user has not allowed (or has denied) Automation for this browser, which is
+    /// why no room URL ever arrives; -1712 is a timeout.
     func eventDidFail(_ event: UnsafePointer<AppleEvent>, withError error: Error) -> Any? {
-        nil
+        let nsError = error as NSError
+        fputs("[meeting-monitor] browser_tab_lookup_failed app=\(bundleID) domain=\(nsError.domain) code=\(nsError.code)\n", stderr)
+        return nil
     }
 }
 

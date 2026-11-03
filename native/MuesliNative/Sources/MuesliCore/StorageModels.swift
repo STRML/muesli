@@ -647,17 +647,42 @@ public struct MeetingParticipantDraft: Equatable, Sendable {
     }
 }
 
+/// The vault file Muesli wrote for a meeting. `state` is `exported` or `pending_removal`.
+public struct MeetingExportRecord: Equatable, Sendable {
+    public let meetingID: Int64
+    public let path: String
+    public let state: String
+
+    public init(meetingID: Int64, path: String, state: String) {
+        self.meetingID = meetingID
+        self.path = path
+        self.state = state
+    }
+}
+
 public struct MeetingFolder: Identifiable, Codable, Sendable {
     public let id: Int64
     public var name: String
     public let parentID: Int64?
     public let createdAt: String
+    /// Meetings in a private folder, or in any of its subfolders, are private.
+    public let isPrivate: Bool
 
-    public init(id: Int64, name: String, parentID: Int64? = nil, createdAt: String) {
+    public init(id: Int64, name: String, parentID: Int64? = nil, createdAt: String, isPrivate: Bool = false) {
         self.id = id
         self.name = name
         self.parentID = parentID
         self.createdAt = createdAt
+        self.isPrivate = isPrivate
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        parentID = try container.decodeIfPresent(Int64.self, forKey: .parentID)
+        createdAt = try container.decode(String.self, forKey: .createdAt)
+        isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
     }
 }
 
@@ -743,6 +768,36 @@ public struct InsightsDailyActivity: Codable, Sendable, Equatable, Identifiable 
         self.words = words
         self.meetings = meetings
         self.meetingWords = meetingWords
+    }
+}
+
+/// The transcription engine another device (the iPhone app) reports in a synced record's
+/// `engineIdentifier`. The Mac stores it as the dictation's model attribution under `backend`.
+public enum SyncedEngine {
+    /// `transcription_backend` value for dictations whose engine was reported by another device.
+    public static let backend = "synced"
+
+    /// The reported identifier, or nil when absent. iOS writes "icloud" for records it imported
+    /// from iCloud itself, which names no engine.
+    public static func identifier(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty, trimmed != "icloud" else { return nil }
+        return trimmed
+    }
+
+    /// Mirrors the iOS app's `TranscriptionDisplayName`; unknown identifiers show as-is.
+    public static func displayName(for identifier: String) -> String {
+        switch identifier {
+        case "fluidaudio-parakeet-v3", "parakeet-v3": "Parakeet v3"
+        case "parakeet-tdt-ctc-110m": "Parakeet 110M"
+        case "parakeet-realtime-eou-120m": "Parakeet Realtime"
+        case "whisper-tiny-en": "Whisper Tiny"
+        case "whisper-small-en": "Whisper Small"
+        case "whisper-medium-en": "Whisper Medium"
+        case "whisper-large-turbo": "Whisper Turbo"
+        case "remote-custom-llm": "Remote (your server)"
+        default: identifier
+        }
     }
 }
 
