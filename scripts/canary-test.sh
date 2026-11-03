@@ -158,13 +158,13 @@ fi
 configure_postproc_override
 
 log "Building MuesliCanary (debug, signed)..."
+muesli_telemetry_build_env "$MUESLI_TELEMETRYDECK_DEV_APP_ID" canary
+env "${MUESLI_TELEMETRY_BUILD_ENV[@]}" \
 MUESLI_APP_NAME=MuesliCanary \
 MUESLI_BUNDLE_ID=com.muesli.canary \
 MUESLI_SUPPORT_DIR_NAME=MuesliCanary \
 MUESLI_DISPLAY_NAME="MuesliCanary" \
 MUESLI_SPARKLE_FEED_URL="" \
-MUESLI_TELEMETRYDECK_APP_ID="$MUESLI_TELEMETRYDECK_DEV_APP_ID" \
-MUESLI_TELEMETRY_CHANNEL="canary" \
 "$ROOT/scripts/build_native_app.sh" debug
 
 log ""
