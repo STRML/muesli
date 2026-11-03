@@ -1,5 +1,4 @@
 import Foundation
-import TelemetryDeck
 
 @MainActor
 final class DiagnosticIncidentReporter {
@@ -88,12 +87,10 @@ final class DiagnosticIncidentReporter {
     }
 
     private static func sendTelemetry(_ incident: DiagnosticIncident) {
-        let category: ErrorCategory = incident.telemetryCategory == .appState ? .appState : .thrownException
-        TelemetryDeck.errorOccurred(
+        TelemetryGate.shared.errorOccurred(
             id: incident.telemetryErrorID,
-            category: category,
-            message: nil,
-            parameters: incident.telemetryParameters
+            parameters: incident.telemetryParameters,
+            isAppState: incident.telemetryCategory == .appState
         )
     }
 }

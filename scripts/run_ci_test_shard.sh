@@ -83,9 +83,30 @@ case "${shard}" in
       BodhanBackendTests
       BodhanArtifactValidationTests
       BodhanLifecycleTests
+      MLXAsrDecodeGuardTests
+      MLXAsrModelStoreTests
+      MLXAsrLifecycleTests
       DictationBackendPreparationTests
       BufferedTranscriptionBackendIntegrationTests
       ContributionMilestoneTests
+      ICloudContainerResolutionTests
+      UISnapshotTests
+      RecordingRetentionPlannerTests
+      RecordingRetentionSchemaTests
+      RecordingRetentionServiceTests
+      LiveRetentionRunTests
+      FolderClassificationCoordinatorTests
+      FolderClassificationLLMTests
+      FolderClassificationRulesTests
+      FolderClassificationStoreTests
+      LiveClassificationRunTests
+      CustomLLMModelCatalogTests
+      CustomLLMModelListControllerTests
+      SummaryBackendLockTests
+      LiveTranscriptParagraphsTests
+      LiveTabAutoSelectTests
+      RecordingIndicatorIconTests
+      NarrowLayoutTests
       CotypistShaperTests
       CotypistHistoryTests
       CotypistSetupGuideLayoutTests
@@ -180,6 +201,15 @@ case "${shard}" in
       DictationCorrectionMonitorTests
       DictionaryCorrectionSubstitutionTests
       Nemotron35ModelStoreTests
+      LiveSpeakerLabelSessionTests
+      LiveSpeakerLabelerTests
+      LiveSpeakerRealModelSmokeTests
+      LiveSpeakerResampleTests
+      LiveSpeakerSupportTests
+      SpeakerEmbeddingSmokeTests
+      SpeakerIdentityPipelineTests
+      SpeakerIdentityStoreTests
+      SpeakerVoiceprintMatcherTests
     )
     ;;
   meetings)
@@ -187,6 +217,8 @@ case "${shard}" in
       BufferedMeetingPartialEngineTests
       BufferedMicrophoneCaptureTests
       MeetingMicrophoneDeliveryTests
+      InPersonMeetingTests
+      InPersonLiveSpeakerTests
       StreamingMicRecorderBufferTests
       AudioAttributionServiceTests
       CameraActivityMonitorTests
@@ -212,10 +244,13 @@ case "${shard}" in
       MeetingContactIdentityTests
       MeetingContactResolverTests
       MeetingDetectorTests
+      MeetingCallEndDetectionTests
+      MeetingSignalLossAlertTests
       MeetingParticipantStoreTests
       MeetingProcessingStageTests
       MeetingRecordingWriterTests
       MeetingRecordingTranscriberTests
+      MLXAsrChunkRunnerTests
       MeetingResumePolicyTests
       MeetingStreamingPartialSessionTests
       MeetingFollowUpPolicyTests
@@ -225,6 +260,7 @@ case "${shard}" in
       CustomLLMHeaderPropagationTests
       CustomLLMRequestHeadersTests
       InstallerVolumeScanTests
+      EndpointURLCommandTests
       SettingsModelFieldTests
       MeetingSummaryClientTests
       MeetingPipelineStatusTests
@@ -256,6 +292,11 @@ case "${shard}" in
       SpeakerAttributionTests
       MeetingSummaryBackendTests
       MeetingResummarizationPolicyTests
+      LateSummaryPolicyTests
+      MeetingSummaryStageGateTests
+      ResumeAvailabilityPolicyTests
+      ResumeStartFailureStoreTests
+      ResumeWhileSummarizingControllerTests
       MeetingTemplateResolutionTests
       MeetingTemplatesDefaultFallbackTests
       RouteAwareMeetingMicRecorderTests
@@ -264,8 +305,25 @@ case "${shard}" in
       CalendarPermissionStateTests
       DisabledCalendarFilterTests
       GoogleCalendarTests
+      ActiveRecordingSidebarItemTests
+      SidebarMeetingEntryTests
+      DetectedCallMatcherTests
+      MeetingCallEndScenarioTests
+      BrowserAutomationPermissionTests
+      LiveCalendarEventActionsTests
       PlannedCalendarFolderTests
+      LiveStudioSummaryTests
+      MeetingVaultExporterTests
+      PrivateMeetingCLISyncTests
+      PrivateMeetingICloudRemovalTests
+      PrivateMeetingChatTests
+      PrivateMeetingExportTests
+      PrivateMeetingPolicyTests
+      PrivateMeetingsStoreTests
       MeetingTitleLayoutTests
+      CallRosterParserTests
+      CallRosterNamingTests
+      CallRosterTrackerTests
     )
     ;;
   *)

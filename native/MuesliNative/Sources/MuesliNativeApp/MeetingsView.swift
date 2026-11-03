@@ -291,6 +291,8 @@ struct MeetingsView: View {
                     backLabel: appState.meetingChatDocumentTarget != nil ? (appState.meetingSourceReturnsToTimeTurner ? "Back to Time Turner" : "Back to Chat") : "Back to Meetings"
                 )
                 .id(meeting.id)
+            } else if appState.isFolderInboxSelected {
+                FolderInboxView(appState: appState, controller: controller)
             } else {
                 browserView
             }
@@ -353,6 +355,7 @@ struct MeetingsView: View {
                                 hasFollowUps: presentation.meetingIDsWithFollowUps.contains(meeting.id),
                                 localeVersion: localeChangeVersion,
                                 folders: appState.folders,
+                                isPrivate: appState.privateMeetingIDs.contains(meeting.id),
                                 browsedFolderID: appState.selectedFolderID,
                                 onSelect: { controller.showMeetingDocument(id: meeting.id) },
                                 onMove: { folderID in
@@ -477,84 +480,30 @@ struct MeetingsView: View {
             let groups = groupedUpcomingEvents
             let lastGroupId = groups.last?.id
             ForEach(groups) { group in
-                HStack(alignment: .top, spacing: 20) {
-                    // Date column
-                    VStack(alignment: .center, spacing: 2) {
-                        Text(group.dayNumber)
-                            .font(MuesliTheme.font(size: 24))
-                            .foregroundStyle(group.isToday ? MuesliTheme.accentText : MuesliTheme.textPrimary)
-                        Text(group.dayLabel)
-                            .font(MuesliTheme.font(size: 11, weight: .medium))
-                            .foregroundStyle(group.isToday ? MuesliTheme.accentText : MuesliTheme.textSecondary)
-                        Text(group.dayOfWeek)
-                            .font(MuesliTheme.font(size: 10))
-                            .foregroundStyle(MuesliTheme.textSecondary)
+                // Date beside the events when there is room; above them when the pane is narrow.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 20) {
+                        dateColumn(for: group)
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(group.events) { event in
+                                upcomingEventRow(event, isToday: group.isToday, stacked: false)
+                            }
+                        }
                     }
-                    .frame(width: 60)
 
-                    // Events column
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(group.events) { event in
-                            HStack(spacing: 8) {
-                                RoundedRectangle(cornerRadius: 1.5)
-                                    .fill(group.isToday ? MuesliTheme.accent : MuesliTheme.textSecondary.opacity(0.4))
-                                    .frame(width: 3, height: 36)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(event.title)
-                                        .font(MuesliTheme.font(size: 13, weight: .medium))
-                                        .foregroundStyle(MuesliTheme.textPrimary)
-                                        .lineLimit(1)
-
-                                    Text(formatTimeRange(event))
-                                        .font(MuesliTheme.font(size: 11))
-                                        .foregroundStyle(MuesliTheme.textSecondary)
-                                }
-
-                                Spacer()
-
-                                if let meetingURL = event.meetingURL,
-                                   !appState.isMeetingRecording,
-                                   !appState.isMeetingStarting {
-                                    joinActionControl(for: event, meetingURL: meetingURL)
-                                }
-
-                                let plannedFolder = appState.config.plannedFolderID(
-                                    for: event.resolvedCalendarOccurrence.identityKey,
-                                    existingFolderIDs: Set(appState.folders.map(\.id))
-                                ).flatMap { id in appState.folders.first { $0.id == id } }
-                                Menu {
-                                    Button("All Meetings") {
-                                        controller.planFolder(nil, for: event)
-                                    }
-                                    Divider()
-                                    ForEach(appState.folders) { folder in
-                                        Button(folder.name) {
-                                            controller.planFolder(folder.id, for: event)
-                                        }
-                                    }
-                                } label: {
-<<<<<<< HEAD
-                                    Text(plannedFolder?.name ?? "Add to folder")
-                                        .font(.system(size: 10, weight: .medium))
-=======
-                                    Text("Add to folder")
-                                        .font(MuesliTheme.font(size: 10, weight: .medium))
->>>>>>> upstream/main
-                                        .foregroundStyle(MuesliTheme.textSecondary)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(MuesliTheme.surfacePrimary)
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 4)
-                                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5)
-                                        )
-                                }
-                                .menuStyle(.borderlessButton)
-                                .fixedSize()
-
-                                hideEventButton(event)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Text(group.dayNumber)
+                                .font(MuesliTheme.font(size: 18, weight: .light))
+                            Text(group.dayLabel)
+                                .font(MuesliTheme.font(size: 11, weight: .medium))
+                            Text(group.dayOfWeek)
+                                .font(MuesliTheme.font(size: 10))
+                        }
+                        .foregroundStyle(group.isToday ? MuesliTheme.accentText : MuesliTheme.textSecondary)
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(group.events) { event in
+                                upcomingEventRow(event, isToday: group.isToday, stacked: true)
                             }
                         }
                     }
@@ -575,6 +524,93 @@ struct MeetingsView: View {
         )
     }
 
+    private func dateColumn(for group: UpcomingEventGroup) -> some View {
+        VStack(alignment: .center, spacing: 2) {
+            Text(group.dayNumber)
+                .font(MuesliTheme.font(size: 24, weight: .light))
+                .foregroundStyle(group.isToday ? MuesliTheme.accentText : MuesliTheme.textPrimary)
+            Text(group.dayLabel)
+                .font(MuesliTheme.font(size: 11, weight: .medium))
+                .foregroundStyle(group.isToday ? MuesliTheme.accentText : MuesliTheme.textSecondary)
+            Text(group.dayOfWeek)
+                .font(MuesliTheme.font(size: 10))
+                .foregroundStyle(MuesliTheme.textSecondary)
+        }
+        .frame(width: 60)
+    }
+
+    /// One calendar event. `stacked` puts the controls on their own wrapping line under the title for
+    /// a narrow pane; unstacked keeps everything on one row.
+    @ViewBuilder
+    private func upcomingEventRow(_ event: UnifiedCalendarEvent, isToday: Bool, stacked: Bool) -> some View {
+        let heading = HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(isToday ? MuesliTheme.accent : MuesliTheme.textSecondary.opacity(0.4))
+                .frame(width: 3, height: 36)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.title)
+                    .font(MuesliTheme.font(size: 13, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(stacked ? 2 : 1)
+
+                Text(formatTimeRange(event))
+                    .font(MuesliTheme.font(size: 11))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+        }
+        if stacked {
+            VStack(alignment: .leading, spacing: 6) {
+                heading
+                WrappingHStack(spacing: 8, lineSpacing: 6) {
+                    eventActionControls(for: event)
+                    plannedFolderMenu(for: event)
+                    hideEventButton(event)
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                heading
+                Spacer()
+                eventActionControls(for: event)
+                plannedFolderMenu(for: event)
+                hideEventButton(event)
+            }
+        }
+    }
+
+    private func plannedFolderMenu(for event: UnifiedCalendarEvent) -> some View {
+        let plannedFolder = appState.config.plannedFolderID(
+            for: event.resolvedCalendarOccurrence.identityKey,
+            existingFolderIDs: Set(appState.folders.map(\.id))
+        ).flatMap { id in appState.folders.first { $0.id == id } }
+        return Menu {
+            Button("All Meetings") {
+                controller.planFolder(nil, for: event)
+            }
+            Divider()
+            ForEach(appState.folders) { folder in
+                Button(folder.name) {
+                    controller.planFolder(folder.id, for: event)
+                }
+            }
+        } label: {
+            Text(plannedFolder?.name ?? "Add to folder")
+                .font(MuesliTheme.font(size: 10, weight: .medium))
+                .foregroundStyle(MuesliTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 0.5)
+                )
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
     }()
@@ -583,6 +619,108 @@ struct MeetingsView: View {
         let f = Self.timeFormatter
         return "\(f.string(from: event.startDate)) – \(f.string(from: event.endDate))"
     }
+
+    /// Explicit buttons while an event is happening now (or about to), so a missed notification
+    /// never blocks starting; otherwise the compact join control for events with a link.
+    @ViewBuilder
+    private func eventActionControls(for event: UnifiedCalendarEvent) -> some View {
+        // Re-evaluated every 20 seconds so the buttons appear as the event goes live.
+        SwiftUI.TimelineView(.periodic(from: .now, by: 20)) { context in
+            let recording = recordingContext(for: event)
+            let live = LiveCalendarEventActions.visibleActions(
+                start: event.startDate,
+                end: event.endDate,
+                now: context.date,
+                hasMeetingURL: event.meetingURL != nil,
+                recording: recording
+            )
+            if !live.isEmpty {
+                liveEventButtons(live, for: event)
+            } else if let meetingURL = event.meetingURL, recording == .idle {
+                joinActionControl(for: event, meetingURL: meetingURL)
+            }
+        }
+    }
+
+    private func recordingContext(for event: UnifiedCalendarEvent) -> LiveRecordingContext {
+        let activeRow = appState.activeMeetingID.flatMap { id in appState.meetingRows.first { $0.id == id } }
+        let activeIsThisEvent = activeRow.map {
+            $0.calendarOccurrence?.identityKey == event.resolvedCalendarOccurrence.identityKey
+                || $0.calendarEventID == event.id
+        } ?? false
+        return LiveRecordingContext.make(
+            isRecording: appState.isMeetingRecording,
+            isStarting: appState.isMeetingStarting,
+            activeIsThisEvent: activeIsThisEvent
+        )
+    }
+
+    private func liveEventButtons(_ actions: [LiveCalendarEventAction], for event: UnifiedCalendarEvent) -> some View {
+        HStack(spacing: 6) {
+            ForEach(actions, id: \.self) { action in
+                switch action {
+                case .joinAndTranscribe:
+                    Button {
+                        if let meetingURL = event.meetingURL {
+                            performJoinAction(.joinAndRecord, for: event, meetingURL: meetingURL)
+                        }
+                    } label: {
+                        liveButtonLabel("Join & Transcribe", symbol: MeetingJoinDefaultAction.joinAndRecord.symbolName, filled: true)
+                    }
+                    .buttonStyle(.plain)
+                case .transcribe:
+                    Button {
+                        controller.recordOnly(
+                            title: event.title,
+                            meetingURL: event.meetingURL,
+                            endDate: event.endDate,
+                            calendarOccurrence: event.resolvedCalendarOccurrence
+                        )
+                    } label: {
+                        liveButtonLabel("Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
+                    }
+                    .buttonStyle(.plain)
+                case .switchAndJoin:
+                    Button {
+                        controller.switchRecording(to: event, join: true)
+                    } label: {
+                        liveButtonLabel("Switch & Join", symbol: MeetingJoinDefaultAction.joinAndRecord.symbolName, filled: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the recording that is still running, then joins and transcribes this meeting")
+                case .switchAndTranscribe:
+                    Button {
+                        controller.switchRecording(to: event, join: false)
+                    } label: {
+                        liveButtonLabel("Switch & Transcribe", symbol: MeetingJoinDefaultAction.recordOnly.symbolName, filled: false)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stops the recording that is still running, then transcribes this meeting")
+                }
+            }
+        }
+    }
+
+    private func liveButtonLabel(_ title: String, symbol: String, filled: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 9))
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .foregroundStyle(filled ? Color.white : Self.joinActionGreen)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(filled ? Self.joinActionGreen : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Self.joinActionGreen, lineWidth: filled ? 0 : 1)
+        )
+    }
+
+    private static let joinActionGreen = Color(nsColor: NSColor(red: 0.20, green: 0.72, blue: 0.53, alpha: 1.0))
+    private static let joinActionGreenDarker = Color(nsColor: NSColor(red: 0.15, green: 0.58, blue: 0.42, alpha: 1.0))
 
     /// Split control mirroring the meeting notification panel: the primary segment runs
     /// the default action from Settings, the chevron offers the other two.
@@ -699,6 +837,14 @@ struct MeetingsView: View {
                         browserHeaderActions
                     }
                 }
+
+                // A narrow pane: the five actions wrap instead of widening the page.
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
+                    browserHeaderTitle
+                    WrappingHStack(spacing: MuesliTheme.spacing8, lineSpacing: MuesliTheme.spacing8) {
+                        browserHeaderActionItems
+                    }
+                }
             }
 
             browserHeaderMeta(meetingCount: meetingCount)
@@ -720,27 +866,41 @@ struct MeetingsView: View {
 
     @ViewBuilder
     private func browserHeaderMeta(meetingCount: Int) -> some View {
-        HStack(spacing: MuesliTheme.spacing8) {
-            Text("\(meetingCount) meeting\(meetingCount == 1 ? "" : "s")")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textSecondary)
-                .fixedSize()
+        let count = Text("\(meetingCount) meeting\(meetingCount == 1 ? "" : "s")")
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textSecondary)
+        let hint = Text("Open a meeting to review notes, transcript, and template-driven summaries")
+            .font(MuesliTheme.callout())
+            .foregroundStyle(MuesliTheme.textTertiary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: MuesliTheme.spacing8) {
+                count.fixedSize()
+                Text("\u{2022}")
+                    .font(MuesliTheme.callout())
+                    .foregroundStyle(MuesliTheme.textTertiary)
+                    .fixedSize()
+                hint
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text("\u{2022}")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textTertiary)
-                .fixedSize()
-
-            Text("Open a meeting to review notes, transcript, and template-driven summaries")
-                .font(MuesliTheme.callout())
-                .foregroundStyle(MuesliTheme.textTertiary)
+            VStack(alignment: .leading, spacing: 2) {
+                count
+                hint
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var browserHeaderActions: some View {
+        HStack(spacing: MuesliTheme.spacing8) {
+            browserHeaderActionItems
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
-    private var browserHeaderActions: some View {
-        HStack(spacing: MuesliTheme.spacing8) {
+    private var browserHeaderActionItems: some View {
+        Group {
             Button {
                 controller.startQuickNoteMeeting(folderID: appState.selectedFolderID)
             } label: {
@@ -758,6 +918,32 @@ struct MeetingsView: View {
             .disabled(appState.isMeetingRecording || appState.isMeetingStarting)
             .help("Start a quick meeting note")
             .fixedSize()
+
+            Button {
+                controller.startInPersonMeetingRecording()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.2.wave.2")
+                        .font(MuesliTheme.font(size: 11, weight: .semibold))
+                    Text("In-person")
+                        .font(MuesliTheme.font(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(MuesliTheme.textPrimary)
+                .padding(.horizontal, MuesliTheme.spacing12)
+                .padding(.vertical, 8)
+                .background(MuesliTheme.surfacePrimary)
+                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                .overlay(
+                    RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                        .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(appState.isMeetingRecording || appState.isMeetingStarting)
+            .help("Record a room with the microphone only and label the speakers")
+            .fixedSize()
+
 
             Menu {
                 Button("Audio file…") { controller.importAudioFile(folderID: appState.selectedFolderID) }
@@ -805,12 +991,35 @@ struct MeetingsView: View {
             .buttonStyle(.muesli(.secondary))
             .fixedSize()
         }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder
     private func activeMeetingBanner(_ meeting: MeetingRecord) -> some View {
-        HStack(spacing: MuesliTheme.spacing12) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: MuesliTheme.spacing12) {
+                activeMeetingInfo(meeting)
+                Spacer(minLength: MuesliTheme.spacing12)
+                HStack(spacing: MuesliTheme.spacing12) { activeMeetingActions(meeting) }
+                    .fixedSize()
+            }
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                activeMeetingInfo(meeting)
+                WrappingHStack(spacing: MuesliTheme.spacing8, lineSpacing: MuesliTheme.spacing8) {
+                    activeMeetingActions(meeting)
+                }
+            }
+        }
+        .padding(MuesliTheme.spacing12)
+        .background(MuesliTheme.backgroundRaised)
+        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
+        .overlay(
+            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
+                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+        )
+    }
+
+
+    private func activeMeetingInfo(_ meeting: MeetingRecord) -> some View {
             HStack(spacing: 8) {
                 Circle()
                     .fill(activeMeetingStatusColor(for: meeting))
@@ -825,9 +1034,10 @@ struct MeetingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
             }
+    }
 
-            Spacer(minLength: MuesliTheme.spacing12)
-
+    @ViewBuilder
+    private func activeMeetingActions(_ meeting: MeetingRecord) -> some View {
             Button {
                 controller.showMeetingDocument(id: meeting.id)
             } label: {
@@ -873,14 +1083,6 @@ struct MeetingsView: View {
                 .buttonStyle(.muesli(.recording))
                 .disabled(!appState.isMeetingRecording)
             }
-        }
-        .padding(MuesliTheme.spacing12)
-        .background(MuesliTheme.backgroundRaised)
-        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge))
-        .overlay(
-            RoundedRectangle(cornerRadius: MuesliTheme.cornerLarge)
-                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
-        )
     }
 
     private func activeMeetingStatusText(for meeting: MeetingRecord) -> String {

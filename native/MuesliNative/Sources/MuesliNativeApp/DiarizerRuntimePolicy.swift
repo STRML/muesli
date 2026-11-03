@@ -2,7 +2,6 @@ import CoreML
 import Darwin
 import FluidAudio
 import Foundation
-import TelemetryDeck
 
 enum DiarizerComputePolicy: String, Sendable, Equatable {
     case all
@@ -177,7 +176,7 @@ struct DiarizerPreloadDiagnostics {
         defaults: UserDefaults = .standard,
         now: @escaping () -> Date = Date.init,
         signalSink: @escaping SignalSink = { event, parameters in
-            TelemetryDeck.signal(event, parameters: parameters)
+            MuesliTelemetry.signal(event, parameters: parameters)
         }
     ) {
         self.defaults = defaults

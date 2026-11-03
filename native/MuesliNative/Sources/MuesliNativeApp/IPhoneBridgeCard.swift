@@ -1,7 +1,6 @@
 import AppKit
 import CoreImage.CIFilterBuiltins
 import SwiftUI
-import TelemetryDeck
 
 enum ICloudBridgeWorkingCopy {
     static func title(isActivationPending: Bool) -> String {
@@ -175,65 +174,90 @@ struct IPhoneBridgeCard: View {
     @State private var isReconnectConfirmationPresented = false
     @State private var isResetConfirmationPresented = false
 
+    private var bridgeIconView: some View {
+        RotatingSyncIcon(
+            systemName: bridgeIcon,
+            isAnimating: bridgeSyncIconIsAnimating,
+            font: .system(size: 18, weight: .semibold)
+        )
+        .foregroundStyle(bridgeIconColor)
+        .frame(width: 28)
+    }
+
+    private var bridgeText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(bridgeTitle)
+                .font(MuesliTheme.body())
+                .foregroundStyle(MuesliTheme.textPrimary)
+            Text(bridgeSubtitle)
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .lineLimit(2)
+        }
+    }
+
+    private var bridgePrimaryButton: some View {
+        Button(action: primaryAction) {
+            HStack(spacing: 6) {
+                Text(buttonTitle)
+                RotatingSyncIcon(
+                    systemName: buttonIcon,
+                    isAnimating: buttonIconIsAnimating,
+                    font: .system(size: 12, weight: .semibold)
+                )
+            }
+            .font(MuesliTheme.font(size: 12, weight: .semibold))
+            .foregroundStyle(MuesliTheme.accentText)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background(MuesliTheme.accentSubtle)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+        }
+        .buttonStyle(.plain)
+        .disabled(actionDisabled)
+        .help(buttonHelp)
+    }
+
+    private var bridgeDismissButton: some View {
+        Button {
+            controller.updateConfig { $0.showIOSCompanionPrompt = false }
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(MuesliTheme.textTertiary)
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.muesli(.quiet))
+        .help("Hide iOS companion prompt")
+    }
+
     var body: some View {
-        HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
-            RotatingSyncIcon(
-                systemName: bridgeIcon,
-                isAnimating: bridgeSyncIconIsAnimating,
-                font: .system(size: 18, weight: .semibold)
-            )
-            .foregroundStyle(bridgeIconColor)
-            .frame(width: 28)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(bridgeTitle)
-                    .font(MuesliTheme.body())
-                    .foregroundStyle(MuesliTheme.textPrimary)
-                Text(bridgeSubtitle)
-                    .font(MuesliTheme.caption())
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .lineLimit(2)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: MuesliTheme.spacing12) {
+                bridgeIconView
+                bridgeText
+                Spacer(minLength: MuesliTheme.spacing12)
+                bridgePrimaryButton
+                bridgeDismissButton
             }
-
-            Spacer(minLength: MuesliTheme.spacing12)
-
-            Button(action: primaryAction) {
-                HStack(spacing: 6) {
-                    Text(buttonTitle)
-                    RotatingSyncIcon(
-                        systemName: buttonIcon,
-                        isAnimating: buttonIconIsAnimating,
-                        font: .system(size: 12, weight: .semibold)
-                    )
+            VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                HStack(alignment: .top, spacing: MuesliTheme.spacing12) {
+                    bridgeIconView
+                    bridgeText
                 }
-                .font(MuesliTheme.font(size: 12, weight: .semibold))
-                .foregroundStyle(MuesliTheme.accentText)
-                .padding(.horizontal, 12)
-                .frame(height: 28)
-                .background(MuesliTheme.accentSubtle)
-                .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                HStack(spacing: MuesliTheme.spacing8) {
+                    bridgePrimaryButton
+                    Spacer(minLength: 0)
+                    bridgeDismissButton
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(actionDisabled)
-            .help(buttonHelp)
-
-            Button {
-                controller.updateConfig { $0.showIOSCompanionPrompt = false }
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(MuesliTheme.textTertiary)
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.muesli(.quiet))
-            .help("Hide iOS companion prompt")
         }
         .padding(.horizontal, MuesliTheme.spacing12)
         .padding(.vertical, MuesliTheme.spacing8)
         .onAppear {
             guard !promptSeen else { return }
             promptSeen = true
-            TelemetryDeck.signal("bridge_prompt_seen", parameters: ["platform": "macos"])
+            MuesliTelemetry.signal("bridge_prompt_seen", parameters: ["platform": "macos"])
         }
         .sheet(isPresented: $isQRCodePresented, onDismiss: {
             controller.cancelIPhoneBridgeDeviceDiscovery()
@@ -247,7 +271,7 @@ struct IPhoneBridgeCard: View {
         .onChange(of: qrCodePresentationPhase) { _, phase in
             guard phase == .dismiss else { return }
             isQRCodePresented = false
-            TelemetryDeck.signal("bridge_qr_auto_dismissed", parameters: ["platform": "macos_timeline"])
+            MuesliTelemetry.signal("bridge_qr_auto_dismissed", parameters: ["platform": "macos_timeline"])
         }
         .alert("Reconnect iCloud sync?", isPresented: $isReconnectConfirmationPresented) {
             Button("Cancel", role: .cancel) {}
@@ -463,12 +487,12 @@ struct IPhoneBridgeCard: View {
         switch flowAction {
         case .setUp, .continueSetup:
             isQRCodePresented = true
-            TelemetryDeck.signal("bridge_qr_shown", parameters: ["platform": "macos_setup"])
+            MuesliTelemetry.signal("bridge_qr_shown", parameters: ["platform": "macos_setup"])
             controller.beginIPhoneBridgeDeviceDiscovery()
             controller.enableIPhoneBridgeSync()
         case .connectDevice:
             isQRCodePresented = true
-            TelemetryDeck.signal("bridge_qr_shown", parameters: ["platform": "macos"])
+            MuesliTelemetry.signal("bridge_qr_shown", parameters: ["platform": "macos"])
             controller.beginIPhoneBridgeDeviceDiscovery()
         case .waitingForDevice:
             break

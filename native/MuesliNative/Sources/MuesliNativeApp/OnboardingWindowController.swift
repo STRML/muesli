@@ -129,6 +129,12 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         // reach (focus rings, panels, menus) renders light around permanently dark content.
         window.appearance = NSAppearance(named: .darkAqua)
 
+        // Show the configured provider when onboarding has a tab for it. This only seeds the
+        // display; OnboardingView writes a backend only after the user picks one.
+        let configuredSummaryBackend = MeetingSummaryBackendOption.resolved(controller.config.meetingSummaryBackend)
+        let initialSummaryBackend = OnboardingFlow.summaryTabs.contains(configuredSummaryBackend)
+            ? configuredSummaryBackend
+            : .chatGPT
         let rootView: OnboardingView
         if let progress = resumeProgress {
             let backend = BackendOption.all.first(where: {
@@ -146,7 +152,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 initialHotkey: hotkey,
                 initialSystemAudioRequested: progress.systemAudioRequested,
                 initialUseCase: OnboardingUseCase.resolved(progress.onboardingUseCaseRawValue),
-                initialSummaryBackend: .chatGPT,
+                initialSummaryBackend: initialSummaryBackend,
                 initialModelDownloadProgress: progress.modelDownloadProgress,
                 initialModelDownloadStatus: progress.modelDownloadStatus
             )
@@ -156,7 +162,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
                 appState: controller.appState,
                 initialCohereLanguage: controller.config.resolvedCohereLanguage,
                 initialUseCase: controller.config.resolvedOnboardingUseCase,
-                initialSummaryBackend: .chatGPT
+                initialSummaryBackend: initialSummaryBackend
             )
         }
         window.contentView = NSHostingView(rootView: rootView)

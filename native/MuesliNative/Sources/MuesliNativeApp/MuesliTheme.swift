@@ -107,6 +107,8 @@ enum MuesliTheme {
     /// Dots, waveforms, badges and borders. Use the text/fill roles below for labels.
     static let recording        = Color(hex: 0xEF4444)
     static let transcribing     = Color(hex: 0xF59E0B)
+    /// Something needs an answer from the user (the call a recording followed has ended).
+    static let attention        = Color(hex: 0xF59E0B)
     static let success          = Color(hex: 0x34D399)
 
     static let darkInkHex = 0x000000
@@ -280,6 +282,9 @@ struct PageTitle: View {
         Text(text)
             .font(MuesliTheme.title1())
             .foregroundStyle(MuesliTheme.textPrimary)
+            // A narrow pane shrinks the title rather than breaking it mid-word ("Meeting" / "s").
+            .lineLimit(1)
+            .minimumScaleFactor(0.6)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

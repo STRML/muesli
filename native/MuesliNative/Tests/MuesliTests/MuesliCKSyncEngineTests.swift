@@ -783,6 +783,105 @@ struct MuesliCKSyncEngineTests {
         #expect(state.pendingRecordZoneChanges.isEmpty)
     }
 
+    private func makeContainerScopeMigration() -> MuesliCKSyncContainerScopeMigration {
+        MuesliCKSyncContainerScopeMigration(
+            unscopedAccountScopeKey: "test.unscoped.owner",
+            unscopedStateKey: "test.unscoped.state",
+            unscopedChangeTokenKey: "test.unscoped.token",
+            changeTokenKey: "test.scoped.token"
+        )
+    }
+
+    @Test("a non-upstream container keeps the state, owner and token it saved before keys named the container")
+    func matchingUnscopedOwnerCarriesStateIntoContainerScope() async throws {
+        let store = try makeStore()
+        _ = try store.insertDictation(
+            text: "Already synced before the keys named the container",
+            durationSeconds: 2,
+            startedAt: Date().addingTimeInterval(-2),
+            endedAt: Date()
+        )
+        let local = try #require(try store.textRecordsNeedingSync().first)
+        #expect(try store.markTextRecordSynced(
+            kind: local.kind,
+            recordName: local.id,
+            changeTag: "kept-tag",
+            systemFields: Data([0x01]),
+            recordUpdatedAt: local.updatedAt
+        ))
+        let suiteName = "MuesliCKSyncEngineTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let owner = CKRecord.ID(recordName: "owner-in-this-container")
+        let scope = Data(MuesliCKSyncEngine.accountScope(for: owner).utf8)
+        let migration = makeContainerScopeMigration()
+        let cursor = Data("engine-cursor".utf8)
+        let token = Data("change-token".utf8)
+        try store.saveCloudSyncStateData(scope, forKey: migration.unscopedAccountScopeKey)
+        try store.saveCloudSyncStateData(cursor, forKey: migration.unscopedStateKey)
+        defaults.set(token, forKey: migration.unscopedChangeTokenKey)
+
+        let coordinator = MuesliCKSyncEngine(
+            store: store,
+            legacyAccountRecordVerifier: { _ in
+                Issue.record("A proven owner must not query authored records")
+                return []
+            },
+            legacyScopeMigration: nil,
+            containerScopeMigration: migration,
+            defaults: defaults
+        )
+
+        #expect(try await coordinator.handleAccountChange(currentUser: owner, state: TestCKSyncPendingState()))
+        #expect(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey) == scope)
+        #expect(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey) == cursor)
+        #expect(try store.cloudSyncStateData(forKey: migration.unscopedAccountScopeKey) == nil)
+        #expect(try store.cloudSyncStateData(forKey: migration.unscopedStateKey) == nil)
+        #expect(defaults.data(forKey: migration.changeTokenKey) == token)
+        #expect(defaults.data(forKey: migration.unscopedChangeTokenKey) == nil)
+
+        let preserved = try #require(try store.textRecordForSync(recordName: local.id))
+        #expect(preserved.cloudChangeTag == "kept-tag")
+        #expect(!(try store.hasTextRecordsNeedingSync()))
+    }
+
+    @Test("unscoped state owned by another container or account stays where it is")
+    func mismatchedUnscopedOwnerIsLeftAlone() async throws {
+        let store = try makeStore()
+        let suiteName = "MuesliCKSyncEngineTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let migration = makeContainerScopeMigration()
+        // User record IDs differ per container, so upstream's owner never matches this one.
+        let upstreamOwnerScope = Data(MuesliCKSyncEngine.accountScope(
+            for: CKRecord.ID(recordName: "owner-in-upstream-container")
+        ).utf8)
+        let cursor = Data("upstream-cursor".utf8)
+        let token = Data("upstream-token".utf8)
+        try store.saveCloudSyncStateData(upstreamOwnerScope, forKey: migration.unscopedAccountScopeKey)
+        try store.saveCloudSyncStateData(cursor, forKey: migration.unscopedStateKey)
+        defaults.set(token, forKey: migration.unscopedChangeTokenKey)
+
+        let coordinator = MuesliCKSyncEngine(
+            store: store,
+            legacyScopeMigration: nil,
+            containerScopeMigration: migration,
+            defaults: defaults
+        )
+        let owner = CKRecord.ID(recordName: "owner-in-this-container")
+
+        #expect(try await coordinator.handleAccountChange(currentUser: owner, state: TestCKSyncPendingState()))
+        #expect(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.accountScopeKey)
+            == Data(MuesliCKSyncEngine.accountScope(for: owner).utf8))
+        #expect(try store.cloudSyncStateData(forKey: MuesliCKSyncEngine.stateKey) == nil)
+        #expect(try store.cloudSyncStateData(forKey: migration.unscopedAccountScopeKey) == upstreamOwnerScope)
+        #expect(try store.cloudSyncStateData(forKey: migration.unscopedStateKey) == cursor)
+        #expect(defaults.data(forKey: migration.unscopedChangeTokenKey) == token)
+        #expect(defaults.data(forKey: migration.changeTokenKey) == nil)
+    }
+
     @Test("matching unspecified owner safely migrates and requeues for Production")
     func matchingUnspecifiedOwnerMigratesToProduction() async throws {
         let store = try makeStore()

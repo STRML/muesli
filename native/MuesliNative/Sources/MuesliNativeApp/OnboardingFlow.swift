@@ -162,4 +162,20 @@ enum OnboardingFlow {
     static func completionTab(for useCase: OnboardingUseCase) -> DashboardTab {
         useCase.includesMeetings && !useCase.includesPushToTalk ? .meetings : .dictations
     }
+
+    /// Summary providers the onboarding step has a tab for.
+    static let summaryTabs: [MeetingSummaryBackendOption] = [.chatGPT, .openAI, .anthropic, .claudeCode, .openRouter, .ollama]
+
+    /// The summary backend onboarding may write, or nil to leave the configured one alone.
+    static func summaryBackendToPersist(
+        selection: MeetingSummaryBackendOption,
+        userPicked: Bool,
+        claudeCodeReady: Bool
+    ) -> MeetingSummaryBackendOption? {
+        // The tab shown by default (or after a fallback) is display state, not consent:
+        // persisting it would silently send meeting text to a provider nobody chose.
+        guard userPicked else { return nil }
+        guard selection != .claudeCode || claudeCodeReady else { return nil }
+        return selection
+    }
 }
