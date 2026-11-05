@@ -34,6 +34,11 @@ struct CleanupHFTokenizerLoader: TokenizerLoader {
         if values["tokenizer_class"]?.string() == "Qwen3_5Tokenizer" {
             values["tokenizer_class"] = "Qwen2Tokenizer"
         }
+        // transformers 5 saves "TokenizersBackend" for any fast tokenizer. LFM3 uses a plain
+        // byte-level BPE tokenizer.json, which the generic fast tokenizer reads.
+        if values["tokenizer_class"]?.string() == "TokenizersBackend" {
+            values["tokenizer_class"] = "PreTrainedTokenizerFast"
+        }
         let data = try decoder.decode(Config.self, from: Data(contentsOf: directory.appendingPathComponent("tokenizer.json")))
         return CleanupHFTokenizer(tokenizer: try AutoTokenizer.from(tokenizerConfig: Config(values), tokenizerData: data))
     }
@@ -41,10 +46,12 @@ struct CleanupHFTokenizerLoader: TokenizerLoader {
 
 /// Shared native cleanup engine; raw training prompts bypass chat templates.
 actor CleanupMLXEvaluation {
-    enum Model: String, Sendable { case lfm, gemma, qwen, qwen08
+    enum Model: String, Sendable { case lfm, gemma, qwen, qwen08, phonon
         var stop: String { self == .gemma ? "<turn|>" : "<|im_end|>" }
-        func prompt(_ text: String, context: String?) -> String {
+        func prompt(_ text: String, context: String?, writing: PhononRefinerPrompt.Context = .none) -> String {
             switch self {
+            case .phonon:
+                return PhononRefinerPrompt.request(text, appContext: context, context: writing)
             case .lfm:
                 return MuesliCleanupV2Prompt.ggufRequest(text, appContext: context, format: .muesliTrainedV12LFM)
             case .qwen, .qwen08:
@@ -79,7 +86,9 @@ actor CleanupMLXEvaluation {
         try descriptor.validate(modelURL: directory.appendingPathComponent(descriptor.modelFilename))
         self.model = model
         let factory: LLMModelFactory
-        if model == .lfm {
+        if model == .phonon {
+            factory = LLMModelFactory(typeRegistry: LFM3Model.typeRegistry, modelRegistry: LLMRegistry.shared)
+        } else if model == .lfm {
             // Match Python mlx-lm's intermediate_size alias, omitted by Swift LM 3.32.3.
             // Adapt only in memory; keep pinned files and official model code unchanged.
             let registry = ModelTypeRegistry<LanguageModel>(creators: ["lfm2": { data in
@@ -96,12 +105,19 @@ actor CleanupMLXEvaluation {
         await container.update { context in context.configuration.extraEOSTokens.insert(model.stop) }
     }
 
-    func process(_ text: String, context: String?, prefillStepSize: Int = 2048, maxTokens: Int = 1024) async throws -> Result {
-        let prompt = model.prompt(text, context: context)
+    func process(_ text: String, context: String?, writing: PhononRefinerPrompt.Context = .none,
+                 prefillStepSize: Int = 2048, maxTokens: Int = 1024) async throws -> Result {
+        let prompt = model.prompt(text, context: context, writing: writing)
+        let model = model
         return try await container.perform { context in
             let start = Date()
             let thermalBefore = ProcessInfo.processInfo.thermalState.rawValue
             let ids = context.tokenizer.encode(text: prompt, addSpecialTokens: false)
+            var maxTokens = maxTokens
+            if model == .phonon {
+                let transcriptTokens = context.tokenizer.encode(text: text, addSpecialTokens: false).count
+                maxTokens = min(maxTokens, PhononRefinerPrompt.outputTokenCap(inputTokens: transcriptTokens))
+            }
             let tokenizeSeconds = Date().timeIntervalSince(start)
             // Match the reference mlx-lm 0.32.2: stride 2048, reserve the final token.
             // Swift defaults to balanced 512-token chunks, which changes rounding.
@@ -133,7 +149,10 @@ actor CleanupMLXEvaluation {
             try Task.checkCancellation()
             guard let completion else { throw CancellationError() }
             let raw = context.tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false)
-            let guarded = MuesliCleanupV2Prompt.guardResult(raw, input: text, generationCompleted: completion.stopReason == .stop)
+            let generationCompleted = completion.stopReason == .stop
+            let guarded = model == .phonon
+                ? PhononRefinerPrompt.guardResult(raw, input: text, generationCompleted: generationCompleted)
+                : MuesliCleanupV2Prompt.guardResult(raw, input: text, generationCompleted: generationCompleted)
             return Result(raw: raw, output: guarded.text, didFallback: guarded.didFallback, seconds: Date().timeIntervalSince(start), tokenizeSeconds: tokenizeSeconds, prefillSeconds: manualPrefillSeconds + completion.promptTime, decodeSeconds: completion.generateTime, inputTokens: ids.count, outputTokens: tokens.count, stopReason: String(describing: completion.stopReason), startedAt: start, thermalStateBefore: thermalBefore, thermalStateAfter: ProcessInfo.processInfo.thermalState.rawValue, prefillStepSize: prefillStepSize)
         }
     }
