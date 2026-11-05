@@ -1572,6 +1572,11 @@ struct PostProcessorOption: Identifiable, Equatable {
         case muesliTrainedV12LFM
         case muesliTrainedV12Qwen
         case muesliTrainedV12Qwen08
+        /// Phonon refiner 1.7B (LFM3): a fixed system prompt plus a writing-mode line and a vocabulary line.
+        case phononRefiner
+
+        /// Models trained on English text alone.
+        var isEnglishOnly: Bool { self == .s1Mini || self == .phononRefiner }
 
         var isTrainedV12: Bool { self == .muesliTrainedV12LFM || self == .muesliTrainedV12Qwen || self == .muesliTrainedV12Qwen08 }
     }
@@ -1584,6 +1589,14 @@ struct PostProcessorOption: Identifiable, Equatable {
     let filename: String
     let inputFormat: InputFormat
     let isDownloadable: Bool
+    /// License and source of a model Muesli does not publish, shown on its card.
+    var attribution: Attribution?
+
+    struct Attribution: Equatable {
+        let license: String
+        let sourceLabel: String
+        let sourceURL: URL
+    }
 
     init(
         id: String,
@@ -1593,7 +1606,8 @@ struct PostProcessorOption: Identifiable, Equatable {
         downloadURL: URL,
         filename: String,
         inputFormat: InputFormat = .configurable,
-        isDownloadable: Bool = true
+        isDownloadable: Bool = true,
+        attribution: Attribution? = nil
     ) {
         self.id = id
         self.label = label
@@ -1603,6 +1617,7 @@ struct PostProcessorOption: Identifiable, Equatable {
         self.filename = filename
         self.inputFormat = inputFormat
         self.isDownloadable = isDownloadable
+        self.attribution = attribution
     }
 
     var cacheDirectory: URL {
@@ -1642,10 +1657,10 @@ struct PostProcessorOption: Identifiable, Equatable {
         self == .qwen35_0_8b ? "Qwen 3.5 0.8B (General)" : label
     }
 
-    /// S1-mini normalizes English transcripts only. Bodhan can emit an
-    /// Indic-language transcript, so do not offer or run S1-mini for it.
+    /// S1-mini and the Phonon refiner rewrite English transcripts only. Bodhan can emit an
+    /// Indic-language transcript, so do not offer or run them for it.
     func isCompatible(with transcriptionBackend: BackendOption) -> Bool {
-        inputFormat != .s1Mini || transcriptionBackend.backend != "bodhan"
+        !inputFormat.isEnglishOnly || transcriptionBackend.backend != "bodhan"
     }
 
     /// Retired artifact metadata for migration and cache identification only.
@@ -1710,7 +1725,15 @@ struct PostProcessorOption: Identifiable, Equatable {
         description: "Fine-tuned from Qwen3.5-2B. More capable cleanup with app and screen context.",
         downloadURL: CleanupModelRelease.qwen2BV14.artifact.files[0].remoteURL,
         filename: CleanupModelRelease.qwen2BV14.artifact.modelFilename, inputFormat: .muesliTrainedV12Qwen)
-    static let all: [PostProcessorOption] = [.finetunedV4, .lfmV12, .qwenV12, .s1Mini, .qwen35_0_8b]
+    static let phononRefiner = PostProcessorOption(
+        id: CleanupModelSlot.phononRefinerID, label: "Phonon refiner",
+        sizeLabel: CleanupModelRelease.phononRefinerV1.artifact.downloadSizeLabel,
+        description: "Fine-tuned from LFM3-1.7B by Infatoshi, the author of the Phonon voice-typing app. Matches its style to the app you dictate into (chat, email, AI prompt or notes) and spells the terms in your dictionary. English only.",
+        downloadURL: CleanupModelRelease.phononRefinerV1.artifact.files[0].remoteURL,
+        filename: CleanupModelRelease.phononRefinerV1.artifact.modelFilename, inputFormat: .phononRefiner,
+        attribution: Attribution(license: "LFM Open License v1.0", sourceLabel: "Infatoshi/phonon-refiner-1.7b on Hugging Face",
+            sourceURL: URL(string: "https://huggingface.co/Infatoshi/phonon-refiner-1.7b")!))
+    static let all: [PostProcessorOption] = [.finetunedV4, .lfmV12, .qwenV12, .phononRefiner, .s1Mini, .qwen35_0_8b]
 
     static let defaultOption: PostProcessorOption = .finetunedV4
     static let defaultQuilOption: PostProcessorOption = .qwen35_0_8b
@@ -1785,6 +1808,8 @@ struct PostProcessorOption: Identifiable, Equatable {
             Self.s1MiniSystemPrompt
         case .muesliTrainedV12LFM, .muesliTrainedV12Qwen, .muesliTrainedV12Qwen08:
             MuesliCleanupV2Prompt.systemPrompt
+        case .phononRefiner:
+            PhononRefinerPrompt.systemPrompt
         }
     }
 }

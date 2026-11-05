@@ -326,24 +326,33 @@ private actor Qwen3PostProcessorManager {
 
     func warm() async throws {
         if modelURL.pathExtension == "safetensors" {
-            guard inputFormat == .muesliTrainedV12Qwen || inputFormat == .muesliTrainedV12Qwen08 else {
+            guard let (slotID, engine) = Self.mlxEngine(for: inputFormat) else {
                 throw NSError(domain: "Qwen3PostProcessor", code: 5,
                     userInfo: [NSLocalizedDescriptionKey: "Unsupported MLX cleanup model"])
             }
             if mlx == nil {
                 let start = Date()
-                let small = inputFormat == .muesliTrainedV12Qwen08
                 let directory = modelURL.deletingLastPathComponent()
                 // Validate against whichever build is installed; models update without an app release.
-                let slot = CleanupModelSlot.slot(id: small ? CleanupModelSlot.liteID : CleanupModelSlot.proQwenID)!
+                let slot = CleanupModelSlot.slot(id: slotID)!
                 let release = CleanupModelInstallation.installedRelease(for: slot, in: directory) ?? slot.bundled
                 mlx = try await CleanupMLXEvaluation(directory: directory,
-                    descriptor: release.artifact, model: small ? .qwen08 : .qwen)
+                    descriptor: release.artifact, model: engine)
                 Qwen3PostProcessorLogging.logVerbose("cleanup release=\(release.repo)@\(release.revision) version=\(release.version)")
                 Qwen3PostProcessorLogging.logVerbose("cleanup runtime=mlx model=\(inputFormat) load_seconds=\(Date().timeIntervalSince(start))")
             }
         } else {
             _ = try loadBot()
+        }
+    }
+
+    /// The managed slot and MLX engine for a prompt contract; nil for formats that do not run on MLX.
+    private static func mlxEngine(for format: PostProcessorOption.InputFormat) -> (String, CleanupMLXEvaluation.Model)? {
+        switch format {
+        case .muesliTrainedV12Qwen08: (CleanupModelSlot.liteID, .qwen08)
+        case .muesliTrainedV12Qwen: (CleanupModelSlot.proQwenID, .qwen)
+        case .phononRefiner: (CleanupModelSlot.phononRefinerID, .phonon)
+        default: nil
         }
     }
 
@@ -381,7 +390,8 @@ private actor Qwen3PostProcessorManager {
         }
     }
 
-    func process(_ text: String, appContext: String? = nil) async throws -> Qwen3PostProcessor.Result {
+    func process(_ text: String, appContext: String? = nil,
+                 writing: PhononRefinerPrompt.Context = .none) async throws -> Qwen3PostProcessor.Result {
         // Actors can re-enter while respond() awaits; serialize access to the cached mutable LLM.
         try await inferenceGate.acquire()
         do {
@@ -389,7 +399,7 @@ private actor Qwen3PostProcessorManager {
             if modelURL.pathExtension == "safetensors" {
                 try await warm()
                 guard let mlx else { throw CancellationError() }
-                let result = try await mlx.process(text, context: appContext)
+                let result = try await mlx.process(text, context: appContext, writing: writing)
                 try Task.checkCancellation()
                 Qwen3PostProcessorLogging.logVerbose("cleanup runtime=mlx generation_seconds=\(result.seconds) prefill_seconds=\(result.prefillSeconds) decode_seconds=\(result.decodeSeconds) output_tokens=\(result.outputTokens) stop=\(result.stopReason)")
                 await inferenceGate.release()
@@ -405,6 +415,10 @@ private actor Qwen3PostProcessorManager {
                 formattedInput = Qwen3PostProcessorConfig.formatS1MiniInput(text)
             case .muesliTrainedV12LFM, .muesliTrainedV12Qwen, .muesliTrainedV12Qwen08:
                 formattedInput = MuesliCleanupV2Prompt.ggufRequest(text, appContext: appContext, format: inputFormat)
+            case .phononRefiner:
+                // Only the MLX build exists; a GGUF path here would be a configuration error.
+                throw NSError(domain: "Qwen3PostProcessor", code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Phonon refiner needs its MLX weights"])
             }
             if inputFormat.isTrainedV12 {
                 let completion = await bot.getCompletionResult(from: formattedInput, maxNewTokens: 1024)
@@ -563,11 +577,12 @@ actor Qwen3PostProcessor {
     func processResult(
         _ text: String,
         appContext: String? = nil,
+        writing: PhononRefinerPrompt.Context = .none,
         configuration: Configuration
     ) async throws -> Result {
         let effectiveConfiguration = Self.effectiveConfiguration(for: configuration)
         let manager = try await loadManager(for: effectiveConfiguration)
-        return try await manager.process(text, appContext: appContext)
+        return try await manager.process(text, appContext: appContext, writing: writing)
     }
 
     func generate(
