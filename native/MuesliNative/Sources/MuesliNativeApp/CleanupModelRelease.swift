@@ -14,10 +14,11 @@ struct CleanupModelRelease: Codable, Equatable, Sendable {
     enum Runtime: String, Codable, Sendable {
         case mlxQwen35 = "mlx-qwen3.5"
         case ggufLFM25 = "gguf-lfm2.5"
+        case mlxLFM3 = "mlx-lfm3"
 
         var modelFileExtension: String {
             switch self {
-            case .mlxQwen35: "safetensors"
+            case .mlxQwen35, .mlxLFM3: "safetensors"
             case .ggufLFM25: "gguf"
             }
         }
@@ -74,7 +75,9 @@ struct CleanupModelRelease: Codable, Equatable, Sendable {
         guard runtime == slot.runtime else { return "runtime \(runtime.rawValue) does not match \(slot.runtime.rawValue)" }
         guard sequence > 0, !version.isEmpty else { return "missing version" }
         let repoParts = repo.split(separator: "/", omittingEmptySubsequences: false)
-        guard repo.hasPrefix("Muesli-HQ/"), repoParts.count == 2,
+        // Muesli publishes under Muesli-HQ/. A slot for a third-party model trusts exactly the
+        // repository its bundled release pins, so a catalog can move its revision but not its source.
+        guard repo.hasPrefix("Muesli-HQ/") || repo == slot.bundled.repo, repoParts.count == 2,
               repo.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_./".contains($0)) }),
               repoParts[1].first.map({ $0.isLetter || $0.isNumber }) == true else {
             return "untrusted repository \(repo)"
@@ -130,11 +133,13 @@ struct CleanupModelSlot: Sendable {
     static let liteID = "qwen35-postproc-v4"
     static let proQwenID = "qwen35-2b-cleanup-v12"
     static let proLFMID = "lfm25-cleanup-v12"
+    static let phononRefinerID = "phonon-refiner-1.7b"
 
     static let all: [CleanupModelSlot] = [
         CleanupModelSlot(id: liteID, runtime: .mlxQwen35, bundled: .qwen08V14, unmarkedLegacy: [.qwen08V12]),
         CleanupModelSlot(id: proQwenID, runtime: .mlxQwen35, bundled: .qwen2BV14, unmarkedLegacy: [.qwen2BV12]),
         CleanupModelSlot(id: proLFMID, runtime: .ggufLFM25, bundled: .lfmV12, unmarkedLegacy: [.lfmV12]),
+        CleanupModelSlot(id: phononRefinerID, runtime: .mlxLFM3, bundled: .phononRefinerV1, unmarkedLegacy: []),
     ]
 
     static func slot(id: String) -> CleanupModelSlot? { all.first { $0.id == id } }
@@ -288,6 +293,22 @@ extension CleanupModelRelease {
         ("tokenizer.json", 19_989_339, "a5cd9732badce41de57e6efce8302930ded1c1188c5f81feb2bd6c24c4a1941f"),
         ("tokenizer_config.json", 1253, "62c19988f1acd7a4444246d3efac4092dd5d1f23b492fcefceed74d9d2f5cd27"),
         ("chat_template.jinja", 7755, "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80"),
+    ])
+
+    /// The Phonon refiner (LFM3-1.7B, MLX 4/6/8-bit) pinned to the revision this build was verified against.
+    /// The GGUF and the DFlash2 drafter in the same repository only run on Phonon's own engine.
+    static let phononRefinerV1 = Self(slot: CleanupModelSlot.phononRefinerID, version: "v1", sequence: 1, runtime: .mlxLFM3,
+        notes: "Picks a writing style from the app you dictate into and uses your dictionary.",
+        "Infatoshi/phonon-refiner-1.7b", "2b0ab74bee7ab7cf364695bbe44f64ce4c47439e", [
+        ("model.safetensors", 1_133_072_561, "f6f5d376c422affe15b211a65d38132088712865a7ce6e044e11b150cd8a4bb2"),
+        ("LICENSE", 10_574, "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c"),
+        ("NOTICE", 1293, "6e22035f2acf0564af88c389402bcda046a0ba5f6bfa46074b56741cd8df4d60"),
+        ("chat_template.jinja", 12_129, "f45005c50cd2a97329722bf3a2dee9f16c04cdf825a589b280fb7e99e6827818"),
+        ("config.json", 28_490, "82959de49f43ef3a185a82fa093caf4f91c2b62ad19a11d6043df7987af4bf38"),
+        ("generation_config.json", 328, "bfe4a6d7d5fd2218845f716157632fff5b7b137628055a69871e41026c0750b5"),
+        ("model.safetensors.index.json", 41_831, "a6b6a42bb621feacd690f99b658fc29ccbe771d61c2a8f28c936ab93c3fd203e"),
+        ("tokenizer.json", 17_908_634, "41927bd314d17d7d7fadb44e10cd0919f7b71528d7741596d8cbd15c6945ec44"),
+        ("tokenizer_config.json", 1896, "236f21425c08d31bfa5062767da6a3f1354ca0b89ac4138cfa9bdbb47a6700b2"),
     ])
 
     // v12 builds were installed without markers; their pins identify existing folders.
