@@ -62,13 +62,14 @@ A chunk whose cleanup fails or is rejected keeps its recognized text with filler
 
 ## Known differences from today's text
 
-The cleanup model reads each chunk on its own, so what it writes for a chunk can differ from what it would write for the same words inside the whole dictation. In the measurements in the pull request the recognized words were identical on every dictation and the differences were:
+The cleanup model reads each chunk on its own, so what it writes for a chunk can differ from what it would write for the same words inside the whole dictation. In the measurements in the pull request (https://github.com/STRML/muesli/pull/50) the recognized words were identical on every dictation, and most reused dictations still came out different from today's text:
 
 - Paragraph breaks: where S1-mini starts a new paragraph depends on how much text it sees.
-- A comma or a period at a sentence join.
-- Number and date styling, such as "March 14" and "March 14th", or "stand-up" and "standup".
+- A comma, a period or a question mark at a sentence join.
+- Number and date styling, such as "March 14" and "March 14th", "555-0123" and "5550123", or "stand-up" and "standup".
+- A filler phrase such as "You know," that today's path drops and a chunk kept.
 
-Today's path is deterministic, so the same recording always gives the same text there. The setting trades that for a shorter wait after key-up.
+Today's path is deterministic, so the same recording always gives the same text there. The setting trades that for a shorter wait after key-up. Measured on an Apple M5 Max, the median wait dropped from 1.40 s to 0.90 s for dictations of 30 s and longer, and did not change under about 15 s.
 
 ## Debugging
 
