@@ -30,6 +30,13 @@ public struct CustomWord: Codable, Equatable, Identifiable, Sendable {
         matchingThreshold = Self.clampedThreshold(try c.decodeIfPresent(Double.self, forKey: .matchingThreshold) ?? 0.85)
     }
 
+    /// The entry every fresh config starts with. It is not the user's work, so
+    /// the settings backup ignores it when deciding whether a dictionary holds
+    /// anything worth keeping.
+    public static let defaultWords: [CustomWord] = [
+        CustomWord(word: "muesli", replacement: "muesli"),
+    ]
+
     public var displayLabel: String {
         if let replacement, !replacement.isEmpty {
             return "\(word) → \(replacement)"

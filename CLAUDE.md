@@ -158,6 +158,7 @@ native/MuesliNative/Sources/
 ## Data Storage
 
 - **Config:** `~/Library/Application Support/{AppName}/config.json` (snake_case keys)
+- **Config backup:** `~/.muesli/backup/{AppName}/config.json`, the same sanitized bytes as the config (no credentials), rewritten atomically after every config save and kept outside `~/Library` so app uninstallers leave it. A save whose dictionary has no user words (the built-in `muesli` entry does not count) never replaces a mirror that has some. At launch, once onboarding is done, an install with no user words offers Restore or Delete backup once (`ConfigBackupRestoreCoordinator`). Code: `MuesliCore/ConfigBackupMirror.swift`, `ConfigStore.production()`; stores built without a mirror (tests) write nothing here.
 - **Database:** `~/Library/Application Support/{AppName}/muesli.db` (SQLite WAL)
 - **Models:** `~/Library/Application Support/FluidAudio/Models/` (shared across app identities)
 - **Onboarding progress:** `~/Library/Application Support/{AppName}/onboarding-progress.json` (deleted on completion)
