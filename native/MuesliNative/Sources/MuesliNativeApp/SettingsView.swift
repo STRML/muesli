@@ -1615,7 +1615,7 @@ struct SettingsView: View {
             "Cleanup prompt",
             description: appState.selectedPostProcessorBackend == .gemma4LiteRT
                 ? "muesli Pro Cleanup uses its trained cleanup instructions. Custom presets do not apply."
-                : (appState.activePostProcessor.inputFormat.isTrainedV12 ? "This model uses its trained cleanup instructions. Custom presets do not apply." : "S1-mini uses Superwhisper’s built-in normalization instructions."),
+                : (appState.activePostProcessor.inputFormat != .s1Mini ? "This model uses its trained cleanup instructions. Custom presets do not apply." : "S1-mini uses Superwhisper’s built-in normalization instructions."),
             controlWidth: meetingControlWidth
         ) {
             Text("Built in")

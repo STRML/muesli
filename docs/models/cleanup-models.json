@@ -92,6 +92,62 @@
         }
       ],
       "notes": "Better list and number formatting, and more accurate use of screen context."
+    },
+    {
+      "slot": "phonon-refiner-1.7b",
+      "version": "v1",
+      "sequence": 1,
+      "runtime": "mlx-lfm3",
+      "repo": "Infatoshi/phonon-refiner-1.7b",
+      "revision": "2b0ab74bee7ab7cf364695bbe44f64ce4c47439e",
+      "files": [
+        {
+          "path": "model.safetensors",
+          "size": 1133072561,
+          "sha256": "f6f5d376c422affe15b211a65d38132088712865a7ce6e044e11b150cd8a4bb2"
+        },
+        {
+          "path": "LICENSE",
+          "size": 10574,
+          "sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c"
+        },
+        {
+          "path": "NOTICE",
+          "size": 1293,
+          "sha256": "6e22035f2acf0564af88c389402bcda046a0ba5f6bfa46074b56741cd8df4d60"
+        },
+        {
+          "path": "chat_template.jinja",
+          "size": 12129,
+          "sha256": "f45005c50cd2a97329722bf3a2dee9f16c04cdf825a589b280fb7e99e6827818"
+        },
+        {
+          "path": "config.json",
+          "size": 28490,
+          "sha256": "82959de49f43ef3a185a82fa093caf4f91c2b62ad19a11d6043df7987af4bf38"
+        },
+        {
+          "path": "generation_config.json",
+          "size": 328,
+          "sha256": "bfe4a6d7d5fd2218845f716157632fff5b7b137628055a69871e41026c0750b5"
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "size": 41831,
+          "sha256": "a6b6a42bb621feacd690f99b658fc29ccbe771d61c2a8f28c936ab93c3fd203e"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17908634,
+          "sha256": "41927bd314d17d7d7fadb44e10cd0919f7b71528d7741596d8cbd15c6945ec44"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "size": 1896,
+          "sha256": "236f21425c08d31bfa5062767da6a3f1354ca0b89ac4138cfa9bdbb47a6700b2"
+        }
+      ],
+      "notes": "Picks a writing style from the app you dictate into and uses your dictionary."
     }
   ]
 }

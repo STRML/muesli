@@ -14064,6 +14064,8 @@ public final class MuesliController: NSObject {
         let promptContext = capturedContext.map { DictationContextCapture.formatForPrompt($0) }
         let formattingRules = capturedDictationFormattingRules
         let startingTargetApp = capturedDictationCorrectionTargetApp
+        // Chooses the Phonon refiner's writing mode; no other cleanup model reads it.
+        let dictationAppBundleID = [capturedContext?.bundleID, startingTargetApp?.bundleID].compactMap { $0 }.first { !$0.isEmpty }
         let storageContext = capturedContext.map { DictationContextCapture.formatForStorage($0) }
             ?? startingTargetApp?.appContext
             ?? ""
@@ -14137,6 +14139,7 @@ public final class MuesliController: NSObject {
                             enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
                             customWords: self.serializedCustomWords(),
                             appContext: promptContext,
+                            appBundleID: dictationAppBundleID,
                             timingRequestID: completionLatencyTrace?.id.uuidString
                         )
                         rawText = result.text
@@ -14163,6 +14166,7 @@ public final class MuesliController: NSObject {
                                 enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
                                 customWords: self.serializedCustomWords(),
                                 appContext: promptContext,
+                                appBundleID: dictationAppBundleID,
                                 timingRequestID: completionLatencyTrace?.id.uuidString
                             )
                         }, nonStreaming: {
@@ -14179,6 +14183,7 @@ public final class MuesliController: NSObject {
                                 enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
                                 customWords: self.serializedCustomWords(),
                                 appContext: promptContext,
+                                appBundleID: dictationAppBundleID,
                                 timingRequestID: completionLatencyTrace?.id.uuidString
                             )
                         }
