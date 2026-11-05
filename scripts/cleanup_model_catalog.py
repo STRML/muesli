@@ -27,6 +27,17 @@ SLOTS = {
     "qwen35-postproc-v4": ("mlx-qwen3.5", "model.safetensors"),
     "qwen35-2b-cleanup-v12": ("mlx-qwen3.5", "model.safetensors"),
     "lfm25-cleanup-v12": ("gguf-lfm2.5", "lfm25-muesli-v12-Q4_K_M.gguf"),
+    "phonon-refiner-1.7b": ("mlx-lfm3", "model.safetensors"),
+}
+# A slot for a model Muesli does not publish trusts exactly one repository, its bundled one.
+SLOT_REPOS = {"phonon-refiner-1.7b": "Infatoshi/phonon-refiner-1.7b"}
+# The files a slot installs, where its repository also holds files only another engine can run
+# (the Phonon refiner repository carries a GGUF and a DFlash2 drafter for Phonon's own engine).
+SLOT_FILES = {
+    "phonon-refiner-1.7b": {
+        "model.safetensors", "config.json", "generation_config.json", "model.safetensors.index.json",
+        "tokenizer.json", "tokenizer_config.json", "chat_template.jinja", "LICENSE", "NOTICE",
+    },
 }
 SKIPPED_FILES = {".gitattributes", "README.md"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -37,22 +48,36 @@ def hub_tree(repo: str, revision: str) -> list[dict]:
         return json.load(response)
 
 
-def hub_sha256(repo: str, revision: str, path: str) -> str:
-    digest = hashlib.sha256()
+def hub_sha256(repo: str, revision: str, path: str, size: int) -> str:
+    """SHA-256 of a file the Hub does not hash for us. A short or dropped transfer is retried,
+    never pinned: the digest of an empty body is a valid-looking value that would fail every install."""
     url = f"https://huggingface.co/{repo}/resolve/{revision}/{path}?download=1"
-    with urllib.request.urlopen(url, timeout=300) as response:
-        while chunk := response.read(1 << 20):
-            digest.update(chunk)
-    return digest.hexdigest()
+    for attempt in range(3):
+        digest = hashlib.sha256()
+        received = 0
+        try:
+            with urllib.request.urlopen(url, timeout=300) as response:
+                while chunk := response.read(1 << 20):
+                    digest.update(chunk)
+                    received += len(chunk)
+        except OSError as error:
+            print(f"{path}: attempt {attempt + 1} failed: {error}", file=sys.stderr)
+            continue
+        if received == size:
+            return digest.hexdigest()
+        print(f"{path}: attempt {attempt + 1} received {received} of {size} bytes", file=sys.stderr)
+    sys.exit(f"could not download all {size} bytes of {path}")
 
 
-def hub_files(repo: str, revision: str, model_file: str) -> list[dict]:
+def hub_files(repo: str, revision: str, model_file: str, only: set[str] | None = None) -> list[dict]:
     files = []
     for entry in hub_tree(repo, revision):
         if entry.get("type") != "file" or entry["path"] in SKIPPED_FILES or "/" in entry["path"]:
             continue
+        if only is not None and entry["path"] not in only:
+            continue
         lfs = entry.get("lfs") or {}
-        sha = lfs.get("oid") or hub_sha256(repo, revision, entry["path"])
+        sha = lfs.get("oid") or hub_sha256(repo, revision, entry["path"], entry["size"])
         files.append({"path": entry["path"], "size": entry["size"], "sha256": sha})
     files.sort(key=lambda f: (f["path"] != model_file, f["path"]))
     if not files or files[0]["path"] != model_file:
@@ -83,8 +108,8 @@ def validate(release: dict) -> list[str]:
     if release.get("notes") is not None and not isinstance(release["notes"], str):
         problems.append(f"{name}: notes must be a string")
     repo = text(release.get("repo"))
-    if not re.fullmatch(r"Muesli-HQ/[A-Za-z0-9][A-Za-z0-9._-]*", repo):
-        problems.append(f"{name}: repo must be under Muesli-HQ/")
+    if not re.fullmatch(r"Muesli-HQ/[A-Za-z0-9][A-Za-z0-9._-]*", repo) and repo != SLOT_REPOS.get(release["slot"]):
+        problems.append(f"{name}: repo must be under Muesli-HQ/ or the slot's own repository")
     if not re.fullmatch(r"[0-9a-f]{40}", text(release.get("revision"))):
         problems.append(f"{name}: revision must be a full commit hash")
     minimum = release.get("minimum_app_version")
@@ -134,7 +159,7 @@ def command_add(args: argparse.Namespace) -> None:
         "runtime": runtime,
         "repo": args.repo,
         "revision": args.revision,
-        "files": hub_files(args.repo, args.revision, model_file),
+        "files": hub_files(args.repo, args.revision, model_file, SLOT_FILES.get(args.slot)),
     }
     if args.notes:
         release["notes"] = args.notes
@@ -154,7 +179,8 @@ def command_check(args: argparse.Namespace) -> None:
     for release in catalog.get("releases", []):
         problems += validate(release)
         if args.remote and not problems:
-            remote = {f["path"]: f for f in hub_files(release["repo"], release["revision"], release["files"][0]["path"])}
+            only = SLOT_FILES.get(release["slot"])
+            remote = {f["path"]: f for f in hub_files(release["repo"], release["revision"], release["files"][0]["path"], only)}
             for f in release["files"]:
                 if remote.get(f["path"]) != f:
                     problems.append(f"{release['slot']} {release['version']}: {f['path']} differs from the Hub")
@@ -170,7 +196,7 @@ def main() -> None:
     add.add_argument("slot", choices=sorted(SLOTS))
     add.add_argument("version", help="display version, e.g. v15")
     add.add_argument("sequence", type=int, help="monotonic ordering key, e.g. 15")
-    add.add_argument("repo", help="Muesli-HQ/<repo>")
+    add.add_argument("repo", help="Muesli-HQ/<repo>, or the slot's own repository")
     add.add_argument("revision", help="full 40-character commit hash")
     add.add_argument("--notes", help="one sentence shown in the Models page")
     add.add_argument("--minimum-app-version", help="oldest app version that can run this build")

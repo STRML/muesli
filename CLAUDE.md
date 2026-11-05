@@ -19,6 +19,7 @@ Local-first macOS app for **dictation** and **meeting transcription** on Apple S
 - **Calendar integration (EventKit only):** Coming Up section, status bar, pre-meeting countdowns, event-driven notifications via `EKEventStoreChangedNotification`. Google and other accounts reach Muesli through macOS Calendar; the direct Google OAuth/API code (`GoogleCalendarAuthManager`, `GoogleCalendarClient`) is not called from anywhere
 - **Meeting templates:** Built-in and custom templates for structured meeting notes
 - **Cleanup model updates:** Muesli cleanup models (Lite, Pro Qwen, Pro LFM) update without an app release via a signed catalog at `docs/models/cleanup-models.json`; users click Update on the model card. See `docs/cleanup-model-updates.md`
+- **Phonon refiner (cleanup):** a fourth cleanup model, a third-party LFM3-1.7B fine-tune (LFM Open License v1.0) that runs on MLX through the in-repo `LFM3.swift` (mlx-swift-lm has no `lfm3`). Its prompt adds a writing-mode line chosen from the frontmost app and a vocabulary line from the dictionary: `PhononRefinerPrompt.swift`. Parity with `transformers` and the eval set are in `docs/phonon-refiner.md`
 
 ## Building
 
@@ -134,6 +135,7 @@ native/MuesliNative/Sources/
 │   ├── FluidAudioBackend.swift   # Parakeet TDT on ANE
 │   ├── Qwen3AsrBackend.swift     # Qwen3 ASR on ANE (macOS 15+)
 │   ├── Qwen3PostProcessor.swift  # On-device GGUF LLM for dictation cleanup (opt-in)
+│   ├── LFM3.swift                # LFM3 MLX model (Phonon refiner); PhononRefinerPrompt.swift holds its mode/vocabulary prompt
 │   ├── WhisperKitBackend.swift   # Whisper on CoreML/ANE via WhisperKit
 │   ├── ScreenContextCapture.swift # AX-based app context for dictation + meetings
 │   ├── MeetingExporter.swift     # PDF/Markdown export with NSPrintOperation

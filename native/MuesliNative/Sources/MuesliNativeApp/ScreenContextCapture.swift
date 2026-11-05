@@ -21,7 +21,7 @@ enum DictationContextCapture {
         let frame: CGRect?
     }
 
-    private static let browserBundleIDs: Set<String> = [
+    static let browserBundleIDs: Set<String> = [
         "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser",
         "org.mozilla.firefox", "com.brave.Browser", "com.microsoft.edgemac",
     ]

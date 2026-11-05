@@ -1003,6 +1003,10 @@ struct ModelsView: View {
                     Text(forQuill ? "A local model for rewriting selected text and generating text at the cursor. Shares its download with cleanup." : option.description)
                         .font(MuesliTheme.caption())
                         .foregroundStyle(MuesliTheme.textSecondary)
+
+                    if let attribution = option.attribution {
+                        cleanupAttribution(attribution)
+                    }
                 }
 
                 Spacer()
@@ -1085,6 +1089,17 @@ struct ModelsView: View {
             RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
                 .strokeBorder(isActive ? MuesliTheme.accent.opacity(0.5) : MuesliTheme.surfaceBorder, lineWidth: isActive ? 1.5 : 1)
         )
+    }
+
+    /// License and source for a cleanup model that a third party publishes.
+    private func cleanupAttribution(_ attribution: PostProcessorOption.Attribution) -> some View {
+        HStack(spacing: MuesliTheme.spacing4) {
+            Text(attribution.license + " ·")
+                .font(MuesliTheme.caption())
+                .foregroundStyle(MuesliTheme.textTertiary)
+            Link(attribution.sourceLabel, destination: attribution.sourceURL)
+                .font(MuesliTheme.caption())
+        }
     }
 
     private func familyCard(

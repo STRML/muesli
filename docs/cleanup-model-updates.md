@@ -1,7 +1,7 @@
 # Cleanup model updates
 
-Muesli-published cleanup models (Cleanup Lite, Pro Cleanup — Qwen 3.5, Pro Cleanup — LFM 2.5) can be updated
-without shipping a new app. Installed users see an **Update** pill on the sidebar's Models row; the model's card
+Managed cleanup models (Cleanup Lite, Pro Cleanup — Qwen 3.5, Pro Cleanup — LFM 2.5, and the third-party Phonon
+refiner) can be updated without shipping a new app. Installed users see an **Update** pill on the sidebar's Models row; the model's card
 moves to the top of Models → Cleanup with an **Update** button (release notes on hover and in the confirmation),
 and its select button reads **Use Legacy for Cleanup** until updated. Nothing downloads until they confirm. Versions
 are internal and never shown to users.
@@ -9,7 +9,7 @@ are internal and never shown to users.
 ## How it works
 
 - **Slots.** Each managed cleanup option (`PostProcessorOption.id`) is a `CleanupModelSlot` with a fixed runtime
-  (`mlx-qwen3.5` or `gguf-lfm2.5`), prompt contract and model filename. Only the weights change between releases.
+  (`mlx-qwen3.5`, `gguf-lfm2.5` or `mlx-lfm3`), prompt contract and model filename. Only the weights change between releases.
 - **Releases.** A `CleanupModelRelease` pins a `Muesli-HQ/*` repo to a full commit hash, with every file's size and
   SHA-256. Releases are ordered by an integer `sequence` (v14 → 14).
 - **Bundled releases.** `CleanupModelRelease.swift` holds the newest release each app build knows. An app update that
@@ -19,7 +19,7 @@ are internal and never shown to users.
   `cleanup-models.json.sig` made by the Sparkle update key. The app checks it at launch and when the Models page
   opens (at most every six hours). An unsigned, tampered or malformed catalog is ignored.
 - **App-side checks.** A catalog entry is used only if its slot exists, its runtime and model filename match the slot,
-  its repo is under `Muesli-HQ/`, its revision is a commit hash, its file names are plain, and
+  its repo is under `Muesli-HQ/` (or, for a third-party slot, is exactly the repository its bundled release pins), its revision is a commit hash, its file names are plain, and
   `minimum_app_version` (optional) is met. The highest valid `sequence` per slot wins; the catalog can never
   downgrade the bundled release.
 - **Install.** Downloads go to `postproc-<id>.pending-<revision>` beside the live folder. Files unchanged from the
@@ -59,6 +59,15 @@ with a higher `sequence` that pins the previous good commit; installed users are
 
 Slot ids are historical (`qwen35-2b-cleanup-v12` hosts v14); never rename them, or installed users lose their
 selection.
+
+## The Phonon refiner slot
+
+`phonon-refiner-1.7b` is the one slot whose weights Muesli does not publish: `Infatoshi/phonon-refiner-1.7b`, a
+LoRA fine-tune of LiquidAI LFM3-1.7B under the LFM Open License v1.0. Its release installs only the MLX files
+(`model.safetensors`, tokenizer and config files, `LICENSE`, `NOTICE`); the GGUF and the DFlash2 drafter in the same
+repository only run on Phonon's own engine. The catalog may move this slot to a newer revision of that repository
+and nowhere else. Its prompt contract, the LFM3 port and the measurements behind shipping it are in
+[phonon-refiner.md](phonon-refiner.md).
 
 ## Testing locally
 

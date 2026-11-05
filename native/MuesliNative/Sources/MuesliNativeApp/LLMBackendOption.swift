@@ -58,10 +58,10 @@ struct TranscriptCleanupBackendOption: Equatable, Identifiable {
         !(isGemma4LiteRT && transcriptionBackend.backend == BackendOption.gemma4E2BLiteRT.backend)
     }
 
-    /// Only the local S1-mini formatter is restricted to non-Bodhan input.
+    /// Only the local English-only models (S1-mini, the Phonon refiner) are restricted to non-Bodhan input.
     func isCompatible(with transcriptionBackend: BackendOption, inputFormat: PostProcessorOption.InputFormat) -> Bool {
         isCompatible(with: transcriptionBackend)
-            && !(self == .local && inputFormat == .s1Mini && transcriptionBackend.backend == "bodhan")
+            && !(self == .local && inputFormat.isEnglishOnly && transcriptionBackend.backend == "bodhan")
     }
 
     static func available(for transcriptionBackend: BackendOption) -> [TranscriptCleanupBackendOption] {
