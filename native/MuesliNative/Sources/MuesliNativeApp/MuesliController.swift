@@ -432,6 +432,7 @@ public final class MuesliController: NSObject {
     private static let screenContextGrantIntentTimeout: TimeInterval = 15 * 60
     private let runtime: RuntimePaths
     let configStore: ConfigStore
+    private lazy var configBackup = ConfigBackupRestoreCoordinator(mirror: configStore.backupMirror)
     let dictationStore: DictationStore
     private let downloadedBackendOptions: () -> [BackendOption]
     private let modelOSVersion: OperatingSystemVersion
@@ -1068,7 +1069,7 @@ public final class MuesliController: NSObject {
     init(
         runtime: RuntimePaths,
         dictationStore: DictationStore? = nil,
-        configStore: ConfigStore = ConfigStore(),
+        configStore: ConfigStore = .production(),
         meetingHookDispatcher: MeetingHookDispatching = MeetingHookRunner(),
         meetingMarkdownAutoExporter: MeetingMarkdownAutoExporting = MeetingMarkdownAutoExporter(),
         launchAtLoginManager: LaunchAtLoginManaging = SystemLaunchAtLoginManager(),
@@ -1528,6 +1529,7 @@ public final class MuesliController: NSObject {
 
         if canRunMainApp {
             configureRecapClock()
+            offerConfigBackupRestoreIfNeeded()
             PostInstallChecker.check()
             if let automaticFeatureTour {
                 DispatchQueue.main.async { [weak self] in
@@ -6375,6 +6377,7 @@ public final class MuesliController: NSObject {
         systemPermissionGuideController.dismiss()
         onboardingWindowController?.close()
         onboardingWindowController = nil
+        offerConfigBackupRestoreIfNeeded()
         meetingFeatureMonitorsAllowed = true
         let pushToTalkPermissionProfile = PushToTalkEnablementPolicy.PermissionProfile.resolved(
             for: onboardingUseCase
@@ -11065,6 +11068,57 @@ public final class MuesliController: NSObject {
             if isSystemAudioError, response == .alertSecondButtonReturn {
                 self.showPermissionsSettings()
             }
+        }
+    }
+
+    /// Offers the dictionary kept in the settings backup when this install has none of its own.
+    /// With nothing to offer it refreshes the backup instead, so an existing install gets one
+    /// before its next settings change.
+    func offerConfigBackupRestoreIfNeeded() {
+        guard let offer = configBackup.pendingOffer(
+            configWords: config.customWords,
+            hasCompletedOnboarding: config.hasCompletedOnboarding
+        ) else {
+            configStore.writeBackup(of: config)
+            return
+        }
+        let wordCount = offer.words.count
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Restore your dictionary?"
+        alert.informativeText = "muesli found a backup with \(wordCount) custom \(wordCount == 1 ? "word" : "words") "
+            + "in \(configStore.backupMirror?.directoryURL.path ?? "the backup folder"), but this install has none. "
+            + "Restore them, or delete the backup."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Delete Backup")
+        let shown = presentAlert(alert, fallbackLogContext: "dictionary backup restore") { [weak self] response in
+            guard let self else { return }
+            if response == .alertFirstButtonReturn {
+                let restored = self.configBackup.restoredWords(for: offer, into: self.config.customWords)
+                self.updateConfig { $0.customWords = restored }
+            } else {
+                self.configBackup.deleteBackup()
+            }
+        }
+        if shown { configBackup.markOffered() }
+    }
+
+    /// Nil when the settings backup is off (isolated test stores).
+    var configBackupDirectoryPath: String? {
+        configStore.backupMirror.map { ($0.directoryURL.path as NSString).abbreviatingWithTildeInPath }
+    }
+
+    func revealConfigBackupInFinder() {
+        guard let mirror = configStore.backupMirror else { return }
+        if FileManager.default.fileExists(atPath: mirror.fileURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([mirror.fileURL])
+        } else if FileManager.default.fileExists(atPath: mirror.directoryURL.path) {
+            NSWorkspace.shared.open(mirror.directoryURL)
+        } else {
+            presentErrorAlert(
+                title: "No Backup Yet",
+                message: "muesli writes the backup the next time settings are saved."
+            )
         }
     }
 

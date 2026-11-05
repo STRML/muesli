@@ -7,15 +7,29 @@ final class ConfigStore {
     let credentialVault: any CredentialVault
     private var savedCredentials: ConfigCredentials?
     private(set) var credentialStorageError: String?
+    /// Copy of config.json kept outside Application Support. Nil turns the backup off.
+    let backupMirror: ConfigBackupMirror?
+    private(set) var lastBackupOutcome: ConfigBackupMirror.WriteOutcome?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    init(supportDirectory: URL = AppIdentity.supportDirectoryURL, vault: (any CredentialVault)? = nil) {
+    init(
+        supportDirectory: URL = AppIdentity.supportDirectoryURL,
+        vault: (any CredentialVault)? = nil,
+        backupMirror: ConfigBackupMirror? = nil
+    ) {
+        self.backupMirror = backupMirror
         let vault = vault ?? KeychainCredentialVault(supportDirectory: supportDirectory)
         self.credentialVault = vault
         self.configURL = supportDirectory.appendingPathComponent("config.json")
         self.openRouterCredentialStore = OpenRouterCredentialStore(supportDirectory: supportDirectory, vault: vault)
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    }
+
+    /// The store the running app uses: backup on, keyed to this app identity so
+    /// production, dev and lane builds keep separate copies.
+    static func production() -> ConfigStore {
+        ConfigStore(backupMirror: .standard(appName: AppIdentity.supportDirectoryName))
     }
 
     func load() -> AppConfig {
@@ -117,13 +131,44 @@ final class ConfigStore {
         config.customLLMHeaders = value.customHeaders
     }
 
-    private func writeSanitized(_ config: AppConfig) throws {
+    private func sanitizedData(_ config: AppConfig) throws -> Data {
         guard config.openRouterAPIKey.isEmpty else { throw CredentialVaultError.unavailable }
         var sanitized = config
         apply(ConfigCredentials(), to: &sanitized)
-        let data = try encoder.encode(sanitized)
+        return try encoder.encode(sanitized)
+    }
+
+    private func writeSanitized(_ config: AppConfig) throws {
+        let data = try sanitizedData(config)
         try data.write(to: configURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)
+        mirror(data)
+    }
+
+    /// Copies the config to the backup folder without touching config.json. Used at
+    /// launch so an existing install gets a mirror before its next settings change.
+    func writeBackup(of config: AppConfig) {
+        guard backupMirror != nil else { return }
+        do {
+            mirror(try sanitizedData(config))
+        } catch {
+            fputs("[config-store] backup skipped: config could not be prepared\n", stderr)
+        }
+    }
+
+    /// The mirror is a convenience copy: a failure is logged and never fails the save.
+    private func mirror(_ data: Data) {
+        guard let backupMirror else { return }
+        let outcome = backupMirror.write(data)
+        lastBackupOutcome = outcome
+        switch outcome {
+        case .written:
+            break
+        case .keptExistingWords:
+            fputs("[config-store] backup kept: new config has no custom words but the backup does\n", stderr)
+        case .failed(let reason):
+            fputs("[config-store] backup write failed: \(reason)\n", stderr)
+        }
     }
 
     /// Moves the legacy config.json key into the scoped Keychain item. If that write fails, keep the old value in config so

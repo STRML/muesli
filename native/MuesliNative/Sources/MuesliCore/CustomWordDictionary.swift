@@ -44,6 +44,14 @@ public enum CustomWordDictionaryCodec {
         throw Error.invalidFormat
     }
 
+    /// The entries a user created, which excludes the seed entries every fresh
+    /// config starts with.
+    public static func userWords(in words: [CustomWord]) -> [CustomWord] {
+        words.filter { word in
+            !CustomWord.defaultWords.contains { $0.word == word.word && $0.replacement == word.replacement }
+        }
+    }
+
     /// Encodes a portable dictionary array without app-specific IDs.
     public static func encode(_ words: [CustomWord]) throws -> Data {
         let portableWords = words.map(PortableCustomWord.init)
