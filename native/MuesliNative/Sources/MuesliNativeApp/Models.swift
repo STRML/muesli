@@ -2414,6 +2414,10 @@ struct AppConfig: Codable, Equatable {
     }
     var enableDoubleTapDictation: Bool = true
     var enableBufferedLiveDictation: Bool = false
+    /// Hold-to-talk only: recognize and clean up while the key is held so key-up waits only for
+    /// the last few seconds. Off by default; see `IncrementalDictationPolicy` for what else must
+    /// hold (a Mac with 16 GB or more, Parakeet, local cleanup). Everything else keeps today's path.
+    var enableIncrementalHoldToTalk: Bool = false
     /// Only applies when the dictation shortcut is a key combination.
     var dictationCombinationActivation: HotkeyMonitor.CombinationActivation = .pushToTalk
     var isDictationCombinationToggle: Bool {
@@ -2636,6 +2640,7 @@ struct AppConfig: Codable, Equatable {
         case ultraDarkAppearance = "ultra_dark_appearance"
         case enableDoubleTapDictation = "enable_double_tap_dictation"
         case enableBufferedLiveDictation = "enable_buffered_live_dictation"
+        case enableIncrementalHoldToTalk = "enable_incremental_hold_to_talk"
         case dictationCombinationActivation = "dictation_combination_activation"
         case pasteShortcut = "paste_shortcut"
         case hotkeyTriggerThresholdMS = "hotkey_trigger_threshold_ms"
@@ -2872,6 +2877,7 @@ struct AppConfig: Codable, Equatable {
         showIOSCompanionPrompt = (try? c.decode(Bool.self, forKey: .showIOSCompanionPrompt)) ?? defaults.showIOSCompanionPrompt
         enableDoubleTapDictation = (try? c.decode(Bool.self, forKey: .enableDoubleTapDictation)) ?? defaults.enableDoubleTapDictation
         enableBufferedLiveDictation = (try? c.decode(Bool.self, forKey: .enableBufferedLiveDictation)) ?? defaults.enableBufferedLiveDictation
+        enableIncrementalHoldToTalk = (try? c.decode(Bool.self, forKey: .enableIncrementalHoldToTalk)) ?? defaults.enableIncrementalHoldToTalk
         dictationCombinationActivation = (try? c.decode(
             HotkeyMonitor.CombinationActivation.self,
             forKey: .dictationCombinationActivation
