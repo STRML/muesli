@@ -46,7 +46,7 @@ struct UISnapshotTests {
         let normalMeeting: Int64
     }
 
-    private func makeFixture() throws -> Fixture {
+    private func makeFixture(backupMirror: ConfigBackupMirror? = nil) throws -> Fixture {
         let store = DictationStore(databaseURL: FileManager.default.temporaryDirectory
             .appendingPathComponent("ui-snapshot-\(UUID()).db"))
         try store.migrateIfNeeded()
@@ -55,7 +55,7 @@ struct UISnapshotTests {
         let controller = MuesliController(
             runtime: RuntimePaths(repoRoot: FileManager.default.temporaryDirectory, menuIcon: nil, appIcon: nil, bundlePath: nil),
             dictationStore: store,
-            configStore: ConfigStore(supportDirectory: configDirectory)
+            configStore: ConfigStore(supportDirectory: configDirectory, backupMirror: backupMirror)
         )
         let rush = try store.createFolder(name: "Rush")
         let legal = try store.createFolder(name: "Legal")
@@ -211,5 +211,14 @@ struct UISnapshotTests {
         }
         f.controller.appState.selectedMeetingSummaryBackend = .customLLM
         try render(SettingsView(appState: f.controller.appState, controller: f.controller), width: 900, height: 3600, name: "13-settings-endpoint-url-command")
+    }
+
+    @Test("settings: General pane shows the settings backup path")
+    func settingsBackup() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("ui-snapshot-home-\(UUID())", isDirectory: true)
+        let f = try makeFixture(backupMirror: .standard(appName: "Muesli", home: home))
+        f.controller.appState.selectedTab = .settings
+        f.controller.appState.selectedSettingsPane = .general
+        try render(SettingsView(appState: f.controller.appState, controller: f.controller), width: 900, height: 1800, name: "14-settings-backup")
     }
 }
