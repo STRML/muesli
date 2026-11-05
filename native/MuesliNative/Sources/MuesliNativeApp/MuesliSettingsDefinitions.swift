@@ -386,6 +386,25 @@ extension MuesliController {
                 }
                 return (availability?.contains(self.selectedBackend) ?? self.selectedBackend.isDownloaded) ? nil : "Download the selected dictation model first."
             })
+        // Hold-to-talk only. While the key is held, Muesli recognizes the audio so far and cleans up
+        // sentences that stopped changing, so releasing the key waits only for the last few
+        // seconds. Off by default. Each dictation still uses today's path unless everything holds
+        // at key-down: a Mac with 16 GB or more, the local Parakeet Unified model, on-device
+        // cleanup with a measured model, paste output, and screen context off. The result is
+        // checked against the final recognition at key-up and falls back to today's path on any
+        // difference. https://github.com/STRML/muesli/issues/46
+        toggle("incremental_hold_to_talk", "Clean up while the dictation key is held", \.enableIncrementalHoldToTalk,
+            unavailable: { enabled in
+                guard enabled else { return nil }
+                guard ProcessInfo.processInfo.physicalMemory >= IncrementalDictationPolicy.minimumPhysicalMemory else {
+                    return "Needs a Mac with 16 GB of memory or more."
+                }
+                guard self.selectedDictationProvider == .local,
+                      IncrementalDictationPolicy.supportsRecognizer(self.selectedBackend) else {
+                    return "Select the local Parakeet Unified model first."
+                }
+                return nil
+            })
         let localPlanners = ComputerUseLocalPlanner.models.filter { model in availability.map { $0.localPlannerIDs.contains(model.id) } ?? model.available }
         // Backend is derived from the selected model, so existing configurations
         // and direct voice model selections remain consistent without migration.

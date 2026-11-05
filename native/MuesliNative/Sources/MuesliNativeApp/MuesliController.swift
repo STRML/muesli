@@ -672,6 +672,13 @@ public final class MuesliController: NSObject {
     private var bufferedCaptureTask: Task<Void, Never>?
     private var bufferedCaptureID: UUID?
     private var finalizingBufferedTarget: (id: UUID, target: LiveDictationTextTarget)?
+    /// Hold-to-talk dictation that cleans up while the key is held (IncrementalDictation.swift).
+    /// Set at key-down only when every condition of `IncrementalDictationPolicy` holds.
+    private var incrementalDictation: IncrementalDictationSession?
+    #if DEBUG
+    /// Overrides the machine's memory so tests can cover the 16 GB rule.
+    var incrementalDictationPhysicalMemoryForTesting: UInt64?
+    #endif
     private var cleanupWarmupTask: Task<Void, Never>?
     private var cleanupWarmupTraceID: UUID?
     private var dictationLatencyTraceID: UUID?
@@ -13022,6 +13029,136 @@ public final class MuesliController: NSObject {
     private func cancelHostedDictation() {
         detachHostedDictation()?.cancel()
         cancelBufferedDictation()
+        cancelIncrementalDictation()
+    }
+
+    // MARK: Incremental hold-to-talk (https://github.com/STRML/muesli/issues/46)
+
+    private func incrementalDictationEnvironment(option: PostProcessorOption?) -> IncrementalDictationPolicy.Environment {
+        var memory = ProcessInfo.processInfo.physicalMemory
+        #if DEBUG
+        if let override = incrementalDictationPhysicalMemoryForTesting { memory = override }
+        #endif
+        return IncrementalDictationPolicy.Environment(
+            settingEnabled: config.enableIncrementalHoldToTalk,
+            physicalMemory: memory,
+            providerIsLocal: selectedDictationProvider == .local,
+            recognizer: selectedBackend,
+            cleanupEnabled: canRunTranscriptCleanup(option: option),
+            cleanupIsLocal: selectedPostProcessorBackend == .local,
+            cleanupFormat: option?.inputFormat,
+            outputIsPaste: currentDictationOutputMode == .paste,
+            isTestMode: isDictationTestMode,
+            capturesScreenContext: shouldCaptureDictationContext,
+            buffersStreamingOutput: buffersStreamingDictation
+        )
+    }
+
+    /// Everything that must be the same at key-up as at key-down for background work to be reused.
+    private func incrementalDictationFingerprint(option: PostProcessorOption) -> String {
+        [
+            selectedBackend.backend, selectedBackend.model, config.resolvedParakeetLanguage.rawValue,
+            selectedPostProcessorBackend.backend, option.id, option.modelURL.path,
+            option.effectiveSystemPrompt(configuredSystemPrompt: config.postProcessorSystemPrompt),
+            String(config.enablePostProcessor),
+        ].joined(separator: "\u{1F}")
+    }
+
+    /// Starts background recognition and cleanup for this hold-to-talk dictation, or does nothing
+    /// and leaves today's path in charge. Never delays the recording: audio is buffered at once and
+    /// the session starts its passes after cleanup is configured.
+    private func beginIncrementalDictationIfEligible() {
+        cancelIncrementalDictation()
+        let option = runtimePostProcessorOption()
+        let environment = incrementalDictationEnvironment(option: option)
+        if let reason = IncrementalDictationPolicy.ineligibleReason(environment) {
+            if config.enableIncrementalHoldToTalk {
+                fputs("[muesli-native] incremental dictation not used: \(reason)\n", stderr)
+            }
+            return
+        }
+        guard let option else { return }
+        let coordinator = transcriptionCoordinator
+        let recognizer = selectedBackend
+        let session = IncrementalDictationSession(
+            fingerprint: incrementalDictationFingerprint(option: option),
+            hooks: .init(
+                transcribe: { samples in
+                    try await coordinator.transcribeDictationSnapshot(samples: samples, backend: recognizer)
+                },
+                clean: { text in await coordinator.cleanDictationChunk(text, backend: recognizer) }
+            )
+        )
+        incrementalDictation = session
+        dictationAudioSessionManager.onAudioBuffer = { [weak session] samples in session?.append(samples) }
+        Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            await self.configureTranscriptCleanupForRuntime(option: option)
+            await session.start()
+        }
+    }
+
+    /// Esc, a meeting taking over, a recorder failure, a recording with no audio: whatever
+    /// background work exists is dropped and cannot reach the paste.
+    private func cancelIncrementalDictation() {
+        guard let session = incrementalDictation else { return }
+        incrementalDictation = nil
+        dictationAudioSessionManager.onAudioBuffer = nil
+        Task { await session.cancel() }
+    }
+
+    /// Final recognition is today's call on the recorded WAV. The session only decides whether
+    /// the already-cleaned prefix can stand in for cleaning the whole transcript again.
+    private func transcribeWithIncrementalDictation(
+        _ session: IncrementalDictationSession,
+        wavURL: URL,
+        backend: BackendOption,
+        languages: (cohere: CohereTranscribeLanguage, bodhan: BodhanLanguage,
+                    bodhanOutput: BodhanOutputMode, whisper: WhisperKitLanguage,
+                    parakeet: ParakeetLanguage),
+        option: PostProcessorOption?,
+        promptContext: String?,
+        trace: DictationLatencyTraceToken?
+    ) async throws -> SpeechTranscriptionResult {
+        let timingID = trace?.id.uuidString
+        let raw = try await transcriptionCoordinator.transcribeDictationRaw(
+            at: wavURL,
+            backend: backend,
+            cohereLanguage: languages.cohere,
+            bodhanLanguage: languages.bodhan,
+            bodhanOutputMode: languages.bodhanOutput,
+            whisperLanguage: languages.whisper,
+            qwen3AsrLanguage: config.resolvedQwen3AsrLanguage,
+            parakeetLanguage: languages.parakeet,
+            appleSpeechLanguage: config.resolvedAppleSpeechLanguage,
+            timingRequestID: timingID
+        )
+        try Task.checkCancellation()
+        let cleanupEnabled = canRunTranscriptCleanup(option: option)
+        let outcome: IncrementalDictationSession.Outcome
+        if cleanupEnabled, let option, promptContext == nil {
+            outcome = await session.resolve(
+                finalTranscript: await transcriptionCoordinator.artifactCleanedDictationText(raw),
+                recordedSampleCount: BufferedDictationFinalizer.recordedSampleCount(at: wavURL),
+                currentFingerprint: incrementalDictationFingerprint(option: option)
+            )
+        } else {
+            await session.cancel()
+            outcome = .fallback(.configurationChanged)
+        }
+        try Task.checkCancellation()
+        switch outcome {
+        case .reuse(let cleanedPrefix, let tailRaw):
+            markDictationLatency("incremental_reuse prefix_chars=\(cleanedPrefix.count) tail_chars=\(tailRaw.count) \(await session.lastNote)", trace: trace)
+            return await transcriptionCoordinator.finalizeIncrementalDictationTranscript(
+                cleanedPrefix: cleanedPrefix, tailRaw: tailRaw, backend: backend,
+                customWords: serializedCustomWords(), appContext: promptContext, timingRequestID: timingID)
+        case .fallback(let reason):
+            markDictationLatency("incremental_fallback:\(reason.rawValue) \(await session.lastNote)", trace: trace)
+            return await transcriptionCoordinator.finalizeDictationTranscript(
+                raw, backend: backend, enablePostProcessor: cleanupEnabled,
+                customWords: serializedCustomWords(), appContext: promptContext, timingRequestID: timingID)
+        }
     }
 
     /// Only hands-free local dictation opts in. A missing safe target preserves
@@ -13241,6 +13378,21 @@ public final class MuesliController: NSObject {
         }
     }
 
+    func installIncrementalDictationForTesting(_ session: IncrementalDictationSession?) {
+        incrementalDictation = session
+    }
+
+    var hasIncrementalDictationForTesting: Bool { incrementalDictation != nil }
+
+    func beginIncrementalDictationForTesting() {
+        beginIncrementalDictationIfEligible()
+    }
+
+    /// The same entry point Escape reaches.
+    func cancelDictationForTesting() {
+        handleCancel()
+    }
+
     func finishStandardFormattingForTesting(_ text: String) {
         completeDictationPaste(text: text, duration: 1, appContext: "", startedAt: Date(),
             formattingRules: config.dictationAppFormattingRules, backend: "synthetic",
@@ -13298,6 +13450,7 @@ public final class MuesliController: NSObject {
         clearCapturedDictationSessionContext()
         captureDictationCorrectionTargetApp()
         setState(.preparing)
+        beginIncrementalDictationIfEligible()
         activeDictationAudioSessionID = dictationAudioSessionManager.beginRecording(
             mode: "hold-start",
             duckingEnabled: config.muteSystemAudioDuringDictation,
@@ -13650,6 +13803,10 @@ public final class MuesliController: NSObject {
             return
         }
 
+        if let incremental = incrementalDictation {
+            // Key-up: no further background pass or cleanup may start.
+            Task { await incremental.keyUp() }
+        }
         markDictationLatency("sound_release_requested:stop")
         pendingDictationStopSessionID = dictationAudioSessionManager.currentSessionID
         pendingReleaseSoundSessionID = shouldPlayDictationLifecycleSounds && !isDictationTestMode
@@ -13942,6 +14099,9 @@ public final class MuesliController: NSObject {
         hostedSession: (any HostedDictationSession)?
     ) {
         cancelBufferedDictationCapture()
+        // The recorder has stopped, so the session owns every sample it will ever hear.
+        let incremental = incrementalDictation
+        incrementalDictation = nil
         let liveContext = bufferedDictationContext
         indicator.setCursorInsertionStopped(false, config: config)
         bufferedDictationContext = nil
@@ -13956,6 +14116,7 @@ public final class MuesliController: NSObject {
             liveContext?.session.cancel()
             liveContext?.target.cancel()
             hostedSession?.cancel()
+            if let incremental { Task { await incremental.cancel() } }
             fputs("[muesli-native] stop without wav\n", stderr)
             clearCapturedDictationSessionContext()
             resetDictationOutputMode()
@@ -13970,6 +14131,7 @@ public final class MuesliController: NSObject {
             liveContext?.session.cancel()
             liveContext?.target.cancel()
             hostedSession?.cancel()
+            if let incremental { Task { await incremental.cancel() } }
             fputs("[muesli-native] discarded short recording\n", stderr)
             try? FileManager.default.removeItem(at: wavURL)
             if isDictationTestMode {
@@ -14025,6 +14187,8 @@ public final class MuesliController: NSObject {
             var recordingCleanup = DictationRecordingCleanup(wavURL: wavURL)
             defer {
                 liveContext?.session.cancel()
+                // Idempotent: whatever the session still holds is dropped on every exit.
+                if let incremental { Task { await incremental.cancel() } }
                 recordingCleanup.finish()
                 if !isTestMode {
                     self.clearInFlightDictationTranscription(id: transcriptionTaskID)
@@ -14094,41 +14258,51 @@ public final class MuesliController: NSObject {
                 } else {
                     let ppOption = self.runtimePostProcessorOption()
                     await self.configureTranscriptCleanupForRuntime(option: ppOption)
-                    let result = try await BufferedDictationFinalizer.transcribe(
-                        session: liveContext?.session,
-                        recordedSampleCount: liveContext == nil ? nil
-                            : BufferedDictationFinalizer.recordedSampleCount(at: wavURL),
-                        onDecision: { decision in
-                            self.markDictationLatency("buffered_finalization:\(decision)", trace: completionLatencyTrace)
-                        },
-                        reuse: { transcript in
-                            await self.transcriptionCoordinator.finalizeDictationTranscript(
-                                SpeechTranscriptionResult(text: transcript, segments: [],
-                                    bodhanMeasurement: liveContext?.session.bodhanMeasurement(for: transcript)),
-                                backend: transcriptionBackend,
-                                enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
-                                customWords: self.serializedCustomWords(),
-                                appContext: promptContext,
-                                timingRequestID: completionLatencyTrace?.id.uuidString
-                            )
-                        }, nonStreaming: {
-                            try await self.transcriptionCoordinator.transcribeDictation(
-                                at: wavURL,
-                                backend: transcriptionBackend,
-                                cohereLanguage: transcriptionLanguage,
-                                bodhanLanguage: bodhanTranscriptionLanguage,
-                                bodhanOutputMode: bodhanTranscriptionOutputMode,
-                                whisperLanguage: whisperTranscriptionLanguage,
-                                qwen3AsrLanguage: self.config.resolvedQwen3AsrLanguage,
-                                parakeetLanguage: parakeetTranscriptionLanguage,
-                                appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
-                                enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
-                                customWords: self.serializedCustomWords(),
-                                appContext: promptContext,
-                                timingRequestID: completionLatencyTrace?.id.uuidString
-                            )
-                        }
-                    )
+                    let result: SpeechTranscriptionResult
+                    if let incremental, liveContext == nil {
+                        result = try await self.transcribeWithIncrementalDictation(
+                            incremental, wavURL: wavURL, backend: transcriptionBackend,
+                            languages: (transcriptionLanguage, bodhanTranscriptionLanguage,
+                                        bodhanTranscriptionOutputMode, whisperTranscriptionLanguage,
+                                        parakeetTranscriptionLanguage),
+                            option: ppOption, promptContext: promptContext, trace: completionLatencyTrace)
+                    } else {
+                        result = try await BufferedDictationFinalizer.transcribe(
+                            session: liveContext?.session,
+                            recordedSampleCount: liveContext == nil ? nil
+                                : BufferedDictationFinalizer.recordedSampleCount(at: wavURL),
+                            onDecision: { decision in
+                                self.markDictationLatency("buffered_finalization:\(decision)", trace: completionLatencyTrace)
+                            },
+                            reuse: { transcript in
+                                await self.transcriptionCoordinator.finalizeDictationTranscript(
+                                    SpeechTranscriptionResult(text: transcript, segments: [],
+                                        bodhanMeasurement: liveContext?.session.bodhanMeasurement(for: transcript)),
+                                    backend: transcriptionBackend,
+                                    enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
+                                    customWords: self.serializedCustomWords(),
+                                    appContext: promptContext,
+                                    timingRequestID: completionLatencyTrace?.id.uuidString
+                                )
+                            }, nonStreaming: {
+                                try await self.transcriptionCoordinator.transcribeDictation(
+                                    at: wavURL,
+                                    backend: transcriptionBackend,
+                                    cohereLanguage: transcriptionLanguage,
+                                    bodhanLanguage: bodhanTranscriptionLanguage,
+                                    bodhanOutputMode: bodhanTranscriptionOutputMode,
+                                    whisperLanguage: whisperTranscriptionLanguage,
+                                    qwen3AsrLanguage: self.config.resolvedQwen3AsrLanguage,
+                                    parakeetLanguage: parakeetTranscriptionLanguage,
+                                    appleSpeechLanguage: self.config.resolvedAppleSpeechLanguage,
+                                    enablePostProcessor: self.canRunTranscriptCleanup(option: ppOption),
+                                    customWords: self.serializedCustomWords(),
+                                    appContext: promptContext,
+                                    timingRequestID: completionLatencyTrace?.id.uuidString
+                                )
+                            }
+                        )
+                    }
                     rawText = result.text
                     completionModel = DictationModelIdentity(backend: transcriptionBackend.backend,
                         model: transcriptionBackend.model, name: transcriptionBackend.label)

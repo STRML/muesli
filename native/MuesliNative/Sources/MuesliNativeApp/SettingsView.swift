@@ -996,6 +996,17 @@ struct SettingsView: View {
                 .id(FeatureTourTarget.liveDictation.rawValue)
                 .featureTourTarget(.liveDictation)
             }
+            if appState.dictationProvider == .local,
+               displayedDictationBackend.map(IncrementalDictationPolicy.supportsRecognizer) == true,
+               ProcessInfo.processInfo.physicalMemory >= IncrementalDictationPolicy.minimumPhysicalMemory {
+                Divider().background(MuesliTheme.surfaceBorder)
+                settingsCompactRow(
+                    "Clean up while the dictation key is held",
+                    description: "Hold-to-talk only. Needs on-device cleanup. Releasing the key waits for the last few seconds instead of the whole dictation."
+                ) {
+                    settingsControl("incremental_hold_to_talk")
+                }
+            }
             if displayedDictationBackend?.backend == BackendOption.cohereTranscribe.backend {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Cohere language", controlWidth: meetingControlWidth) {

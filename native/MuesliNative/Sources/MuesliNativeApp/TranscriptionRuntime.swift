@@ -1290,29 +1290,8 @@ actor TranscriptionCoordinator {
         try await TranscriptCleanupDebugLogger.$requestID.withValue(timingRequestID ?? UUID().uuidString) {
             let totalStart = ProcessInfo.processInfo.systemUptime
             defer { TranscriptCleanupDebugLogger.timing("dictation_processing_total", since: totalStart) }
-            // Qwen3 post-processing is intentionally dictation-only. Meeting transcription should keep raw backend/Parakeet output.
-            // Cohere decodes hallucinated text from silence — skip if VAD detects no speech
-            if backend.backend == "cohere", let vadManager {
-                do {
-                    let vadResults = try await vadManager.process(url)
-                    let hasSpeech = vadResults.contains { $0.probability > 0.5 }
-                    if !hasSpeech {
-                        fputs("[muesli-native] VAD: dictation is silent, skipping Cohere transcription\n", stderr)
-                        return SpeechTranscriptionResult(text: "", segments: [])
-                    }
-                } catch {
-                    fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
-                }
-            }
-            let asrStart = ProcessInfo.processInfo.systemUptime
-            var asrSucceeded = false
-            defer {
-                if !asrSucceeded {
-                    TranscriptCleanupDebugLogger.timing("asr_failed", since: asrStart, detail: backend.backend)
-                }
-            }
-            let result = try await route(
-                url: url,
+            let result = try await recognizeDictation(
+                at: url,
                 backend: backend,
                 cohereLanguage: cohereLanguage,
                 bodhanLanguage: bodhanLanguage,
@@ -1322,13 +1301,164 @@ actor TranscriptionCoordinator {
                 parakeetLanguage: parakeetLanguage,
                 appleSpeechLanguage: appleSpeechLanguage
             )
-            asrSucceeded = true
-            TranscriptCleanupDebugLogger.timing("asr_completed", since: asrStart, detail: backend.backend)
             return await finalizeDictationTranscript(
                 result, backend: backend, enablePostProcessor: enablePostProcessor,
                 customWords: customWords, appContext: appContext,
                 timingRequestID: timingRequestID
             )
+        }
+    }
+
+    /// Recognition only, exactly as `transcribeDictation` runs it before finalization.
+    /// Incremental hold-to-talk uses this so key-up recognition is the very call today's
+    /// path makes.
+    func transcribeDictationRaw(
+        at url: URL,
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage = CohereTranscribeLanguage.defaultLanguage,
+        bodhanLanguage: BodhanLanguage = BodhanLanguage.defaultLanguage,
+        bodhanOutputMode: BodhanOutputMode = .mixed,
+        whisperLanguage: WhisperKitLanguage = WhisperKitLanguage.defaultLanguage,
+        qwen3AsrLanguage: Qwen3AsrLanguage = Qwen3AsrLanguage.defaultLanguage,
+        parakeetLanguage: ParakeetLanguage = ParakeetLanguage.defaultLanguage,
+        appleSpeechLanguage: String = AppleSpeechLanguageOption.systemIdentifier,
+        timingRequestID: String? = nil
+    ) async throws -> SpeechTranscriptionResult {
+        try await TranscriptCleanupDebugLogger.$requestID.withValue(timingRequestID ?? UUID().uuidString) {
+            try await recognizeDictation(
+                at: url,
+                backend: backend,
+                cohereLanguage: cohereLanguage,
+                bodhanLanguage: bodhanLanguage,
+                bodhanOutputMode: bodhanOutputMode,
+                whisperLanguage: whisperLanguage,
+                qwen3AsrLanguage: qwen3AsrLanguage,
+                parakeetLanguage: parakeetLanguage,
+                appleSpeechLanguage: appleSpeechLanguage
+            )
+        }
+    }
+
+    private func recognizeDictation(
+        at url: URL,
+        backend: BackendOption,
+        cohereLanguage: CohereTranscribeLanguage,
+        bodhanLanguage: BodhanLanguage,
+        bodhanOutputMode: BodhanOutputMode,
+        whisperLanguage: WhisperKitLanguage,
+        qwen3AsrLanguage: Qwen3AsrLanguage,
+        parakeetLanguage: ParakeetLanguage,
+        appleSpeechLanguage: String
+    ) async throws -> SpeechTranscriptionResult {
+        // Qwen3 post-processing is intentionally dictation-only. Meeting transcription should keep raw backend/Parakeet output.
+        // Cohere decodes hallucinated text from silence — skip if VAD detects no speech
+        if backend.backend == "cohere", let vadManager {
+            do {
+                let vadResults = try await vadManager.process(url)
+                let hasSpeech = vadResults.contains { $0.probability > 0.5 }
+                if !hasSpeech {
+                    fputs("[muesli-native] VAD: dictation is silent, skipping Cohere transcription\n", stderr)
+                    return SpeechTranscriptionResult(text: "", segments: [])
+                }
+            } catch {
+                fputs("[muesli-native] VAD check failed, transcribing anyway: \(error)\n", stderr)
+            }
+        }
+        let asrStart = ProcessInfo.processInfo.systemUptime
+        var asrSucceeded = false
+        defer {
+            if !asrSucceeded {
+                TranscriptCleanupDebugLogger.timing("asr_failed", since: asrStart, detail: backend.backend)
+            }
+        }
+        let result = try await route(
+            url: url,
+            backend: backend,
+            cohereLanguage: cohereLanguage,
+            bodhanLanguage: bodhanLanguage,
+            bodhanOutputMode: bodhanOutputMode,
+            whisperLanguage: whisperLanguage,
+            qwen3AsrLanguage: qwen3AsrLanguage,
+            parakeetLanguage: parakeetLanguage,
+            appleSpeechLanguage: appleSpeechLanguage
+        )
+        asrSucceeded = true
+        TranscriptCleanupDebugLogger.timing("asr_completed", since: asrStart, detail: backend.backend)
+        return result
+    }
+
+    // MARK: - Incremental hold-to-talk (https://github.com/STRML/muesli/issues/46)
+
+    enum IncrementalDictationError: Error {
+        case recognizerNotSupported
+    }
+
+    /// Recognizes audio captured so far. Never loads, downloads or repairs a model: a
+    /// background pass must not disturb the final recognition, and a model that was unloaded
+    /// mid-hold makes the dictation fall back to today's path.
+    func transcribeDictationSnapshot(samples: [Float], backend: BackendOption) async throws -> String {
+        guard backend == .parakeetUnified else { throw IncrementalDictationError.recognizerNotSupported }
+        // `transcribePreview` throws `notLoaded` rather than loading anything.
+        let text = try await parakeetUnifiedTranscriber.transcribePreview(
+            samples: samples, requiresWordTimings: false).text
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return removeArtifacts(SpeechTranscriptionResult(text: trimmed, segments: [])).text
+    }
+
+    /// Artifact removal as `finalizeDictationTranscript` applies it before cleanup. The
+    /// final transcript is compared with background chunks in this form.
+    func artifactCleanedDictationText(_ transcript: SpeechTranscriptionResult) -> String {
+        removeArtifacts(transcript).text
+    }
+
+    /// Cleans one chunk exactly as `finalizeDictationTranscript` cleans a whole dictation:
+    /// the configured cleanup, falling back to filler-word removal when cleanup fails or its
+    /// output is rejected. Never throws, so one bad chunk cannot lose the dictation.
+    func cleanDictationChunk(
+        _ text: String,
+        backend: BackendOption,
+        appContext: String? = nil,
+        timingRequestID: String? = nil
+    ) async -> String {
+        await TranscriptCleanupDebugLogger.$requestID.withValue(
+            timingRequestID ?? TranscriptCleanupDebugLogger.requestID ?? UUID().uuidString
+        ) {
+            let input = SpeechTranscriptionResult(text: text, segments: [])
+            let snapshot = currentPostProcessorSnapshot()
+            let cleaned = await postProcessDictationIfNeeded(
+                input, backend: backend, enabled: true,
+                postProcessorSnapshot: snapshot, appContext: appContext
+            ) ?? removeFillersWithLogging(input)
+            return cleaned.text
+        }
+    }
+
+    /// Joins an already-cleaned prefix with a freshly cleaned tail, then applies the steps
+    /// `finalizeDictationTranscript` applies once to a whole dictation.
+    func finalizeIncrementalDictationTranscript(
+        cleanedPrefix: String,
+        tailRaw: String,
+        backend: BackendOption,
+        customWords: [[String: Any]] = [],
+        appContext: String? = nil,
+        timingRequestID: String? = nil
+    ) async -> SpeechTranscriptionResult {
+        await TranscriptCleanupDebugLogger.$requestID.withValue(
+            timingRequestID ?? TranscriptCleanupDebugLogger.requestID ?? UUID().uuidString
+        ) {
+            let cleanupStart = ProcessInfo.processInfo.systemUptime
+            let cleanedTail = tailRaw.isEmpty ? "" : await cleanDictationChunk(
+                tailRaw, backend: backend, appContext: appContext, timingRequestID: timingRequestID)
+            TranscriptCleanupDebugLogger.timing("cleanup_tail", since: cleanupStart,
+                detail: "model=\(postProcessorModelId)")
+            let joined = [cleanedPrefix, cleanedTail]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            let final = removeArtifacts(
+                applyCustomWords(SpeechTranscriptionResult(text: joined, segments: []), customWords: customWords),
+                preservingLayout: true)
+            return SpeechTranscriptionResult(text: final.text, segments: [])
         }
     }
 
