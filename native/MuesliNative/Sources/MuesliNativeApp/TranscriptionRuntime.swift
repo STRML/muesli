@@ -1452,6 +1452,7 @@ actor TranscriptionCoordinator {
         enablePostProcessor: Bool = false,
         customWords: [[String: Any]] = [],
         appContext: String? = nil,
+        appBundleID: String? = nil,
         timingRequestID: String? = nil
     ) async throws -> SpeechTranscriptionResult {
         try await TranscriptCleanupDebugLogger.$requestID.withValue(timingRequestID ?? UUID().uuidString) {
@@ -1493,7 +1494,7 @@ actor TranscriptionCoordinator {
             TranscriptCleanupDebugLogger.timing("asr_completed", since: asrStart, detail: backend.backend)
             return await finalizeDictationTranscript(
                 result, backend: backend, enablePostProcessor: enablePostProcessor,
-                customWords: customWords, appContext: appContext,
+                customWords: customWords, appContext: appContext, appBundleID: appBundleID,
                 timingRequestID: timingRequestID
             )
         }
@@ -1507,6 +1508,7 @@ actor TranscriptionCoordinator {
         enablePostProcessor: Bool = false,
         customWords: [[String: Any]] = [],
         appContext: String? = nil,
+        appBundleID: String? = nil,
         timingRequestID: String? = nil
     ) async -> SpeechTranscriptionResult {
         await TranscriptCleanupDebugLogger.$requestID.withValue(
@@ -1532,7 +1534,9 @@ actor TranscriptionCoordinator {
                 backend: backend,
                 enabled: enablePostProcessor,
                 postProcessorSnapshot: postProcessorSnapshot,
-                appContext: appContext
+                appContext: appContext,
+                writing: PhononRefinerPrompt.Context(
+                    bundleID: appBundleID, vocabulary: PhononRefinerPrompt.vocabulary(from: customWords))
             ) ?? removeFillersWithLogging(result)
             TranscriptCleanupDebugLogger.timing("cleanup_total", since: cleanupStart,
                                                 detail: "enabled=\(enablePostProcessor) model=\(postProcessorSnapshot.modelId)")
@@ -1744,7 +1748,8 @@ actor TranscriptionCoordinator {
         backend: BackendOption,
         enabled: Bool,
         postProcessorSnapshot: PostProcessorSnapshot,
-        appContext: String? = nil
+        appContext: String? = nil,
+        writing: PhononRefinerPrompt.Context = .none
     ) async -> SpeechTranscriptionResult? {
         guard enabled else {
             Qwen3PostProcessorLogging.logVerbose("Qwen3 post-processor disabled for dictation")
@@ -1794,6 +1799,7 @@ actor TranscriptionCoordinator {
             let cleanup = try await qwen3PostProcessor.processResult(
                 result.text,
                 appContext: appContext,
+                writing: writing,
                 configuration: Qwen3PostProcessor.Configuration(
                     modelURL: postProcessorSnapshot.modelURL,
                     systemPrompt: postProcessorSnapshot.systemPrompt,
