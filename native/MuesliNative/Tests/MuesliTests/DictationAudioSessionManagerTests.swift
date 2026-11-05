@@ -622,16 +622,23 @@ struct DictationAudioSessionManagerTests {
         #expect(harness.recorder.activateCalls == 0)
         #expect(harness.recorder.warmUpCalls == 0)
 
-        Thread.sleep(forTimeInterval: 0.25)
-        harness.wait()
-
-        #expect(harness.recorder.warmUpCalls == 0)
-        #expect(harness.events.contains { event in
+        // The refresh fires on a real 0.2 s asyncAfter. Poll for its outcome
+        // instead of sleeping a fixed margin, which a loaded CI runner overran.
+        // Read `events` on its writer queue: the refresh can append while we poll.
+        let cancelled = { harness.eventQueue.sync { harness.events.contains { event in
             if case .latency(let name, _) = event {
                 return name == "route_refresh_cancelled:idle_routeChange"
             }
             return false
-        })
+        } } }
+        let deadline = Date().addingTimeInterval(5)
+        while !cancelled(), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+            harness.wait()
+        }
+
+        #expect(harness.recorder.warmUpCalls == 0)
+        #expect(cancelled())
     }
 
     @Test("recorder callbacks emit stream active, speech detected, and no audio timeout")
