@@ -276,7 +276,11 @@ private final class IncrementalAudioBuffer: @unchecked Sendable {
     func append(_ incoming: [Float]) {
         // Match what the recorder writes to the WAV (16-bit PCM read back as Float) so a
         // background pass hears the same signal the final pass will.
-        let quantized = incoming.map { Float(Int16(max(-1, min(1, $0)) * 32767)) / 32768 }
+        let quantized = incoming.map { sample -> Float in
+            // The recorder never sends NaN, but a trap on its thread would end the app.
+            guard sample.isFinite else { return 0 }
+            return Float(Int16(max(-1, min(1, sample)) * 32767)) / 32768
+        }
         lock.lock()
         if accepting { samples.append(contentsOf: quantized) }
         lock.unlock()
@@ -560,6 +564,9 @@ actor IncrementalDictationSession {
                 fail(.referBackCue)
                 return
             }
+            // A batch with no words (symbols only) has nothing to clean or to match later.
+            let words = IncrementalWordAlignment.normalizedWords(text)
+            guard !words.isEmpty else { return }
             let index = chunks.count
             let hooks = hooks
             let task = Task { [weak self] () -> String in
@@ -567,7 +574,7 @@ actor IncrementalDictationSession {
                 await self?.markCleaned(index, cleaned)
                 return cleaned
             }
-            chunks.append(Chunk(text: text, words: IncrementalWordAlignment.normalizedWords(text), task: task, cleaned: nil))
+            chunks.append(Chunk(text: text, words: words, task: task, cleaned: nil))
         }
     }
 

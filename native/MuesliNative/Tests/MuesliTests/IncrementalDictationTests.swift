@@ -497,6 +497,12 @@ extension BufferedDictationFinalizerTests {
             #expect(outcome == .fallback(.coverageMismatch))
         }
 
+        @Test func nonFiniteSamplesAreTreatedAsSilenceNotATrap() {
+            let session = IncrementalTestKit.makeSession(IncrementalTestKit.Script(transcripts: Self.growing))
+            session.append([.nan, .infinity, -.infinity, 2, -2, 0.5])
+            #expect(session.receivedSamples == 6)
+        }
+
         @Test func nothingCommittedMeansTodaysPath() async throws {
             let script = IncrementalTestKit.Script(transcripts: [IncrementalTestKit.join(a1, a2)])
             let session = IncrementalTestKit.makeSession(script)

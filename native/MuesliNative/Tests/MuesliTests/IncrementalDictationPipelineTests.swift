@@ -311,9 +311,12 @@ extension BufferedDictationFinalizerTests {
             let ids = try FileManager.default.contentsOfDirectory(at: Self.fixtureDirectory, includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "wav" }.map { $0.deletingPathExtension().lastPathComponent }.sorted()
                 .filter { only?.contains($0) ?? true }
-            var rows = ["clip\tsec\told_s\tnew_s\tresolution\tchunks\tpasses\tsame\twords_same\tnote\told\tnew"]
+            var rows = ["clip\tsec\told_s\tnew_s\tresolution\tchunks\tpasses\tsame\twords_same\tnote\tload1\told\tnew"]
             for id in ids {
                 let seconds = Double(try Self.samples(id).count) / 16_000
+                // Other work on this Mac skews both paths; record how busy it was.
+                var load = [Double](repeating: 0, count: 1)
+                getloadavg(&load, 1)
                 // Today's path before and after the new path, so neither side gets a warmer cache.
                 let old = try await Self.todaysPath(id: id, coordinator: coordinator)
                 let new = try await Self.run(id: id, coordinator: coordinator, speed: speed)
@@ -324,7 +327,7 @@ extension BufferedDictationFinalizerTests {
                     String(format: "%.3f", new.keyUpToText), new.resolution, String(new.chunks), String(new.passes),
                     old.text == new.text ? "same" : "DIFF",
                     Self.words(old.text) == Self.words(new.text) ? "same" : "DIFF",
-                    new.note,
+                    new.note, String(format: "%.1f", load[0]),
                     old.text.replacingOccurrences(of: "\n", with: "\\n"),
                     new.text.replacingOccurrences(of: "\n", with: "\\n"),
                 ].joined(separator: "\t"))
