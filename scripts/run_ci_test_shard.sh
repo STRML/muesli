@@ -150,6 +150,8 @@ case "${shard}" in
       MuesliCleanupV2Tests
       ManagedCleanupV12Tests
       CleanupMLXEvaluationTests
+      PhononRefinerTests
+      PhononRefinerEvaluationTests
       CleanupModelUpdateTests
       QwenMLXDownloadTests
       GemmaAudioEvaluationTests
