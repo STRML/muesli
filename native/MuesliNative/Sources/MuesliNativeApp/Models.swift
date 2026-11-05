@@ -2471,9 +2471,7 @@ struct AppConfig: Codable, Equatable {
     var onboardingUseCase: String = OnboardingUseCase.dictation.rawValue
     var userName: String = ""
     var customMeetingTemplates: [CustomMeetingTemplate] = []
-    var customWords: [CustomWord] = [
-        CustomWord(word: "muesli", replacement: "muesli"),
-    ]
+    var customWords: [CustomWord] = CustomWord.defaultWords
     var dictionarySuggestions: [DictionarySuggestion] = []
     var dismissedDictionarySuggestionKeys: [String] = []
     var enableDictionaryCorrectionPrompts: Bool = false

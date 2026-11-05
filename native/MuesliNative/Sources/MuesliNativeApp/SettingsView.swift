@@ -737,6 +737,19 @@ struct SettingsView: View {
                 LocalStorageUsageView()
             }
 
+            if let backupPath = controller.configBackupDirectoryPath {
+                settingsSection("Settings backup") {
+                    settingsRow(
+                        "Dictionary and settings copy",
+                        description: "Every save also writes your settings and custom dictionary to \(backupPath). Uninstallers usually leave this folder alone. API keys are not included."
+                    ) {
+                        compactActionButton("Reveal in Finder", systemImage: "folder") {
+                            controller.revealConfigBackupInFinder()
+                        }
+                    }
+                }
+            }
+
             settingsSection("Data") {
                 HStack(spacing: MuesliTheme.spacing12) {
                     compactActionButton("Clear dictation history", role: .destructive) {

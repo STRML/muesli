@@ -7,6 +7,19 @@ public enum MuesliPaths {
             .appendingPathComponent(appName, isDirectory: true)
     }
 
+    /// Where the settings backup lives. It sits outside `Library`, so uninstallers
+    /// that sweep Application Support, Preferences, Caches and Logs by app name
+    /// leave it alone. `appName` keeps production, dev and lane data apart.
+    public static func backupDirectoryURL(
+        appName: String = "Muesli",
+        home: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        home
+            .appendingPathComponent(".muesli", isDirectory: true)
+            .appendingPathComponent("backup", isDirectory: true)
+            .appendingPathComponent(appName, isDirectory: true)
+    }
+
     public static func defaultDatabaseURL(appName: String = "Muesli") -> URL {
         defaultSupportDirectoryURL(appName: appName).appendingPathComponent("muesli.db")
     }
