@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import TelemetryDeck
 
 /// One-shot manual QA for the Debug Dev C app only. No persistent settings,
 /// microphone permissions, device state, or production telemetry are changed.

@@ -43,6 +43,7 @@ enum MeetingSummaryLog {
             case .backendFailed: return "provider_failed"
             case .emptyResponse: return "empty_response"
             case .requestFailed: return "request_failed"
+            case .privateMeetingBlocked: return "private_meeting_blocked"
             }
         }
         if error is URLError { return "transport_failed" }
