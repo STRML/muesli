@@ -74,11 +74,13 @@ struct PrivateMeetingChatTests {
 
     @Test @MainActor func untrustedBackendNeverSeesPrivateMeetingText() async throws {
         let store = try database()
-        try store.setMeetingPrivate(id: try insert(store, text: "\(marker) budget"), isPrivate: true)
+        let id = try insert(store, text: "\(marker) budget")
+        try store.setMeetingPrivate(id: id, isPrivate: true)
         let spy = RequestSpy()
         let coordinator = MeetingChatCoordinator(databaseURL: store.resolvedDatabaseURL, generator: spy)
         await coordinator.waitForIdle()
-        await coordinator.createChat(scope: .init())
+        // Chat supplies context only from an explicitly selected meeting, so select the private one.
+        await coordinator.createChat(scope: .init(selection: .meetings([id])))
         await coordinator.send(question: "budget", config: AppConfig())
         await coordinator.waitForIdle()
 
@@ -87,11 +89,12 @@ struct PrivateMeetingChatTests {
 
     @Test @MainActor func trustedBackendDoesSeePrivateMeetingText() async throws {
         let store = try database()
-        try store.setMeetingPrivate(id: try insert(store, text: "\(marker) budget"), isPrivate: true)
+        let id = try insert(store, text: "\(marker) budget")
+        try store.setMeetingPrivate(id: id, isPrivate: true)
         let spy = RequestSpy()
         let coordinator = MeetingChatCoordinator(databaseURL: store.resolvedDatabaseURL, generator: spy)
         await coordinator.waitForIdle()
-        await coordinator.createChat(scope: .init())
+        await coordinator.createChat(scope: .init(selection: .meetings([id])))
         await coordinator.send(question: "budget", config: trustedConfig())
         await coordinator.waitForIdle()
 
@@ -116,11 +119,12 @@ struct PrivateMeetingChatTests {
 
     @Test @MainActor func answersBuiltFromPrivateMeetingsDoNotFlowToAnUntrustedBackendLater() async throws {
         let store = try database()
-        try store.setMeetingPrivate(id: try insert(store, text: "\(marker) budget"), isPrivate: true)
+        let id = try insert(store, text: "\(marker) budget")
+        try store.setMeetingPrivate(id: id, isPrivate: true)
         let spy = RequestSpy(answer: #"{"status":"answered","markdown":"The meeting covered the \#(marker) plan [[S1]]."}"#)
         let coordinator = MeetingChatCoordinator(databaseURL: store.resolvedDatabaseURL, generator: spy)
         await coordinator.waitForIdle()
-        await coordinator.createChat(scope: .init())
+        await coordinator.createChat(scope: .init(selection: .meetings([id])))
         await coordinator.send(question: "budget", config: trustedConfig())
         await coordinator.waitForIdle()
         let before = await spy.requestsContaining(marker)

@@ -8,7 +8,21 @@ struct TelemetryPrivacyTests {
         let suite = "muesli-telemetry-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        // The fork starts opted out (see `storedDisabled`); these tests exercise an opted-in device.
+        defaults.set(false, forKey: TelemetryPrivacyGate.disabledKey)
         try body(defaults)
+    }
+
+    @Test func aDeviceThatNeverChoseIsOptedOut() {
+        let suite = "muesli-telemetry-default-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let gate = TelemetryPrivacyGate(defaults: defaults, configured: true)
+        #expect(gate.isDisabled)
+        #expect(gate.consentToken == nil)
+        #expect(TelemetryPrivacyGate.storedDisabled(defaults))
+        gate.setDisabled(false)
+        #expect(!TelemetryPrivacyGate(defaults: defaults, configured: true).isDisabled)
     }
 
     private func batch(_ payloads: [[String: String]]) throws -> Data {
@@ -106,6 +120,7 @@ struct TelemetryPrivacyTests {
         let name = "muesli-telemetry-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(false, forKey: TelemetryPrivacyGate.disabledKey) // an opted-in device; the fork default is opted out
         let gate = TelemetryPrivacyGate(defaults: defaults, configured: true)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [TelemetryEchoProtocol.self]
