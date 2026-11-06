@@ -2550,7 +2550,6 @@ struct AppConfig: Codable, Equatable {
     var timeTurnerExcludedApps: String = ""
     var enableScreenContext: Bool = false
     /// Opt-in for TelemetryDeck usage signals; off until the user turns it on in Settings.
-    var shareUsageAnalytics: Bool = false
     var enableDictationOCRContext: Bool = false
     var cotypistSuggestionLength: CotypistSuggestionLength = .sentence
     var cotypistFrequency: CotypistFrequency = .balanced
@@ -2774,7 +2773,6 @@ struct AppConfig: Codable, Equatable {
         case recapIncludeVidshots = "recap_include_vidshots"
         case timeTurnerExcludedApps = "time_turner_excluded_apps"
         case enableScreenContext = "enable_screen_context"
-        case shareUsageAnalytics = "share_usage_analytics"
         case enableDictationOCRContext = "enable_dictation_ocr_context"
         case cotypistSuggestionLength = "cotypist_suggestion_length"
         case cotypistFrequency = "cotypist_frequency"
@@ -3104,7 +3102,6 @@ struct AppConfig: Codable, Equatable {
         recapIncludeVidshots = (try? c.decode(Bool.self, forKey: .recapIncludeVidshots)) ?? false
         timeTurnerExcludedApps = (try? c.decode(String.self, forKey: .timeTurnerExcludedApps)) ?? ""
         enableScreenContext = (try? c.decode(Bool.self, forKey: .enableScreenContext)) ?? defaults.enableScreenContext
-        shareUsageAnalytics = (try? c.decode(Bool.self, forKey: .shareUsageAnalytics)) ?? defaults.shareUsageAnalytics
         enableDictationOCRContext = (try? c.decode(Bool.self, forKey: .enableDictationOCRContext)) ?? defaults.enableDictationOCRContext
         cotypistSuggestionLength = (try? c.decode(CotypistSuggestionLength.self, forKey: .cotypistSuggestionLength)) ?? defaults.cotypistSuggestionLength
         cotypistFrequency = (try? c.decode(CotypistFrequency.self, forKey: .cotypistFrequency)) ?? defaults.cotypistFrequency

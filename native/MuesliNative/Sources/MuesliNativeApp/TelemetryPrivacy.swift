@@ -15,10 +15,16 @@ final class TelemetryPrivacyGate: @unchecked Sendable {
     private var tasks: [UUID: URLSessionDataTask] = [:]
     private let configured: Bool
 
+    /// Fork policy: analytics are opt-in. A device that never chose reads as disabled; the
+    /// preference is written only when the user flips the switch.
+    static func storedDisabled(_ defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: disabledKey) as? Bool ?? true
+    }
+
     init(defaults: UserDefaults, configured: Bool) {
         self.defaults = defaults
         self.configured = configured
-        disabled = defaults.bool(forKey: Self.disabledKey)
+        disabled = Self.storedDisabled(defaults)
         generation = defaults.string(forKey: Self.generationKey) ?? "legacy"
     }
 

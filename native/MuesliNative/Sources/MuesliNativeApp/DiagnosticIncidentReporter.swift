@@ -1,4 +1,5 @@
 import Foundation
+import TelemetryDeck
 
 @MainActor
 final class DiagnosticIncidentReporter {
@@ -90,8 +91,9 @@ final class DiagnosticIncidentReporter {
         let category: ErrorCategory = incident.telemetryCategory == .appState ? .appState : .thrownException
         MuesliTelemetry.errorOccurred(
             id: incident.telemetryErrorID,
-            parameters: incident.telemetryParameters,
-            isAppState: incident.telemetryCategory == .appState
+            category: category,
+            message: nil,
+            parameters: incident.telemetryParameters
         )
     }
 }

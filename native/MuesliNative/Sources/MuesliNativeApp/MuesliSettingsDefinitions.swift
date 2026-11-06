@@ -26,7 +26,7 @@ extension MuesliController {
 
     func setAnonymousAnalyticsDisabled(_ disabled: Bool) {
         MuesliTelemetry.setDisabled(disabled)
-        appState.anonymousAnalyticsDisabled = UserDefaults.standard.bool(forKey: TelemetryPrivacyGate.disabledKey)
+        appState.anonymousAnalyticsDisabled = TelemetryPrivacyGate.storedDisabled(.standard)
     }
 
     /// About and voice share one definition without constructing the model catalog.
@@ -36,7 +36,7 @@ extension MuesliController {
             choices: [.init(id: "on", label: "On"), .init(id: "off", label: "Off")],
             read: { _ in
                 _ = self.appState.anonymousAnalyticsDisabled // Observe local preference changes.
-                return UserDefaults.standard.bool(forKey: TelemetryPrivacyGate.disabledKey) ? "on" : "off"
+                return TelemetryPrivacyGate.storedDisabled(.standard) ? "on" : "off"
             },
             unavailable: { _ in nil },
             apply: { self.setAnonymousAnalyticsDisabled($0 == "on") })
@@ -239,18 +239,6 @@ extension MuesliController {
                 if let apply { apply(stored) }
                 else { self.updateConfig { $0[keyPath: key] = stored } }
             }
-        }
-
-        // Analytics consent is the user's call, so it is manual-only (never voice).
-        add("share_usage_analytics", "Share anonymous usage analytics",
-            [Choice(id: "on", label: "On"), Choice(id: "off", label: "Off")],
-            read: { $0.shareUsageAnalytics ? "on" : "off" },
-            voiceRestriction: "Analytics sharing can only be changed manually in Settings.",
-            unavailable: { value in
-                value == "on" && !TelemetryRuntimeConfiguration.buildHasAnalyticsDestination()
-                    ? "This build has no analytics destination, so there is nothing to share." : nil
-            }) { value in
-            self.setShareUsageAnalytics(value == "on")
         }
 
         // These delete user files, so they are manual-only (never voice).
