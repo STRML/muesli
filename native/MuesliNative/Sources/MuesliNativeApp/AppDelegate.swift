@@ -2,6 +2,7 @@ import AppKit
 import CloudKit
 import Foundation
 import Sparkle
+import TelemetryDeck
 import MuesliCore
 
 @MainActor

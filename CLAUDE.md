@@ -179,7 +179,7 @@ Keep `docs/privacy.html` in step with this list.
 - Folder suggestions (`auto_classify_meetings=true`): title, participant names, a notes prefix, and the folder tree after a meeting no rule matches.
 - Browser call participant names (`read_call_participants=true`): read locally through Accessibility, then included in summary and folder-suggestion prompts.
 
-**Off by default:** TelemetryDeck analytics (the build needs `MUESLI_ENABLE_TELEMETRY=1` to compile an app ID in, and the user must turn on "Share anonymous usage analytics"), iCloud sync, hosted dictation, hosted cleanup and Quill, Ask Meetings (per message), computer use.
+**Off by default:** TelemetryDeck analytics (the build needs `MUESLI_ENABLE_TELEMETRY=1` to compile an app ID in, and the user must switch off "Disable anonymous analytics" in About → Privacy, which starts on), iCloud sync, hosted dictation, hosted cleanup and Quill, Ask Meetings (per message), computer use.
 
 ## macOS Permissions
 

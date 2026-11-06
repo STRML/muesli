@@ -736,15 +736,6 @@ struct SettingsView: View {
 
             permissionsSection
 
-            settingsSection("Privacy") {
-                settingsRow(
-                    "Share anonymous usage analytics",
-                    description: "Sends feature-usage counts and allowlisted failure categories to TelemetryDeck. Never audio, transcripts, notes, or keys. Off by default."
-                ) {
-                    settingsControl("share_usage_analytics")
-                }
-            }
-
             settingsSection("Local storage") {
                 LocalStorageUsageView()
             }

@@ -174,7 +174,7 @@ enum CustomLLMModelCatalogLoadState: Equatable {
 @Observable
 final class AppState {
     var privateMode = ContentPrivacy.shared.isEnabled
-    var anonymousAnalyticsDisabled = UserDefaults.standard.bool(forKey: TelemetryPrivacyGate.disabledKey)
+    var anonymousAnalyticsDisabled = TelemetryPrivacyGate.storedDisabled(.standard)
     // Dashboard data
     // Also changes when a mutation affects a row outside the first visible page.
     var timelineHistoryRevision: UInt64 = 0
