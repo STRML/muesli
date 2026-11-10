@@ -456,6 +456,7 @@ struct MeetingMicrophoneDeliveryTests {
             StreamingMeetingMicRecorderAdapter(recorder: producer, kind: .systemDefaultStreaming))
         var config = Self.micDiarizationConfig
         config.enableLiveStreamingPartials = false
+        config.meetingRecordingSavePolicy = .always
         let coordinator = TranscriptionCoordinator()
         await coordinator.testingInstallASR(prepare: { _ in }, infer: { _, _ in .init(text: "", segments: []) })
         let initial = MeetingTemplates.resolveSnapshot(id: MeetingTemplates.autoID, customTemplates: [])
