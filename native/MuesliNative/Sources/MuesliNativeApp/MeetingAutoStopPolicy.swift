@@ -64,10 +64,8 @@ enum MeetingRecordingStartOrigin: Equatable {
         switch self {
         case .manual:
             return .transcriptInactivity
-        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord:
+        case .detectedPrompt, .calendarAutoRecord, .scheduledMeetingPrompt, .joinAndRecord, .calendarRecordingSwitch:
             return .stopWithNotice
-        case .calendarRecordingSwitch:
-            return .warnOnly
         }
     }
 
@@ -458,7 +456,7 @@ enum MeetingAutoStopPolicy {
         // Calendar and join-link sources start with a room URL but no desktop
         // bundle. Allow matching desktop input attribution to refine that source;
         // a running process or a browser URL alone cannot bind it.
-        if !source.requiresExactRoomMatch, source.sourceBundleID == nil,
+        if allowsPlatformBinding, !source.requiresExactRoomMatch, source.sourceBundleID == nil,
            candidate.url == nil,
            let bundle = candidate.sourceBundleID,
            let prefix = source.candidateID?.split(separator: ":").first,
