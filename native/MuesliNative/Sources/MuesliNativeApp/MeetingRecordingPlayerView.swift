@@ -399,6 +399,7 @@ struct MeetingRecordingPlayerView: View {
             }
         }
         .onChange(of: seekRequest) { _, _ in playPendingSeek() }
+        .onChange(of: player != nil) { _, isLoaded in if isLoaded { playPendingSeek() } }
         .onDisappear {
             player?.stop()
             player = nil
@@ -446,7 +447,6 @@ struct MeetingRecordingPlayerView: View {
             loadedPlayer.prepareToPlay()
             waveform = loadedWaveform
             player = loadedPlayer
-            playPendingSeek()
         } catch {
             loadFailed = true
         }
