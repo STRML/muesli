@@ -4,13 +4,21 @@ enum ScheduledMeetingNotificationPolicy {
     enum AutoRecordDecision: Equatable {
         case keepCurrentRecording
         case askBeforeRecording
-        case startRecording
+        case waitForJoin
     }
 
     static func autoRecordDecision(isRecording: Bool, hasDetectedCall: Bool, hasCallAssertion: Bool?) -> AutoRecordDecision {
         if isRecording { return .keepCurrentRecording }
         if hasDetectedCall || hasCallAssertion != false { return .askBeforeRecording }
-        return .startRecording
+        return .waitForJoin
+    }
+
+    /// "Auto-record detected calls" is hidden while detection notifications are off, so it only counts
+    /// with them on. Calendar auto-record covers a joined call that matches an event.
+    static func recordsDetectedCall(
+        showsDetection: Bool, autoRecordDetectedCalls: Bool, autoRecordMeetings: Bool, hasCalendarEvent: Bool
+    ) -> Bool {
+        (showsDetection && autoRecordDetectedCalls) || (autoRecordMeetings && hasCalendarEvent)
     }
 
     static func shouldNotifyAboutRecordingConflict(recordingRoom: String?, scheduledRoom: String?) -> Bool {

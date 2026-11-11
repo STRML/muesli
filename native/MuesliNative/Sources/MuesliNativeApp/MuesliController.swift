@@ -5043,16 +5043,8 @@ public final class MuesliController: NSObject {
                         )
                         if didShow { self.autoRecordedCalendarEventIDs.insert(key) }
                         else { self.isShowingCalendarNotification = false }
-                    case .startRecording:
+                    case .waitForJoin:
                         self.autoRecordedCalendarEventIDs.insert(key)
-                        _ = self.startMeetingRecording(
-                            title: currentEvent.title,
-                            calendarOccurrence: currentEvent.resolvedCalendarOccurrence,
-                            openDocument: false,
-                            endDate: currentEvent.endDate,
-                            autoStopSource: currentEvent.meetingURL.flatMap { MeetingAutoStopSource(meetingURL: $0) },
-                            startOrigin: .calendarAutoRecord
-                        )
                     }
                 }
                 return
@@ -12023,7 +12015,7 @@ public final class MuesliController: NSObject {
         detectedCallTask?.cancel()
         detectedCallCandidate = candidate
         detectedCallEvent = event
-        let recordsAt = config.autoRecordDetectedCalls
+        let recordsAt = recordsDetectedCall(matching: event)
             ? now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
             : nil
         detectedCallState = DetectedCallState(
@@ -12105,8 +12097,17 @@ public final class MuesliController: NSObject {
         refreshSidebarMeetingEntry()
     }
 
+    private func recordsDetectedCall(matching event: UnifiedCalendarEvent?) -> Bool {
+        ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: config.showMeetingDetectionNotification,
+            autoRecordDetectedCalls: config.autoRecordDetectedCalls,
+            autoRecordMeetings: config.autoRecordMeetings,
+            hasCalendarEvent: event != nil
+        )
+    }
+
     private func presentMeetingDetection(_ candidate: MeetingCandidate) {
-        guard config.showMeetingDetectionNotification,
+        guard config.showMeetingDetectionNotification || config.autoRecordMeetings,
               !isShowingCalendarNotification,
               !isMeetingRecording(),
               !isStartingMeetingRecording else { return }
@@ -12119,8 +12120,13 @@ public final class MuesliController: NSObject {
         let (title, matchedEvent) = beginDetectedCall(candidate)
         presentedMeetingCandidate = candidate
         // The sidebar entry and its countdown stand in for the toast.
-        if config.autoRecordDetectedCalls {
+        if recordsDetectedCall(matching: matchedEvent) {
             meetingMonitor.markPromptShown(candidate)
+            return
+        }
+        guard config.showMeetingDetectionNotification else {
+            presentedMeetingCandidate = nil
+            clearDetectedCall()
             return
         }
         let preferredScreen = meetingSourceWindowLocator.screen(for: candidate)
