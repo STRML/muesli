@@ -27,7 +27,7 @@ struct MeetingNotificationControllerTests {
         #expect(controller.testingRecentMeetingCandidate() == nil)
     }
 
-    @Test("calendar auto-record preserves recordings and asks when a call may already be active")
+    @Test("calendar auto-record preserves recordings, asks when a call may be active, and never starts without one")
     func autoRecordConflictDecision() {
         let decision = ScheduledMeetingNotificationPolicy.autoRecordDecision
         #expect(decision(true, true, true) == .keepCurrentRecording)
@@ -35,7 +35,7 @@ struct MeetingNotificationControllerTests {
         #expect(decision(false, true, false) == .askBeforeRecording)
         #expect(decision(false, false, true) == .askBeforeRecording)
         #expect(decision(false, false, nil) == .askBeforeRecording)
-        #expect(decision(false, false, false) == .startRecording)
+        #expect(decision(false, false, false) == .waitForJoin)
         #expect(!ScheduledMeetingNotificationPolicy.shouldNotifyAboutRecordingConflict(
             recordingRoom: "meet.google.com/aaa-bbbb-ccc", scheduledRoom: "meet.google.com/aaa-bbbb-ccc"
         ))

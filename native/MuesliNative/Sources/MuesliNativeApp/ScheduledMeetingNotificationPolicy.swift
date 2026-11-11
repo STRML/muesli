@@ -4,13 +4,13 @@ enum ScheduledMeetingNotificationPolicy {
     enum AutoRecordDecision: Equatable {
         case keepCurrentRecording
         case askBeforeRecording
-        case startRecording
+        case waitForJoin
     }
 
     static func autoRecordDecision(isRecording: Bool, hasDetectedCall: Bool, hasCallAssertion: Bool?) -> AutoRecordDecision {
         if isRecording { return .keepCurrentRecording }
         if hasDetectedCall || hasCallAssertion != false { return .askBeforeRecording }
-        return .startRecording
+        return .waitForJoin
     }
 
     static func shouldNotifyAboutRecordingConflict(recordingRoom: String?, scheduledRoom: String?) -> Bool {

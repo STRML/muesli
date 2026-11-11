@@ -5043,16 +5043,8 @@ public final class MuesliController: NSObject {
                         )
                         if didShow { self.autoRecordedCalendarEventIDs.insert(key) }
                         else { self.isShowingCalendarNotification = false }
-                    case .startRecording:
+                    case .waitForJoin:
                         self.autoRecordedCalendarEventIDs.insert(key)
-                        _ = self.startMeetingRecording(
-                            title: currentEvent.title,
-                            calendarOccurrence: currentEvent.resolvedCalendarOccurrence,
-                            openDocument: false,
-                            endDate: currentEvent.endDate,
-                            autoStopSource: currentEvent.meetingURL.flatMap { MeetingAutoStopSource(meetingURL: $0) },
-                            startOrigin: .calendarAutoRecord
-                        )
                     }
                 }
                 return
