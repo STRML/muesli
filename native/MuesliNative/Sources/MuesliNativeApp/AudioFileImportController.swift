@@ -212,6 +212,8 @@ enum AudioFileImportController {
             } catch {
                 fputs("[import] diarization failed, using raw transcript: \(error)\n", stderr)
             }
+        } else {
+            DiarizationOutcomeLog.shared.record(.notLoaded)
         }
 
         try Task.checkCancellation()
