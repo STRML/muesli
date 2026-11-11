@@ -13,6 +13,10 @@ enum ScheduledMeetingNotificationPolicy {
         return .waitForJoin
     }
 
+    static func recordsDetectedCall(autoRecordDetectedCalls: Bool, autoRecordMeetings: Bool, hasCalendarEvent: Bool) -> Bool {
+        autoRecordDetectedCalls || (autoRecordMeetings && hasCalendarEvent)
+    }
+
     static func shouldNotifyAboutRecordingConflict(recordingRoom: String?, scheduledRoom: String?) -> Bool {
         guard let recordingRoom, let scheduledRoom else { return true }
         return recordingRoom != scheduledRoom

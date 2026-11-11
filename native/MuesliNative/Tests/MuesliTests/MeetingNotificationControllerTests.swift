@@ -46,6 +46,17 @@ struct MeetingNotificationControllerTests {
             recordingRoom: "zoom.us/j/123", scheduledRoom: "zoom.us/j/456"
         ))
     }
+    @Test("a joined call records when either auto-record setting covers it")
+    func detectedCallAutoRecordRule() {
+        let records = ScheduledMeetingNotificationPolicy.recordsDetectedCall
+        #expect(records(true, false, false))
+        #expect(records(true, true, true))
+        #expect(records(false, true, true))
+        #expect(!records(false, true, false))
+        #expect(!records(false, false, true))
+        #expect(!records(false, false, false))
+    }
+
     @Test("A close callback can install the next notification callback")
     @MainActor
     func closePreservesNextCallback() {

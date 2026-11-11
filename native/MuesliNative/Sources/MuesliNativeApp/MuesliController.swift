@@ -12015,7 +12015,7 @@ public final class MuesliController: NSObject {
         detectedCallTask?.cancel()
         detectedCallCandidate = candidate
         detectedCallEvent = event
-        let recordsAt = config.autoRecordDetectedCalls
+        let recordsAt = recordsDetectedCall(matching: event)
             ? now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
             : nil
         detectedCallState = DetectedCallState(
@@ -12097,8 +12097,16 @@ public final class MuesliController: NSObject {
         refreshSidebarMeetingEntry()
     }
 
+    private func recordsDetectedCall(matching event: UnifiedCalendarEvent?) -> Bool {
+        ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            autoRecordDetectedCalls: config.autoRecordDetectedCalls,
+            autoRecordMeetings: config.autoRecordMeetings,
+            hasCalendarEvent: event != nil
+        )
+    }
+
     private func presentMeetingDetection(_ candidate: MeetingCandidate) {
-        guard config.showMeetingDetectionNotification,
+        guard config.showMeetingDetectionNotification || config.autoRecordMeetings,
               !isShowingCalendarNotification,
               !isMeetingRecording(),
               !isStartingMeetingRecording else { return }
@@ -12111,10 +12119,11 @@ public final class MuesliController: NSObject {
         let (title, matchedEvent) = beginDetectedCall(candidate)
         presentedMeetingCandidate = candidate
         // The sidebar entry and its countdown stand in for the toast.
-        if config.autoRecordDetectedCalls {
+        if recordsDetectedCall(matching: matchedEvent) {
             meetingMonitor.markPromptShown(candidate)
             return
         }
+        guard config.showMeetingDetectionNotification else { return }
         let preferredScreen = meetingSourceWindowLocator.screen(for: candidate)
         let didShow = meetingNotification.show(
             promptID: candidate.id,
