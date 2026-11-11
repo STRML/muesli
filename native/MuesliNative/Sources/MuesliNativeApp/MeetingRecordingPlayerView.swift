@@ -315,6 +315,8 @@ private extension Data {
 
 struct MeetingRecordingPlayerView: View {
     let recordingPath: String
+    var seekRequest: TimeInterval? = nil
+    var onSeekHandled: () -> Void = {}
 
     @State private var waveform: RecordingWaveformData?
     @State private var player: AVAudioPlayer?
@@ -396,11 +398,26 @@ struct MeetingRecordingPlayerView: View {
                 }
             }
         }
+        .onChange(of: seekRequest) { _, _ in playPendingSeek() }
+        .onChange(of: player != nil) { _, isLoaded in if isLoaded { playPendingSeek() } }
         .onDisappear {
             player?.stop()
             player = nil
             isPlaying = false
         }
+    }
+
+    /// Waits for the player to load, then plays from the requested second. A request outside the
+    /// recording is dropped, since a resumed meeting's recording may cover only part of the transcript.
+    private func playPendingSeek() {
+        guard let seconds = seekRequest, let player else { return }
+        if let target = TranscriptPlayback.seekTarget(seconds: seconds, duration: player.duration) {
+            player.currentTime = target
+            player.play()
+            isPlaying = true
+            currentTime = target
+        }
+        onSeekHandled()
     }
 
     private var duration: TimeInterval {

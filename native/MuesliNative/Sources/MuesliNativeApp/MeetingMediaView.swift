@@ -11,6 +11,7 @@ struct MeetingMediaView: View {
     @State private var selectedID: String?
     @State private var player: AVPlayer?
     @State private var loadError: String?
+    @State private var pendingSeek: TimeInterval?
 
     private var memory: VisualMemoryController { controller.visualMemory }
     private var clips: [VisualMemoryItem] {
@@ -70,8 +71,15 @@ struct MeetingMediaView: View {
                 if let player { MeetingVideoPlayerView(player: player).frame(minHeight: 220, idealHeight: 330, maxHeight: 400) }
                 if let loadError { Text(loadError).foregroundStyle(.secondary) }
             } else if let path = meeting.savedRecordingPath, FileManager.default.fileExists(atPath: path) {
-                MeetingRecordingPlayerView(recordingPath: path)
+                MeetingRecordingPlayerView(recordingPath: path, seekRequest: pendingSeek, onSeekHandled: { pendingSeek = nil })
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .meetingRecordingSeekRequested)) { notification in
+            guard hasSeparateAudio,
+                  notification.object as? String == meeting.savedRecordingPath,
+                  let seconds = notification.userInfo?["seconds"] as? TimeInterval else { return }
+            if !clips.isEmpty { mode = "Audio"; player?.pause() }
+            pendingSeek = seconds
         }
         .task(id: "\(mode)-\(hasSeparateAudio)-\(selected?.id ?? "none")") {
             player?.pause(); player = nil; loadError = nil
