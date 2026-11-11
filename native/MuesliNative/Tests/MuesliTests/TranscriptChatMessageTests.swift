@@ -113,6 +113,13 @@ struct TranscriptChatMessageTests {
         #expect(playback.offset(of: "00:20:00") == 1200)
     }
 
+    @Test("a first stamp that fits both conventions gives no playback")
+    func ambiguousNearMidnight() {
+        #expect(TranscriptPlayback(
+            firstTimestamp: "00:00:03", meetingStartTime: "2026-11-11T23:55:00Z", duration: 1800, calendar: Self.utcCalendar
+        ) == nil)
+    }
+
     @Test("a first stamp that fits no convention gives no playback")
     func unplaceableTranscript() {
         #expect(TranscriptPlayback(
