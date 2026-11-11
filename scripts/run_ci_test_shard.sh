@@ -210,6 +210,7 @@ case "${shard}" in
       BufferedMeetingPartialEngineTests
       BufferedMicrophoneCaptureTests
       MeetingMicrophoneDeliveryTests
+      DiarizationOutcomeLogTests
       StreamingMicRecorderBufferTests
       AudioAttributionServiceTests
       CameraActivityMonitorTests
