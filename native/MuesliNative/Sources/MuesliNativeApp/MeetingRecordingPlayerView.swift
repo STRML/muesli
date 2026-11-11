@@ -320,13 +320,17 @@ struct MeetingRecordingPlayerView: View {
     private let recordingPath: String?
     private let dictationID: Int64?
     private let controller: MuesliController?
+    var seekRequest: TimeInterval? = nil
+    var onSeekHandled: () -> Void = {}
     @State private var playbackFile: DictationRecordingFile?
     @State private var preparingPlayback = false
 
-    init(recordingPath: String) {
+    init(recordingPath: String, seekRequest: TimeInterval? = nil, onSeekHandled: @escaping () -> Void = {}) {
         self.recordingPath = recordingPath
         dictationID = nil
         controller = nil
+        self.seekRequest = seekRequest
+        self.onSeekHandled = onSeekHandled
     }
 
     init(dictationID: Int64, preview: Data?, controller: MuesliController) {
@@ -434,6 +438,8 @@ struct MeetingRecordingPlayerView: View {
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             }
         }
+        .onChange(of: seekRequest) { _, _ in playPendingSeek() }
+        .onChange(of: player != nil) { _, isLoaded in if isLoaded { playPendingSeek() } }
         .onDisappear {
             player?.stop()
             player = nil
@@ -441,6 +447,19 @@ struct MeetingRecordingPlayerView: View {
             preparingPlayback = false
             isPlaying = false
         }
+    }
+
+    /// Waits for the player to load, then plays from the requested second. A request outside the
+    /// recording is dropped, since a resumed meeting's recording may cover only part of the transcript.
+    private func playPendingSeek() {
+        guard let seconds = seekRequest, let player else { return }
+        if let target = TranscriptPlayback.seekTarget(seconds: seconds, duration: player.duration) {
+            player.currentTime = target
+            player.play()
+            isPlaying = true
+            currentTime = target
+        }
+        onSeekHandled()
     }
 
     private var duration: TimeInterval {

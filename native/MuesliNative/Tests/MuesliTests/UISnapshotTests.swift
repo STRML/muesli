@@ -186,6 +186,24 @@ struct UISnapshotTests {
                    width: 680, height: 360, name: "12-meeting-chips-summary-failed-narrow")
     }
 
+    @Test("transcript bubbles: named speaker header and the play button")
+    func transcriptBubbles() throws {
+        let transcript = """
+        [10:46:06] You: Good, how are y'all?
+        [10:46:06] Others: Good are you?
+        [10:46:08] Scott Snider: I'm pretty good. You still pretty busy these days?
+        [10:46:31] Speaker 2: Yeah, we're going to start with some investment-related stuff.
+        """
+        let messages = TranscriptChatMessage.messages(from: transcript)
+        try render(
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(messages) { TranscriptChatBubble(message: $0, onPlay: {}) }
+                TranscriptChatBubble(message: messages[2])
+            }
+            .padding(24),
+            width: 640, height: 400, name: "13-transcript-bubbles")
+    }
+
     @Test("settings: private meetings, auto export and folder suggestions")
     func settings() throws {
         let f = try makeFixture()

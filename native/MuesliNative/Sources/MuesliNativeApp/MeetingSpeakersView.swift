@@ -23,11 +23,20 @@ struct MeetingSpeakersView: View {
                     isPopoverPresented = true
                 } label: {
                     Label(summary, systemImage: "person.wave.2")
-                        .font(MuesliTheme.callout())
+                        .font(MuesliTheme.caption())
                         .lineLimit(1)
+                        .foregroundStyle(MuesliTheme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: MeetingHeaderLayout.contextControlHeight)
+                        .background(MuesliTheme.backgroundRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                                .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                        }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(MuesliTheme.textSecondary)
+                .fixedSize()
                 .help("Name the speakers in this meeting")
                 .accessibilityIdentifier("meeting.speakers.button")
                 .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) { popover }
