@@ -12125,6 +12125,7 @@ public final class MuesliController: NSObject {
             return
         }
         guard config.showMeetingDetectionNotification else {
+            presentedMeetingCandidate = nil
             clearDetectedCall()
             return
         }
