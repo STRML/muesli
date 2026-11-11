@@ -1028,8 +1028,15 @@ final class MeetingSession {
             diarizationSegments = await InPersonMeeting.diarize(copy: inPersonDiarizationCopy, using: transcriptionCoordinator)
         } else if let systemAudioURL {
             // Run speaker diarization on system audio (batch post-processing)
-            if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL) {
-                diarizationSegments = diarizationResult
+            do {
+                let result = try await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL)
+                diarizationSegments = result
+                DiarizationOutcomeLog.shared.record(
+                    result.map { .applied(segments: $0.count, speakers: Set($0.map(\.speakerId)).count) } ?? .notLoaded,
+                    source: "system_audio"
+                )
+            } catch {
+                DiarizationOutcomeLog.shared.record(.failed(ContentPrivacy.shared.logDescription(error)), source: "system_audio")
             }
         }
 
@@ -1044,8 +1051,10 @@ final class MeetingSession {
                 let speakerCount = Set(segments.map(\.speakerId)).count
                 fputs("[meeting] mic diarization complete: \(segments.count) segments, \(speakerCount) speakers\n", stderr)
                 micDiarizationSegments = segments
+                DiarizationOutcomeLog.shared.record(.applied(segments: segments.count, speakers: speakerCount), source: "mic")
             } catch {
                 micDiarizationError = error
+                DiarizationOutcomeLog.shared.record(.failed(ContentPrivacy.shared.logDescription(error)), source: "mic")
                 fputs("[meeting] mic diarization failed, keeping single mic speaker: \(ContentPrivacy.shared.logDescription(error))\n", stderr)
             }
         }
