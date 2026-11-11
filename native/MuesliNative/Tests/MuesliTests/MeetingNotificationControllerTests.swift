@@ -129,6 +129,40 @@ struct MeetingNotificationControllerTests {
             recordingRoom: "zoom.us/j/123", scheduledRoom: "zoom.us/j/456"
         ))
     }
+    struct DetectedCallRow: Sendable, CustomTestStringConvertible {
+        let toasts: Bool, detectedCalls: Bool, meetings: Bool, hasEvent: Bool, records: Bool
+        var testDescription: String {
+            "toasts=\(toasts) detectedCalls=\(detectedCalls) meetings=\(meetings) event=\(hasEvent) -> \(records)"
+        }
+    }
+
+    static let detectedCallRows: [DetectedCallRow] = [
+        .init(toasts: true, detectedCalls: true, meetings: false, hasEvent: false, records: true),
+        .init(toasts: true, detectedCalls: true, meetings: false, hasEvent: true, records: true),
+        .init(toasts: true, detectedCalls: true, meetings: true, hasEvent: false, records: true),
+        .init(toasts: true, detectedCalls: true, meetings: true, hasEvent: true, records: true),
+        .init(toasts: true, detectedCalls: false, meetings: false, hasEvent: false, records: false),
+        .init(toasts: true, detectedCalls: false, meetings: false, hasEvent: true, records: false),
+        .init(toasts: true, detectedCalls: false, meetings: true, hasEvent: false, records: false),
+        .init(toasts: true, detectedCalls: false, meetings: true, hasEvent: true, records: true),
+        .init(toasts: false, detectedCalls: true, meetings: false, hasEvent: false, records: false),
+        .init(toasts: false, detectedCalls: true, meetings: false, hasEvent: true, records: false),
+        .init(toasts: false, detectedCalls: true, meetings: true, hasEvent: false, records: false),
+        .init(toasts: false, detectedCalls: true, meetings: true, hasEvent: true, records: true),
+        .init(toasts: false, detectedCalls: false, meetings: false, hasEvent: false, records: false),
+        .init(toasts: false, detectedCalls: false, meetings: false, hasEvent: true, records: false),
+        .init(toasts: false, detectedCalls: false, meetings: true, hasEvent: false, records: false),
+        .init(toasts: false, detectedCalls: false, meetings: true, hasEvent: true, records: true),
+    ]
+
+    @Test("a joined call records only where a setting the user can see covers it", arguments: detectedCallRows)
+    func detectedCallAutoRecordRule(row: DetectedCallRow) {
+        #expect(ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: row.toasts, autoRecordDetectedCalls: row.detectedCalls,
+            autoRecordMeetings: row.meetings, hasCalendarEvent: row.hasEvent
+        ) == row.records)
+    }
+
     @Test("A close callback can install the next notification callback")
     @MainActor
     func closePreservesNextCallback() {
