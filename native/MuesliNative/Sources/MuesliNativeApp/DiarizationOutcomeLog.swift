@@ -5,16 +5,16 @@ enum DiarizationOutcome: Equatable, Sendable {
     case notLoaded
     case failed(String)
 
-    func line(source: String, at date: Date) -> String {
+    func line(at date: Date) -> String {
         let stamp = date.formatted(.iso8601)
         switch self {
         case .applied(let segments, let speakers):
-            return "\(stamp) \(source) applied segments=\(segments) speakers=\(speakers)"
+            return "\(stamp) applied segments=\(segments) speakers=\(speakers)"
         case .notLoaded:
-            return "\(stamp) \(source) skipped diarizer_not_loaded"
+            return "\(stamp) skipped diarizer_not_loaded"
         case .failed(let description):
             let flattened = description.split(whereSeparator: \.isNewline).joined(separator: " ")
-            return "\(stamp) \(source) failed \(flattened)"
+            return "\(stamp) failed \(flattened)"
         }
     }
 }
@@ -26,8 +26,8 @@ struct DiarizationOutcomeLog {
         DiarizationOutcomeLog(fileURL: AppIdentity.supportDirectoryURL.appendingPathComponent("diarization.log"))
     }
 
-    func record(_ outcome: DiarizationOutcome, source: String, at date: Date = Date()) {
-        let data = Data((outcome.line(source: source, at: date) + "\n").utf8)
+    func record(_ outcome: DiarizationOutcome, at date: Date = Date()) {
+        let data = Data((outcome.line(at: date) + "\n").utf8)
         let manager = FileManager.default
         do {
             try manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
