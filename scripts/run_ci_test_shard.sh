@@ -246,6 +246,7 @@ case "${shard}" in
       BufferedMicrophoneCaptureTests
       MeetingMicrophoneDeliveryTests
       InPersonMeetingTests
+      DiarizationOutcomeLogTests
       InPersonLiveSpeakerTests
       StreamingMicRecorderBufferTests
       AudioAttributionServiceTests
