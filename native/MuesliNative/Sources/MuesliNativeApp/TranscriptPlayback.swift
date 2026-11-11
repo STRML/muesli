@@ -50,7 +50,7 @@ struct TranscriptPlayback {
     }
 
     private static func startSecondsOfDay(_ iso: String, calendar: Calendar) -> Int? {
-        guard let date = ISO8601DateFormatter().date(from: iso) else { return nil }
+        guard let date = MeetingBrowserLogic.parseDate(iso) else { return nil }
         let parts = calendar.dateComponents([.hour, .minute, .second], from: date)
         guard let hour = parts.hour, let minute = parts.minute, let second = parts.second else { return nil }
         return hour * 3600 + minute * 60 + second

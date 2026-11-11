@@ -2655,11 +2655,11 @@ struct TranscriptChatMessage: Identifiable, Equatable {
         return (candidate, body.isEmpty ? text : body)
     }
 
-    /// A name given to a speaker in the Speakers popover. Only trusted after a timestamp, where the
-    /// app always writes a label, so a plain "Note: ..." line is never taken for a speaker.
+    /// A name given to a speaker in the Speakers popover, which accepts any text without a colon or
+    /// newline. Only trusted after a timestamp, where the app always writes a label, so a plain
+    /// "Note: ..." line is never taken for a speaker.
     static func isPersonName(_ label: String) -> Bool {
-        guard label.count <= 32 else { return false }
-        return label.range(of: #"^[\p{L}][\p{L}.'’\-]*( [\p{L}][\p{L}.'’\-]*){0,3}$"#, options: .regularExpression) != nil
+        !label.isEmpty && label.count <= 64
     }
 
     private static func isLikelySpeakerLabel(_ label: String) -> Bool {
@@ -2772,7 +2772,10 @@ private struct MeetingTranscriptView: View {
     }
 
     private var playback: TranscriptPlayback? {
-        guard recordingPath != nil else { return nil }
+        // A resumed meeting's recording holds only its latest session, so stamps from earlier sessions
+        // and the original start time cannot be placed in it.
+        let resumeMarker = MeetingResumePolicy.resumeSeparator.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard recordingPath != nil, !transcript.contains(resumeMarker) else { return nil }
         return TranscriptPlayback(
             firstTimestamp: messages.first(where: { $0.timestamp != nil })?.timestamp,
             meetingStartTime: meetingStartTime,

@@ -315,6 +315,8 @@ private extension Data {
 
 struct MeetingRecordingPlayerView: View {
     let recordingPath: String
+    var seekRequest: TimeInterval? = nil
+    var onSeekHandled: () -> Void = {}
 
     @State private var waveform: RecordingWaveformData?
     @State private var player: AVAudioPlayer?
@@ -396,9 +398,7 @@ struct MeetingRecordingPlayerView: View {
                 }
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .meetingRecordingSeekRequested)) { notification in
-            playFromRequest(notification)
-        }
+        .onChange(of: seekRequest) { _, _ in playPendingSeek() }
         .onDisappear {
             player?.stop()
             player = nil
@@ -406,16 +406,17 @@ struct MeetingRecordingPlayerView: View {
         }
     }
 
-    private func playFromRequest(_ notification: Notification) {
-        guard notification.object as? String == recordingPath,
-              let seconds = notification.userInfo?["seconds"] as? TimeInterval,
-              let player,
-              let target = TranscriptPlayback.seekTarget(seconds: seconds, duration: player.duration)
-        else { return }
-        player.currentTime = target
-        player.play()
-        isPlaying = true
-        currentTime = target
+    /// Waits for the player to load, then plays from the requested second. A request outside the
+    /// recording is dropped, since a resumed meeting's recording may cover only part of the transcript.
+    private func playPendingSeek() {
+        guard let seconds = seekRequest, let player else { return }
+        if let target = TranscriptPlayback.seekTarget(seconds: seconds, duration: player.duration) {
+            player.currentTime = target
+            player.play()
+            isPlaying = true
+            currentTime = target
+        }
+        onSeekHandled()
     }
 
     private var duration: TimeInterval {
@@ -445,6 +446,7 @@ struct MeetingRecordingPlayerView: View {
             loadedPlayer.prepareToPlay()
             waveform = loadedWaveform
             player = loadedPlayer
+            playPendingSeek()
         } catch {
             loadFailed = true
         }

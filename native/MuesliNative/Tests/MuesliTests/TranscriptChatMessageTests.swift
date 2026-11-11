@@ -46,22 +46,21 @@ struct TranscriptChatMessageTests {
         let messages = TranscriptChatMessage.messages(from: """
         [10:46:08] Scott Snider: I'm pretty good. Are you busy?
         [10:46:31] Mary-Ann O'Neil Jr.: Yes.
+        [10:46:35] Alex (PM): Digits, commas and brackets are allowed names.
+        [10:46:36] Smith, Dana 2: Same.
         [10:46:40] Speaker 2: Hello.
         """)
-        #expect(messages.map(\.speaker) == ["Scott Snider", "Mary-Ann O'Neil Jr.", "Speaker 2"])
+        #expect(messages.map(\.speaker) == ["Scott Snider", "Mary-Ann O'Neil Jr.", "Alex (PM)", "Smith, Dana 2", "Speaker 2"])
         #expect(messages[0].text == "I'm pretty good. Are you busy?")
         #expect(messages.allSatisfy { !$0.isUser })
     }
 
-    @Test("a timestamped line whose prefix is not a name stays body text")
-    func nonNamePrefixesStayBodyText() {
-        let messages = TranscriptChatMessage.messages(from: """
-        [10:00:00] one two three four five: too many words
-        [10:00:01] 3pm: digits are not a name
-        [10:00:02] A very long label that cannot be a person at all: text
-        """)
-        #expect(messages.allSatisfy { $0.speaker == nil })
-        #expect(messages[0].text == "one two three four five: too many words")
+    @Test("a timestamped line whose prefix is too long to be a name stays body text")
+    func overlongPrefixStaysBodyText() {
+        let prefix = String(repeating: "word ", count: 14) + "end"
+        let messages = TranscriptChatMessage.messages(from: "[10:00:02] \(prefix): text")
+        #expect(messages[0].speaker == nil)
+        #expect(messages[0].text == "\(prefix): text")
     }
 
     @Test("playback offsets follow wall-clock stamps from a live meeting")
@@ -74,6 +73,25 @@ struct TranscriptChatMessageTests {
         #expect(playback.offset(of: "11:36:05") == 2999)
         #expect(playback.offset(of: "11:40:00") == nil)
         #expect(playback.offset(of: "garbage") == nil)
+    }
+
+    @Test("playback reads fractional-second and legacy local start times")
+    func legacyStartTimeFormats() throws {
+        let fractional = try #require(TranscriptPlayback(
+            firstTimestamp: "10:46:06", meetingStartTime: "2026-11-11T10:46:06.250Z", duration: 3000, calendar: Self.utcCalendar
+        ))
+        #expect(fractional.offset(of: "10:46:08") == 2)
+
+        let local = try #require(TranscriptPlayback(
+            firstTimestamp: "10:46:06",
+            meetingStartTime: "2026-11-11T\(Self.localClock(10, 46, 6)).000000",
+            duration: 3000
+        ))
+        #expect(local.offset(of: "10:46:08") == 2)
+    }
+
+    private static func localClock(_ h: Int, _ m: Int, _ s: Int) -> String {
+        String(format: "%02d:%02d:%02d", h, m, s)
     }
 
     @Test("playback offsets survive midnight and a silent start")
