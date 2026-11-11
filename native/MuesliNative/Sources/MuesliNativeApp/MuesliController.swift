@@ -12099,6 +12099,7 @@ public final class MuesliController: NSObject {
 
     private func recordsDetectedCall(matching event: UnifiedCalendarEvent?) -> Bool {
         ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: config.showMeetingDetectionNotification,
             autoRecordDetectedCalls: config.autoRecordDetectedCalls,
             autoRecordMeetings: config.autoRecordMeetings,
             hasCalendarEvent: event != nil
@@ -12123,7 +12124,10 @@ public final class MuesliController: NSObject {
             meetingMonitor.markPromptShown(candidate)
             return
         }
-        guard config.showMeetingDetectionNotification else { return }
+        guard config.showMeetingDetectionNotification else {
+            clearDetectedCall()
+            return
+        }
         let preferredScreen = meetingSourceWindowLocator.screen(for: candidate)
         let didShow = meetingNotification.show(
             promptID: candidate.id,
