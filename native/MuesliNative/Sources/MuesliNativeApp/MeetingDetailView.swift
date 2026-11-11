@@ -779,7 +779,13 @@ struct MeetingDetailView: View {
                         .allowsHitTesting(documentMode == .notes)
                         .accessibilityHidden(documentMode != .notes)
 
-                    MeetingTranscriptView(transcript: meeting.rawTranscript, highlightedRange: sourceTarget.flatMap { $0.showsTranscript ? $0.locate(in: meeting.rawTranscript) : nil })
+                    MeetingTranscriptView(
+                        transcript: meeting.rawTranscript,
+                        highlightedRange: sourceTarget.flatMap { $0.showsTranscript ? $0.locate(in: meeting.rawTranscript) : nil },
+                        recordingPath: meeting.savedRecordingPath.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil },
+                        meetingStartTime: meeting.startTime,
+                        recordingDuration: meeting.durationSeconds
+                    )
                         .opacity(documentMode == .transcript ? 1 : 0)
                         .allowsHitTesting(documentMode == .transcript)
                         .accessibilityHidden(documentMode != .transcript)
@@ -2616,7 +2622,7 @@ struct TranscriptChatMessage: Identifiable, Equatable {
             let remainderStart = line.index(after: timestampEnd)
             let remainder = line[remainderStart...]
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            let speakerText = splitSpeakerAndText(remainder)
+            let speakerText = splitSpeakerAndText(remainder, allowsPersonNames: true)
             return TranscriptChatMessage(
                 id: id,
                 timestamp: timestamp.isEmpty ? nil : timestamp,
@@ -2634,19 +2640,26 @@ struct TranscriptChatMessage: Identifiable, Equatable {
         )
     }
 
-    private static func splitSpeakerAndText(_ text: String) -> (speaker: String?, text: String) {
+    private static func splitSpeakerAndText(_ text: String, allowsPersonNames: Bool = false) -> (speaker: String?, text: String) {
         guard let separator = text.firstIndex(of: ":") else {
             return (nil, text)
         }
 
         let candidate = text[..<separator].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isLikelySpeakerLabel(candidate) else {
+        guard isLikelySpeakerLabel(candidate) || (allowsPersonNames && isPersonName(candidate)) else {
             return (nil, text)
         }
 
         let bodyStart = text.index(after: separator)
         let body = text[bodyStart...].trimmingCharacters(in: .whitespacesAndNewlines)
         return (candidate, body.isEmpty ? text : body)
+    }
+
+    /// A name given to a speaker in the Speakers popover. Only trusted after a timestamp, where the
+    /// app always writes a label, so a plain "Note: ..." line is never taken for a speaker.
+    static func isPersonName(_ label: String) -> Bool {
+        guard label.count <= 32 else { return false }
+        return label.range(of: #"^[\p{L}][\p{L}.'’\-]*( [\p{L}][\p{L}.'’\-]*){0,3}$"#, options: .regularExpression) != nil
     }
 
     private static func isLikelySpeakerLabel(_ label: String) -> Bool {
@@ -2738,12 +2751,40 @@ private struct RelatedMeetingsSection: View {
 private struct MeetingTranscriptView: View {
     let transcript: String
     var highlightedRange: NSRange? = nil
+    var recordingPath: String? = nil
+    var meetingStartTime = ""
+    var recordingDuration: TimeInterval = 0
     @State private var messages: [TranscriptChatMessage]
 
-    init(transcript: String, highlightedRange: NSRange? = nil) {
+    init(
+        transcript: String,
+        highlightedRange: NSRange? = nil,
+        recordingPath: String? = nil,
+        meetingStartTime: String = "",
+        recordingDuration: TimeInterval = 0
+    ) {
         self.transcript = transcript
         self.highlightedRange = highlightedRange
+        self.recordingPath = recordingPath
+        self.meetingStartTime = meetingStartTime
+        self.recordingDuration = recordingDuration
         _messages = State(initialValue: TranscriptChatMessage.messages(from: transcript))
+    }
+
+    private var playback: TranscriptPlayback? {
+        guard recordingPath != nil else { return nil }
+        return TranscriptPlayback(
+            firstTimestamp: messages.first(where: { $0.timestamp != nil })?.timestamp,
+            meetingStartTime: meetingStartTime,
+            duration: recordingDuration
+        )
+    }
+
+    private func playAction(for message: TranscriptChatMessage, playback: TranscriptPlayback?) -> (() -> Void)? {
+        guard let path = recordingPath, let seconds = playback?.offset(of: message.timestamp) else { return nil }
+        return {
+            NotificationCenter.default.post(name: .meetingRecordingSeekRequested, object: path, userInfo: ["seconds": seconds])
+        }
     }
 
     var body: some View {
@@ -2757,8 +2798,9 @@ private struct MeetingTranscriptView: View {
                         .frame(maxWidth: MuesliTheme.readingWidth, alignment: .leading)
                         .padding(MuesliTheme.spacing24)
                 } else {
+                    let playback = playback
                     ForEach(messages) { message in
-                        TranscriptChatBubble(message: message)
+                        TranscriptChatBubble(message: message, onPlay: playAction(for: message, playback: playback))
                             .background(message.id == highlightedMessageID ? MuesliTheme.surfaceSelected : Color.clear)
                             .id(message.id)
                     }
@@ -2784,6 +2826,7 @@ private struct MeetingTranscriptView: View {
 
 struct TranscriptChatBubble: View {
     let message: TranscriptChatMessage
+    var onPlay: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .bottom, spacing: MuesliTheme.spacing8) {
@@ -2797,6 +2840,7 @@ struct TranscriptChatBubble: View {
                         .font(MuesliTheme.font(size: 10, weight: .medium))
                         .foregroundStyle(MuesliTheme.textTertiary)
                         .textSelection(.enabled)
+                        .padding(.trailing, onPlay == nil ? 0 : 22)
                 }
                 Text(message.text)
                     .font(MuesliTheme.reading())
@@ -2812,6 +2856,22 @@ struct TranscriptChatBubble: View {
                 RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
                     .strokeBorder(message.isUser ? MuesliTheme.accent.opacity(0.25) : MuesliTheme.surfaceBorder, lineWidth: 1)
             )
+            .overlay(alignment: .topTrailing) {
+                if let onPlay {
+                    Button(action: onPlay) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Play from here")
+                    .accessibilityLabel("Play recording from this message")
+                    .padding(.top, 2)
+                    .padding(.trailing, 2)
+                }
+            }
             .frame(maxWidth: 680, alignment: message.isUser ? .trailing : .leading)
 
             if !message.isUser {

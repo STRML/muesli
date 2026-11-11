@@ -396,11 +396,26 @@ struct MeetingRecordingPlayerView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .meetingRecordingSeekRequested)) { notification in
+            playFromRequest(notification)
+        }
         .onDisappear {
             player?.stop()
             player = nil
             isPlaying = false
         }
+    }
+
+    private func playFromRequest(_ notification: Notification) {
+        guard notification.object as? String == recordingPath,
+              let seconds = notification.userInfo?["seconds"] as? TimeInterval,
+              let player,
+              let target = TranscriptPlayback.seekTarget(seconds: seconds, duration: player.duration)
+        else { return }
+        player.currentTime = target
+        player.play()
+        isPlaying = true
+        currentTime = target
     }
 
     private var duration: TimeInterval {
