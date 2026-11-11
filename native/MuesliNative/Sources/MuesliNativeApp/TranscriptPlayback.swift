@@ -13,14 +13,17 @@ struct TranscriptPlayback {
 
     private static let secondsPerDay = 86_400
 
-    /// Nil when the first stamp fits neither convention, so no line gets a play button.
+    /// Nil when the first stamp fits neither convention, or fits both (a meeting that starts within
+    /// its own length of midnight), since the stamps alone cannot say which one wrote them.
     init?(firstTimestamp: String?, meetingStartTime: String, duration: TimeInterval, calendar: Calendar = .current) {
         guard duration > 0, let first = Self.secondsOfDay(firstTimestamp) else { return nil }
         self.duration = duration
-        if let start = Self.startSecondsOfDay(meetingStartTime, calendar: calendar),
-           Double(Self.wrapped(first - start)) <= duration {
+        let start = Self.startSecondsOfDay(meetingStartTime, calendar: calendar)
+        let wallClockFits = start.map { Double(Self.wrapped(first - $0)) <= duration } ?? false
+        let fromZeroFits = Double(first) <= duration
+        if wallClockFits, !fromZeroFits, let start {
             anchor = start
-        } else if Double(first) <= duration {
+        } else if fromZeroFits, !wallClockFits {
             anchor = 0
         } else {
             return nil
