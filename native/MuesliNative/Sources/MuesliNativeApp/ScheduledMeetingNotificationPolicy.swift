@@ -40,11 +40,17 @@ enum ScheduledMeetingNotificationPolicy {
     }
 
     /// "Auto-record detected calls" is hidden while detection notifications are off, so it only counts
-    /// with them on. Calendar auto-record covers a joined call that matches an event.
+    /// with them on. Calendar auto-record follows `joinedCallAction`: a live call on a matching event,
+    /// once per event.
     static func recordsDetectedCall(
-        showsDetection: Bool, autoRecordDetectedCalls: Bool, autoRecordMeetings: Bool, hasCalendarEvent: Bool
+        showsDetection: Bool, autoRecordDetectedCalls: Bool, autoRecordMeetings: Bool, hasCalendarEvent: Bool,
+        hasLiveMedia: Bool, alreadyAttempted: Bool
     ) -> Bool {
-        (showsDetection && autoRecordDetectedCalls) || (autoRecordMeetings && hasCalendarEvent)
+        if showsDetection && autoRecordDetectedCalls { return true }
+        return joinedCallAction(
+            showsDetection: showsDetection, autoRecordMeetings: autoRecordMeetings, hasCalendarEvent: hasCalendarEvent,
+            hasLiveMedia: hasLiveMedia, alreadyAttempted: alreadyAttempted
+        ) == .record
     }
 
     static func shouldNotifyAboutRecordingConflict(recordingRoom: String?, scheduledRoom: String?) -> Bool {

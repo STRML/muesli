@@ -11657,6 +11657,7 @@ public final class MuesliController: NSObject {
     }
 
     private func handleMeetingActivityCandidate(_ candidate: MeetingCandidate?) {
+        if let candidate { armDetectedCallIfNowEligible(candidate) }
         if !activeMeetingAutoStop.isArmed,
            !isMeetingRecording(),
            !isStartingMeetingRecording {
@@ -12013,13 +12014,14 @@ public final class MuesliController: NSObject {
         let title = DetectedCallMatcher.title(for: candidate, event: event, now: now)
         guard detectedCallCandidate?.id != candidate.id else {
             refreshDetectedCallName(candidate, title: title, event: event, now: now)
+            armDetectedCallIfNowEligible(candidate, now: now)
             return (title, event)
         }
 
         detectedCallTask?.cancel()
         detectedCallCandidate = candidate
         detectedCallEvent = event
-        let recordsAt = recordsDetectedCall(matching: event)
+        let recordsAt = recordsDetectedCall(candidate, matching: event)
             ? now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
             : nil
         detectedCallState = DetectedCallState(
@@ -12030,15 +12032,56 @@ public final class MuesliController: NSObject {
             recordsAt: recordsAt
         )
         fputs("[meeting-monitor] call_detected_entry title=\"\(title)\" calendar_match=\(event != nil) auto_record=\(recordsAt != nil) at=\(now.formatted(.iso8601))\n", stderr)
-        if recordsAt != nil {
-            detectedCallTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(SidebarMeetingEntryPolicy.detectedCallCountdown))
-                guard !Task.isCancelled else { return }
-                self?.startDetectedCallNow()
-            }
-        }
+        if recordsAt != nil { startDetectedCallCountdown() }
         refreshSidebarMeetingEntry(now: now)
         return (title, event)
+    }
+
+    /// Dismissing the toast declines calendar auto-record for the event. It is keyed to the event, not
+    /// the candidate, because a call's candidate id changes when it gains live audio.
+    /// A countdown already running for this call stops too.
+    private func declineDetectedCallAutoRecord(_ candidate: MeetingCandidate) {
+        guard let state = detectedCallState, state.candidateID == candidate.id else { return }
+        if let event = detectedCallEvent { autoRecordAttempt.claim(event.resolvedCalendarOccurrence.identityKey) }
+        guard state.recordsAt != nil else { return }
+        detectedCallTask?.cancel()
+        detectedCallTask = nil
+        detectedCallState = DetectedCallState(
+            candidateID: state.candidateID, title: state.title, eventKey: state.eventKey,
+            endsAt: state.endsAt, recordsAt: nil
+        )
+        refreshSidebarMeetingEntry()
+    }
+
+    private func startDetectedCallCountdown() {
+        detectedCallTask?.cancel()
+        detectedCallTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(SidebarMeetingEntryPolicy.detectedCallCountdown))
+            guard !Task.isCancelled else { return }
+            self?.startDetectedCallNow()
+        }
+    }
+
+    /// A call first seen without live audio (camera before mic, a tab opened early) arms its countdown
+    /// once the meeting app holds an audio-input process.
+    private func armDetectedCallIfNowEligible(_ candidate: MeetingCandidate, now: Date = Date()) {
+        guard let state = detectedCallState,
+              SidebarMeetingEntryPolicy.armsCountdownLater(
+                  state: state, candidateID: candidate.id,
+                  isRecording: isMeetingRecording() || isStartingMeetingRecording,
+                  recordsNow: recordsDetectedCall(candidate, matching: detectedCallEvent)
+              ) else { return }
+        detectedCallCandidate = candidate
+        detectedCallState = DetectedCallState(
+            candidateID: state.candidateID,
+            title: state.title,
+            eventKey: state.eventKey,
+            endsAt: state.endsAt,
+            recordsAt: now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
+        )
+        fputs("[meeting-monitor] call_detected_entry_armed title=\"\(state.title)\" at=\(now.formatted(.iso8601))\n", stderr)
+        startDetectedCallCountdown()
+        refreshSidebarMeetingEntry(now: now)
     }
 
     /// The room URL or the calendar can arrive after the entry appears (the browser answers late), so
@@ -12125,12 +12168,14 @@ public final class MuesliController: NSObject {
         }
     }
 
-    private func recordsDetectedCall(matching event: UnifiedCalendarEvent?) -> Bool {
+    private func recordsDetectedCall(_ candidate: MeetingCandidate, matching event: UnifiedCalendarEvent?) -> Bool {
         ScheduledMeetingNotificationPolicy.recordsDetectedCall(
             showsDetection: config.showMeetingDetectionNotification,
             autoRecordDetectedCalls: config.autoRecordDetectedCalls,
             autoRecordMeetings: config.autoRecordMeetings,
-            hasCalendarEvent: event != nil
+            hasCalendarEvent: event != nil,
+            hasLiveMedia: candidate.hasLiveMediaEvidence,
+            alreadyAttempted: event.map { autoRecordAttempt.hasClaimed($0.resolvedCalendarOccurrence.identityKey) } ?? false
         )
     }
 
@@ -12148,7 +12193,7 @@ public final class MuesliController: NSObject {
         let (title, matchedEvent) = beginDetectedCall(candidate)
         presentedMeetingCandidate = candidate
         // The sidebar entry and its countdown stand in for the toast.
-        if recordsDetectedCall(matching: matchedEvent) {
+        if recordsDetectedCall(candidate, matching: matchedEvent) {
             meetingMonitor.markPromptShown(candidate)
             return
         }
@@ -12186,6 +12231,7 @@ public final class MuesliController: NSObject {
             onDismiss: { [weak self] in
                 guard let self else { return }
                 self.presentedMeetingCandidate = nil
+                self.declineDetectedCallAutoRecord(candidate)
                 self.meetingMonitor.markPromptUserDismissed(candidate)
                 self.meetingMonitor.refreshState()
                 self.showPendingMeetingCompletionNotificationIfPossible()

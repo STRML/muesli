@@ -147,4 +147,18 @@ struct SidebarMeetingEntryTests {
         )
         #expect(due([finished], all: true).isEmpty)
     }
+
+    @Test("a call seen before it went live arms its countdown once auto-record covers it, and only then")
+    func armsCountdownLater() {
+        let waiting = DetectedCallState(candidateID: "meet", title: "Standup", eventKey: nil, endsAt: nil, recordsAt: nil)
+        let armed = DetectedCallState(candidateID: "meet", title: "Standup", eventKey: nil, endsAt: nil, recordsAt: Date())
+        func arms(_ state: DetectedCallState, id: String = "meet", recording: Bool = false, records: Bool = true) -> Bool {
+            SidebarMeetingEntryPolicy.armsCountdownLater(state: state, candidateID: id, isRecording: recording, recordsNow: records)
+        }
+        #expect(arms(waiting))
+        #expect(!arms(waiting, records: false))
+        #expect(!arms(armed))
+        #expect(!arms(waiting, id: "other"))
+        #expect(!arms(waiting, recording: true))
+    }
 }
