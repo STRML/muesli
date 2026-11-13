@@ -45,6 +45,18 @@ the pinned commit in its header. Upstream license text:
   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
   SOFTWARE.
 
+Parakeet Ultra model attribution (optional, downloaded on demand):
+  Parakeet Ultra by Moondream:
+    https://huggingface.co/moondream/parakeet-ultra
+  Based on NVIDIA Parakeet TDT 0.6B v3:
+    https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+  Core ML conversion by FluidInference:
+    https://huggingface.co/FluidInference/parakeet-ultra-coreml
+  Model weights are licensed under Creative Commons Attribution 4.0 International:
+    https://creativecommons.org/licenses/by/4.0/
+  FluidInference converted the model to Core ML; Muesli uses those converted
+  weights without further modification. Attribution is also shown in Models.
+
 Parakeet Redux model attribution (optional, downloaded on demand):
   Parakeet Redux by Moondream:
     https://huggingface.co/moondream/parakeet-redux

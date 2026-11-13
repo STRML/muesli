@@ -359,11 +359,24 @@ struct BackendOptionTests {
         #expect(BackendOption.parakeetEnglish.isCompatible(currentOSVersion: Self.macOS14))
     }
 
+    @Test("Ultra is selectable for dictation and meetings on macOS 14 without changing defaults")
+    func parakeetUltraCatalog() {
+        let ultra = BackendOption.parakeetUltra
+        #expect(BackendOption.parakeetFamily.contains(ultra))
+        #expect(BackendOption.resolve(backend: ultra.backend, model: ultra.model) == ultra)
+        #expect(ultra.supportsMeetingTranscription)
+        #expect(!ultra.isStreamingDictationBackend)
+        #expect(!ultra.recommended)
+        #expect(ultra.isCompatible(currentOSVersion: Self.macOS14))
+        #expect(BackendOption.onboardingDefault == .parakeetUnified)
+        #expect(FluidAudioModel.modelID(for: .ultra) == ultra.model)
+    }
+
     @Test("FluidAudio model routing keeps Redux separate from v2 and v3")
     func parakeetReduxRouting() {
         for (option, version) in [
             (BackendOption.parakeetEnglish, AsrModelVersion.v2),
-            (.parakeetMultilingual, .v3), (.parakeetRedux, .redux),
+            (.parakeetMultilingual, .v3), (.parakeetRedux, .redux), (.parakeetUltra, .ultra),
         ] {
             let resolved = FluidAudioModel.version(for: option.model)
             #expect(resolved == version)
