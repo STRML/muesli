@@ -51,6 +51,12 @@ struct DetectedCallState: Equatable {
 }
 
 enum SidebarMeetingEntryPolicy {
+    /// The sidebar entry for this call has no countdown yet, nothing is recording, and auto-record
+    /// now covers the call.
+    static func armsCountdownLater(state: DetectedCallState, candidateID: String, isRecording: Bool, recordsNow: Bool) -> Bool {
+        state.candidateID == candidateID && state.recordsAt == nil && !isRecording && recordsNow
+    }
+
     /// An event shows from this long before it starts.
     static let upcomingWindow: TimeInterval = 15 * 60
     /// A detected call starts transcribing by itself after this long.
