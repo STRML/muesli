@@ -55,7 +55,7 @@ struct MuesliCLITests {
     func appModelCatalogParity() throws {
         let existing: [TranscribeModel: BackendOption] = [
             .parakeetV3: .parakeetMultilingual, .parakeetV2: .parakeetEnglish,
-            .parakeetRedux: .parakeetRedux, .phonon25: .phonon25,
+            .parakeetRedux: .parakeetRedux, .parakeetUltra: .parakeetUltra, .phonon25: .phonon25,
             .parakeetUnified: .parakeetUnified, .senseVoice: .senseVoiceSmall,
             .qwen3Asr: .qwen3Asr, .nemotron35: .nemotron35Multilingual,
             .whisperTiny: .whisperTiny, .whisperTinyEnglish: .whisperTinyEnglish,
@@ -590,6 +590,9 @@ struct MuesliCLITests {
         #expect(TranscribeModel(argument: "parakeet-v2") == .parakeetV2)
         #expect(TranscribeModel(argument: "parakeet-redux") == .parakeetRedux)
         #expect(TranscribeModel.parakeetRedux.asrModelVersion == .redux)
+        #expect(TranscribeModel(argument: "parakeet-ultra") == .parakeetUltra)
+        #expect(TranscribeModel.parakeetUltra.asrModelVersion == .ultra)
+        #expect(TranscribeModel.parakeetUltra.whisperKitModelName == nil)
         #expect(TranscribeModel(argument: "phonon-2.5") == .phonon25)
         #expect(TranscribeModel.phonon25.asrModelVersion == .v3)
         #expect(TranscribeModel.phonon25.whisperKitModelName == nil)

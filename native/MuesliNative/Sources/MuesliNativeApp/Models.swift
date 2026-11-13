@@ -44,6 +44,15 @@ struct BackendOption: Equatable {
         recommended: false
     )
 
+    static let parakeetUltra = BackendOption(
+        backend: "fluidaudio",
+        model: "FluidInference/parakeet-ultra-coreml",
+        label: "Parakeet Ultra",
+        sizeLabel: "~600 MB",
+        description: "Parakeet v3 retrained for fewer errors on meetings and noisy audio, in 25 languages.",
+        recommended: false
+    )
+
     static let phonon25 = BackendOption(
         backend: "fluidaudio",
         model: ParakeetRuntimePolicy.phonon25ModelID,
@@ -215,7 +224,7 @@ struct BackendOption: Equatable {
     static let whisper = parakeetMultilingual
 
     static let parakeetFamily: [BackendOption] = [
-        .parakeetUnified, .parakeetMultilingual, .parakeetRedux, .parakeetEnglish,
+        .parakeetUnified, .parakeetMultilingual, .parakeetUltra, .parakeetRedux, .parakeetEnglish,
     ]
 
     static let whisperFamily: [BackendOption] = [

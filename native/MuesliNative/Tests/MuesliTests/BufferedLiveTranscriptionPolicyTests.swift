@@ -242,7 +242,7 @@ struct BufferedLiveTranscriptionPolicyTests {
 
     @Test("Parakeet, Whisper, and Bodhan catalog models support buffered previews")
     func supportedModels() {
-        let supported = [BackendOption.parakeetMultilingual, .parakeetEnglish, .parakeetRedux, .parakeetUnified]
+        let supported = [BackendOption.parakeetMultilingual, .parakeetEnglish, .parakeetRedux, .parakeetUltra, .parakeetUnified]
             + BackendOption.whisperFamily + BackendOption.bodhanFamily
         for model in supported {
             #expect(model.supportsBufferedLiveTranscription)

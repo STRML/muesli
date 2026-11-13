@@ -1171,8 +1171,8 @@ struct ModelsView: View {
                 .font(MuesliTheme.caption())
                 .foregroundStyle(incompatibilityReason == nil ? MuesliTheme.textSecondary : MuesliTheme.textTertiary)
 
-            if selectedOption == .parakeetRedux {
-                Text("[Moondream](https://huggingface.co/moondream/parakeet-redux) · [Core ML by FluidInference](https://huggingface.co/FluidInference/parakeet-redux-coreml) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)")
+            if let attribution = ModelAttribution.markdown(for: selectedOption) {
+                Text(LocalizedStringKey(attribution))
                     .font(MuesliTheme.caption())
                     .foregroundStyle(MuesliTheme.textTertiary)
             }
@@ -2399,5 +2399,16 @@ struct ModelsView: View {
         default:
             return false
         }
+    }
+}
+
+enum ModelAttribution {
+    private static let byModel: [String: String] = [
+        BackendOption.parakeetRedux.model: "[Moondream](https://huggingface.co/moondream/parakeet-redux) · [Core ML by FluidInference](https://huggingface.co/FluidInference/parakeet-redux-coreml) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)",
+        BackendOption.parakeetUltra.model: "[Moondream](https://huggingface.co/moondream/parakeet-ultra) · [Core ML by FluidInference](https://huggingface.co/FluidInference/parakeet-ultra-coreml) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)",
+    ]
+
+    static func markdown(for option: BackendOption) -> String? {
+        byModel[option.model]
     }
 }
