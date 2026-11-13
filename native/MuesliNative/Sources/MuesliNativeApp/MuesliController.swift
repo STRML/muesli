@@ -11657,6 +11657,7 @@ public final class MuesliController: NSObject {
     }
 
     private func handleMeetingActivityCandidate(_ candidate: MeetingCandidate?) {
+        if let candidate { armDetectedCallIfNowEligible(candidate) }
         if !activeMeetingAutoStop.isArmed,
            !isMeetingRecording(),
            !isStartingMeetingRecording {
@@ -12013,6 +12014,7 @@ public final class MuesliController: NSObject {
         let title = DetectedCallMatcher.title(for: candidate, event: event, now: now)
         guard detectedCallCandidate?.id != candidate.id else {
             refreshDetectedCallName(candidate, title: title, event: event, now: now)
+            armDetectedCallIfNowEligible(candidate, now: now)
             return (title, event)
         }
 
@@ -12030,15 +12032,40 @@ public final class MuesliController: NSObject {
             recordsAt: recordsAt
         )
         fputs("[meeting-monitor] call_detected_entry title=\"\(title)\" calendar_match=\(event != nil) auto_record=\(recordsAt != nil) at=\(now.formatted(.iso8601))\n", stderr)
-        if recordsAt != nil {
-            detectedCallTask = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(SidebarMeetingEntryPolicy.detectedCallCountdown))
-                guard !Task.isCancelled else { return }
-                self?.startDetectedCallNow()
-            }
-        }
+        if recordsAt != nil { startDetectedCallCountdown() }
         refreshSidebarMeetingEntry(now: now)
         return (title, event)
+    }
+
+    private func startDetectedCallCountdown() {
+        detectedCallTask?.cancel()
+        detectedCallTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(SidebarMeetingEntryPolicy.detectedCallCountdown))
+            guard !Task.isCancelled else { return }
+            self?.startDetectedCallNow()
+        }
+    }
+
+    /// A call first seen without live audio (camera before mic, a tab opened early) arms its countdown
+    /// once the meeting app holds an audio-input process.
+    private func armDetectedCallIfNowEligible(_ candidate: MeetingCandidate, now: Date = Date()) {
+        guard let state = detectedCallState,
+              SidebarMeetingEntryPolicy.armsCountdownLater(
+                  state: state, candidateID: candidate.id,
+                  isRecording: isMeetingRecording() || isStartingMeetingRecording,
+                  recordsNow: recordsDetectedCall(candidate, matching: detectedCallEvent)
+              ) else { return }
+        detectedCallCandidate = candidate
+        detectedCallState = DetectedCallState(
+            candidateID: state.candidateID,
+            title: state.title,
+            eventKey: state.eventKey,
+            endsAt: state.endsAt,
+            recordsAt: now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
+        )
+        fputs("[meeting-monitor] call_detected_entry_armed title=\"\(state.title)\" at=\(now.formatted(.iso8601))\n", stderr)
+        startDetectedCallCountdown()
+        refreshSidebarMeetingEntry(now: now)
     }
 
     /// The room URL or the calendar can arrive after the entry appears (the browser answers late), so
