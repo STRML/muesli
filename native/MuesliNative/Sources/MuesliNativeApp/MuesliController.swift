@@ -12037,6 +12037,16 @@ public final class MuesliController: NSObject {
         return (title, event)
     }
 
+    private func declineDetectedCallAutoRecord(_ candidate: MeetingCandidate) {
+        guard let state = detectedCallState, state.candidateID == candidate.id else { return }
+        detectedCallTask?.cancel()
+        detectedCallState = DetectedCallState(
+            candidateID: state.candidateID, title: state.title, eventKey: state.eventKey,
+            endsAt: state.endsAt, recordsAt: nil, autoRecordDeclined: true
+        )
+        refreshSidebarMeetingEntry()
+    }
+
     private func startDetectedCallCountdown() {
         detectedCallTask?.cancel()
         detectedCallTask = Task { @MainActor [weak self] in
@@ -12081,7 +12091,8 @@ public final class MuesliController: NSObject {
             title: title,
             eventKey: event.map { SidebarMeetingEntryPolicy.eventKey(id: $0.id, startDate: $0.startDate) },
             endsAt: event?.endDate,
-            recordsAt: state.recordsAt
+            recordsAt: state.recordsAt,
+            autoRecordDeclined: state.autoRecordDeclined
         )
         fputs("[meeting-monitor] call_detected_entry_renamed title=\"\(title)\" calendar_match=\(event != nil)\n", stderr)
         refreshSidebarMeetingEntry(now: now)
@@ -12215,6 +12226,7 @@ public final class MuesliController: NSObject {
             onDismiss: { [weak self] in
                 guard let self else { return }
                 self.presentedMeetingCandidate = nil
+                self.declineDetectedCallAutoRecord(candidate)
                 self.meetingMonitor.markPromptUserDismissed(candidate)
                 self.meetingMonitor.refreshState()
                 self.showPendingMeetingCompletionNotificationIfPossible()

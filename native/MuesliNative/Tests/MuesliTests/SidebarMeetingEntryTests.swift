@@ -160,5 +160,8 @@ struct SidebarMeetingEntryTests {
         #expect(!arms(armed))
         #expect(!arms(waiting, id: "other"))
         #expect(!arms(waiting, recording: true))
+        let declined = DetectedCallState(
+            candidateID: "meet", title: "Standup", eventKey: nil, endsAt: nil, recordsAt: nil, autoRecordDeclined: true)
+        #expect(!arms(declined))
     }
 }
