@@ -173,6 +173,20 @@ struct MeetingNotificationControllerTests {
         ) == records)
     }
 
+    @Test("a dismissed toast declines the event for any later candidate id, such as the live meeting-session one")
+    func dismissedEventStaysDeclinedAcrossCandidateIDs() {
+        var attempts = AutoRecordAttemptGuard()
+        let event = CalendarOccurrenceReference(
+            provider: .eventKit, calendarID: "cal", eventID: "standup", seriesID: nil,
+            originalStartTime: Date(timeIntervalSince1970: 1_800_000_000)
+        ).identityKey
+        attempts.claim(event)
+        #expect(!ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: true, autoRecordDetectedCalls: false, autoRecordMeetings: true,
+            hasCalendarEvent: true, hasLiveMedia: true, alreadyAttempted: attempts.hasClaimed(event)
+        ))
+    }
+
     @Test("auto-record detected calls keeps its own rule, with or without live media")
     func detectedCallsSettingIgnoresCalendarGuards() {
         #expect(ScheduledMeetingNotificationPolicy.recordsDetectedCall(

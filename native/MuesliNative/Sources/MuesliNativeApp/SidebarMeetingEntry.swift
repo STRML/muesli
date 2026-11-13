@@ -48,15 +48,13 @@ struct DetectedCallState: Equatable {
     let eventKey: String?
     let endsAt: Date?
     let recordsAt: Date?
-    /// The user dismissed the toast for this call, so a later turn to live audio must not record it.
-    var autoRecordDeclined = false
 }
 
 enum SidebarMeetingEntryPolicy {
     /// The sidebar entry for this call has no countdown yet, nothing is recording, and auto-record
     /// now covers the call.
     static func armsCountdownLater(state: DetectedCallState, candidateID: String, isRecording: Bool, recordsNow: Bool) -> Bool {
-        state.candidateID == candidateID && state.recordsAt == nil && !state.autoRecordDeclined && !isRecording && recordsNow
+        state.candidateID == candidateID && state.recordsAt == nil && !isRecording && recordsNow
     }
 
     /// An event shows from this long before it starts.

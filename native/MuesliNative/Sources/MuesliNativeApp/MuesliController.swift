@@ -12037,14 +12037,11 @@ public final class MuesliController: NSObject {
         return (title, event)
     }
 
+    /// Dismissing the toast declines calendar auto-record for the event. It is keyed to the event, not
+    /// the candidate, because a call's candidate id changes when it gains live audio.
     private func declineDetectedCallAutoRecord(_ candidate: MeetingCandidate) {
-        guard let state = detectedCallState, state.candidateID == candidate.id else { return }
-        detectedCallTask?.cancel()
-        detectedCallState = DetectedCallState(
-            candidateID: state.candidateID, title: state.title, eventKey: state.eventKey,
-            endsAt: state.endsAt, recordsAt: nil, autoRecordDeclined: true
-        )
-        refreshSidebarMeetingEntry()
+        guard detectedCallState?.candidateID == candidate.id, let event = detectedCallEvent else { return }
+        autoRecordAttempt.claim(event.resolvedCalendarOccurrence.identityKey)
     }
 
     private func startDetectedCallCountdown() {
@@ -12091,8 +12088,7 @@ public final class MuesliController: NSObject {
             title: title,
             eventKey: event.map { SidebarMeetingEntryPolicy.eventKey(id: $0.id, startDate: $0.startDate) },
             endsAt: event?.endDate,
-            recordsAt: state.recordsAt,
-            autoRecordDeclined: state.autoRecordDeclined
+            recordsAt: state.recordsAt
         )
         fputs("[meeting-monitor] call_detected_entry_renamed title=\"\(title)\" calendar_match=\(event != nil)\n", stderr)
         refreshSidebarMeetingEntry(now: now)
