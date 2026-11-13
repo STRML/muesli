@@ -12019,7 +12019,7 @@ public final class MuesliController: NSObject {
         detectedCallTask?.cancel()
         detectedCallCandidate = candidate
         detectedCallEvent = event
-        let recordsAt = recordsDetectedCall(matching: event)
+        let recordsAt = recordsDetectedCall(candidate, matching: event)
             ? now.addingTimeInterval(SidebarMeetingEntryPolicy.detectedCallCountdown)
             : nil
         detectedCallState = DetectedCallState(
@@ -12125,12 +12125,14 @@ public final class MuesliController: NSObject {
         }
     }
 
-    private func recordsDetectedCall(matching event: UnifiedCalendarEvent?) -> Bool {
+    private func recordsDetectedCall(_ candidate: MeetingCandidate, matching event: UnifiedCalendarEvent?) -> Bool {
         ScheduledMeetingNotificationPolicy.recordsDetectedCall(
             showsDetection: config.showMeetingDetectionNotification,
             autoRecordDetectedCalls: config.autoRecordDetectedCalls,
             autoRecordMeetings: config.autoRecordMeetings,
-            hasCalendarEvent: event != nil
+            hasCalendarEvent: event != nil,
+            hasLiveMedia: candidate.hasLiveMediaEvidence,
+            alreadyAttempted: event.map { autoRecordAttempt.hasClaimed($0.resolvedCalendarOccurrence.identityKey) } ?? false
         )
     }
 
@@ -12148,7 +12150,7 @@ public final class MuesliController: NSObject {
         let (title, matchedEvent) = beginDetectedCall(candidate)
         presentedMeetingCandidate = candidate
         // The sidebar entry and its countdown stand in for the toast.
-        if recordsDetectedCall(matching: matchedEvent) {
+        if recordsDetectedCall(candidate, matching: matchedEvent) {
             meetingMonitor.markPromptShown(candidate)
             return
         }

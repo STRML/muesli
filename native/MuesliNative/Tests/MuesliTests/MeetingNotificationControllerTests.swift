@@ -159,8 +159,26 @@ struct MeetingNotificationControllerTests {
     func detectedCallAutoRecordRule(row: DetectedCallRow) {
         #expect(ScheduledMeetingNotificationPolicy.recordsDetectedCall(
             showsDetection: row.toasts, autoRecordDetectedCalls: row.detectedCalls,
-            autoRecordMeetings: row.meetings, hasCalendarEvent: row.hasEvent
+            autoRecordMeetings: row.meetings, hasCalendarEvent: row.hasEvent,
+            hasLiveMedia: true, alreadyAttempted: false
         ) == row.records)
+    }
+
+    @Test("calendar auto-record counts down only for a live call on an event it has not tried yet",
+          arguments: [(true, false, true), (false, false, false), (true, true, false), (false, true, false)])
+    func calendarAutoRecordNeedsLiveMediaOnce(live: Bool, tried: Bool, records: Bool) {
+        #expect(ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: false, autoRecordDetectedCalls: false, autoRecordMeetings: true,
+            hasCalendarEvent: true, hasLiveMedia: live, alreadyAttempted: tried
+        ) == records)
+    }
+
+    @Test("auto-record detected calls keeps its own rule, with or without live media")
+    func detectedCallsSettingIgnoresCalendarGuards() {
+        #expect(ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: true, autoRecordDetectedCalls: true, autoRecordMeetings: true,
+            hasCalendarEvent: true, hasLiveMedia: false, alreadyAttempted: true
+        ))
     }
 
     @Test("A close callback can install the next notification callback")
