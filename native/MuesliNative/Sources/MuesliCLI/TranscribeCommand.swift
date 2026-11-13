@@ -16,6 +16,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
     case parakeetV3 = "parakeet-v3"
     case parakeetV2 = "parakeet-v2"
     case parakeetRedux = "parakeet-redux"
+    case parakeetUltra = "parakeet-ultra"
     case phonon25 = "phonon-2.5"
     case parakeetUnified = "parakeet-unified"
     case parakeetEou320ms = "parakeet-eou-320ms"
@@ -45,6 +46,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .parakeetV3, .phonon25: return .v3
         case .parakeetV2: return .v2
         case .parakeetRedux: return .redux
+        case .parakeetUltra: return .ultra
         case .appleSpeech, .medASR, .cohere, .bodhanCore, .bodhanFlex, .bodhanCoreInt8, .bodhanFlexInt8, .gemma4E2B, .gemma4E4B,
              .parakeetUnified, .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35,
              .whisperTiny, .whisperTinyEnglish,
@@ -64,7 +66,7 @@ enum TranscribeModel: String, CaseIterable, ExpressibleByArgument, Encodable {
         case .whisperMediumEnglish: return "medium.en"
         case .whisperLargeTurbo: return "large-v3-v20240930_626MB"
         case .appleSpeech, .medASR, .cohere, .bodhanCore, .bodhanFlex, .bodhanCoreInt8, .bodhanFlexInt8, .gemma4E2B, .gemma4E4B,
-             .parakeetV3, .parakeetV2, .parakeetRedux, .phonon25, .parakeetUnified, .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35:
+             .parakeetV3, .parakeetV2, .parakeetRedux, .parakeetUltra, .phonon25, .parakeetUnified, .parakeetEou320ms, .senseVoice, .qwen3Asr, .nemotron35:
             return nil
         }
     }
@@ -652,7 +654,7 @@ struct RoutingAudioTranscriber: AudioTranscribing {
         switch model {
         case .appleSpeech, .medASR, .cohere, .bodhanCore, .bodhanFlex, .bodhanCoreInt8, .bodhanFlexInt8, .gemma4E2B, .gemma4E4B:
             transcriber = native
-        case .parakeetV3, .parakeetV2, .parakeetRedux, .phonon25: transcriber = batch
+        case .parakeetV3, .parakeetV2, .parakeetRedux, .parakeetUltra, .phonon25: transcriber = batch
         case .parakeetUnified: transcriber = parakeetUnified
         case .parakeetEou320ms: transcriber = streaming
         case .senseVoice: transcriber = senseVoice
@@ -724,6 +726,7 @@ actor FluidAudioCLITranscriber: AudioTranscribing {
         switch model {
         case .parakeetV2: plan = ManagedASRModelPlans.parakeetV2()
         case .parakeetRedux: plan = ManagedASRModelPlans.parakeetRedux()
+        case .parakeetUltra: plan = ManagedASRModelPlans.parakeetUltra()
         case .phonon25: plan = ManagedASRModelPlans.phonon25()
         default: plan = ManagedASRModelPlans.parakeetV3()
         }

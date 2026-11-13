@@ -1266,6 +1266,18 @@ struct ModelDownloadCoordinatorTests {
         #expect(fallbackTracker.requestCount == 0)
     }
 
+    @Test("Ultra downloads from FluidInference into its own folder with v3's file set")
+    func parakeetUltraPlan() {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let ultra = ManagedASRModelPlans.parakeetUltra(modelsRoot: root)
+        let v3 = ManagedASRModelPlans.parakeetV3(modelsRoot: root)
+        #expect(ultra.modelID == "FluidInference/parakeet-ultra-coreml")
+        #expect(ultra.repository == "FluidInference/parakeet-ultra-coreml")
+        #expect(ultra.cacheDirectory.lastPathComponent == "parakeet-ultra")
+        #expect(ultra.mirror == nil)
+        #expect(ultra.selections[0].includedPaths == v3.selections[0].includedPaths)
+    }
+
     @Test("Redux installs and deletes independently of existing Parakeet models")
     func parakeetReduxArtifacts() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

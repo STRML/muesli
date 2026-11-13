@@ -259,12 +259,14 @@ enum FluidAudioModel {
         switch version {
         case .v2: return BackendOption.parakeetEnglish.model
         case .redux: return BackendOption.parakeetRedux.model
+        case .ultra: return BackendOption.parakeetUltra.model
         default: return BackendOption.parakeetMultilingual.model
         }
     }
 
     static func version(for modelID: String) -> AsrModelVersion {
         if modelID == BackendOption.parakeetRedux.model { return .redux }
+        if modelID == BackendOption.parakeetUltra.model { return .ultra }
         return modelID.contains("v2") ? .v2 : .v3
     }
 
@@ -272,6 +274,7 @@ enum FluidAudioModel {
         switch modelID {
         case BackendOption.parakeetEnglish.model: return ManagedASRModelPlans.parakeetV2()
         case BackendOption.parakeetRedux.model: return ManagedASRModelPlans.parakeetRedux()
+        case BackendOption.parakeetUltra.model: return ManagedASRModelPlans.parakeetUltra()
         case BackendOption.phonon25.model: return ManagedASRModelPlans.phonon25()
         default: return ManagedASRModelPlans.parakeetV3()
         }

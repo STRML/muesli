@@ -242,6 +242,20 @@ public enum ManagedASRModelPlans {
         )
     }
 
+    public static func parakeetUltra(modelsRoot: URL? = nil) -> ManagedASRModelPlan {
+        fluidAudioPlan(
+            modelID: "FluidInference/parakeet-ultra-coreml",
+            repository: "FluidInference/parakeet-ultra-coreml",
+            directoryName: "parakeet-ultra",
+            required: [
+                "Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc",
+                "JointDecisionv3.mlmodelc", "parakeet_vocab.json",
+            ],
+            mirror: nil,
+            modelsRoot: modelsRoot
+        )
+    }
+
     public static func parakeetRedux(modelsRoot: URL? = nil) -> ManagedASRModelPlan {
         fluidAudioPlan(
             modelID: "FluidInference/parakeet-redux-coreml",

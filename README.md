@@ -147,7 +147,7 @@ Choose and download models in the **Models** tab. English defaults to Parakeet U
 | Model family | Options | Approximate download |
 |---|---|---|
 | Apple Speech | System-managed dictation and live meeting transcription; macOS 26+ | Managed by macOS |
-| Parakeet | Unified, v2, v3, Redux, and Realtime EOU | 220–565 MB |
+| Parakeet | Unified, v2, v3, Ultra, Redux, and Realtime EOU | 220–600 MB |
 | Nemotron 3.5 | Multilingual live and final transcripts | 665 MB |
 | Cohere Transcribe 2B | Multilingual transcription | 3.8 GB |
 | SenseVoice Small | Multilingual transcription | 240 MB |
@@ -244,6 +244,7 @@ Muesli has been possible because of the generosity of companies such as:
 - [Core Audio](https://developer.apple.com/documentation/coreaudio) by Apple — system audio process taps
 - [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) by Apple — system audio fallback capture
 - [Parakeet Redux by Moondream](https://huggingface.co/moondream/parakeet-redux), based on NVIDIA Parakeet v3, with the [Core ML conversion by FluidInference](https://huggingface.co/FluidInference/parakeet-redux-coreml) — model weights under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Muesli uses the converted weights without further modification.
+- [Parakeet Ultra by Moondream](https://huggingface.co/moondream/parakeet-ultra), based on NVIDIA Parakeet v3, with the [Core ML conversion by FluidInference](https://huggingface.co/FluidInference/parakeet-ultra-coreml) — model weights under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Muesli uses the converted weights without further modification.
 - [Phonon-2.5 by Fermion Research](https://huggingface.co/FermionResearch/Phonon-2.5), with the [Muesli Core ML conversion](https://huggingface.co/Muesli-HQ/phonon-2.5-coreml) — [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Uses the GPU encoder on macOS 15+; original notices and conversion attribution are included.
 - [MedASR by Google](https://huggingface.co/google/medasr), with the [Muesli Core ML conversion](https://huggingface.co/Muesli-HQ/medasr-coreml) — English medical dictation under the HAI-DEF terms; see [setup and runtime details](docs/medasr.md).
 - [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) — FastConformer TDT speech recognition model
