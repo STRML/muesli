@@ -12039,9 +12039,18 @@ public final class MuesliController: NSObject {
 
     /// Dismissing the toast declines calendar auto-record for the event. It is keyed to the event, not
     /// the candidate, because a call's candidate id changes when it gains live audio.
+    /// A countdown already running for this call stops too.
     private func declineDetectedCallAutoRecord(_ candidate: MeetingCandidate) {
-        guard detectedCallState?.candidateID == candidate.id, let event = detectedCallEvent else { return }
-        autoRecordAttempt.claim(event.resolvedCalendarOccurrence.identityKey)
+        guard let state = detectedCallState, state.candidateID == candidate.id else { return }
+        if let event = detectedCallEvent { autoRecordAttempt.claim(event.resolvedCalendarOccurrence.identityKey) }
+        guard state.recordsAt != nil else { return }
+        detectedCallTask?.cancel()
+        detectedCallTask = nil
+        detectedCallState = DetectedCallState(
+            candidateID: state.candidateID, title: state.title, eventKey: state.eventKey,
+            endsAt: state.endsAt, recordsAt: nil
+        )
+        refreshSidebarMeetingEntry()
     }
 
     private func startDetectedCallCountdown() {
