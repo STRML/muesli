@@ -4,17 +4,11 @@ import Foundation
 import MuesliNativeApp
 
 struct DiarizeJSONPayload: Encodable {
-    struct Entry: Encodable {
-        let start: Double
-        let end: Double
-        let speaker: String
-    }
-
-    let segments: [Entry]
+    let segments: [NativeFileDiarizer.Segment]
     let speakerCount: Int
 
     init(segments: [NativeFileDiarizer.Segment]) {
-        self.segments = segments.map { Entry(start: $0.start, end: $0.end, speaker: $0.speaker) }
+        self.segments = segments
         speakerCount = Set(segments.map(\.speaker)).count
     }
 }
@@ -44,13 +38,17 @@ struct DiarizeCommand: AsyncParsableCommand {
             throw CLIError.notFound("Audio file does not exist: \(sourceURL.path)", fix: "Pass a local .mp3, .mp4, .m4a, or .wav file path.")
         }
 
+        let prepared = try await MuesliAudioFilePreparer().prepareAudio(sourceURL: sourceURL)
+        defer {
+            if prepared.deleteWhenDone { try? FileManager.default.removeItem(at: prepared.wavURL) }
+        }
         let segments: [NativeFileDiarizer.Segment]
         do {
-            segments = try await NativeFileDiarizer.diarize(wavURL: sourceURL, progress: { fputs("[muesli-cli] \($0)\n", stderr) })
+            segments = try await NativeFileDiarizer.diarize(wavURL: prepared.wavURL, progress: { fputs("[muesli-cli] \($0)\n", stderr) })
         } catch DiarizerError.notInitialized {
             throw CLIError.notFound(
                 "Speaker diarization models could not be loaded.",
-                fix: "Open muesli once with a meeting or imported audio so the diarizer models download, then retry."
+                fix: "See the load error above on stderr. The first run downloads the models, so check the network and retry."
             )
         }
 

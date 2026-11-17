@@ -108,6 +108,7 @@ enum DiarizerPreloadTrigger: String, Sendable {
     case appLaunch = "app_launch"
     case audioImport = "audio_import"
     case backendChange = "backend_change"
+    case cli
     case meetingStart = "meeting_start"
     case modelLibrary = "model_library"
     case onboarding

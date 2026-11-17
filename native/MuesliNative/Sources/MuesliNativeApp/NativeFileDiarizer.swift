@@ -3,9 +3,9 @@ import Foundation
 
 /// Headless access to the post-meeting speaker diarizer: the same coordinator,
 /// models, runtime policy and windowed session the app runs after a meeting.
-/// It leaves the app's diarization log and telemetry alone.
+/// It leaves the app's diarization log, telemetry and preload crash marker alone.
 public enum NativeFileDiarizer {
-    public struct Segment: Sendable, Equatable {
+    public struct Segment: Sendable, Equatable, Encodable {
         public let speaker: String
         public let start: Double
         public let end: Double
@@ -22,10 +22,13 @@ public enum NativeFileDiarizer {
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> [Segment] {
         let coordinator = TranscriptionCoordinator(
-            diarizerDiagnostics: DiarizerPreloadDiagnostics(signalSink: { _, _ in })
+            diarizerDiagnostics: DiarizerPreloadDiagnostics(
+                defaults: UserDefaults(suiteName: "muesli-cli-diarize") ?? UserDefaults(),
+                signalSink: { _, _ in }
+            )
         )
         progress("loading speaker diarization models")
-        await coordinator.preloadDiarizer(trigger: .audioImport)
+        await coordinator.preloadDiarizer(trigger: .cli)
         progress("diarizing")
         let segments = try await coordinator.runRecordedAudioDiarization(at: wavURL) { _ in }
         return segments.map {
