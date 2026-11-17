@@ -1670,7 +1670,7 @@ actor TranscriptionCoordinator {
         }
     }
 
-    private func runRecordedAudioDiarization(
+    func runRecordedAudioDiarization(
         at url: URL,
         progress: @escaping @Sendable (Double) async -> Void
     ) async throws -> [TimedSpeakerSegment] {
