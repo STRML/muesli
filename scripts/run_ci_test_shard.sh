@@ -66,6 +66,7 @@ case "${shard}" in
       FloatingIndicatorPointerInteractionTests
       IndicatorFrameSizeTests
       RecordingIndicatorStyleTests
+      RecordingIndicatorIconTests
       WindowAppearanceTests
       MuesliColorRolesTests
       OpenAILogoShapeTests
