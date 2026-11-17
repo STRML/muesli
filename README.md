@@ -114,6 +114,7 @@ muesli-cli spec
 muesli-cli meetings list --limit 10
 muesli-cli meetings get 42 # Replace 42 with an ID from the list
 muesli-cli transcribe interview.m4a --format json
+muesli-cli diarize meeting.wav # JSON segments of start, end, speaker
 ```
 
 All transcription models in the app are also available through `transcribe --model`, including `apple-speech` (macOS 26 and compatible hardware), `cohere-transcribe`, `bodhan-core`, `bodhan-core-int8`, `bodhan-flex`, `bodhan-flex-int8`, `gemma4-e2b`, and `gemma4-e4b` (macOS 15+). Use `muesli-cli transcribe --help` for the full list. Downloads reuse the app’s model caches; Apple manages its own language assets. Apple Speech uses the system language, Cohere defaults to English, and Bodhan defaults to Hindi. Gemma retains its experimental status.
