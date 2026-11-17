@@ -51,6 +51,7 @@ case "${shard}" in
       ICloudSyncStateScopeTests
       MuesliCLITests
       CapturesCLITests
+      DiarizeCLITests
       ChatGPTAuthTests
       ChatGPTResponsesTransportTests
       ChatGPTTokenStorageTests
