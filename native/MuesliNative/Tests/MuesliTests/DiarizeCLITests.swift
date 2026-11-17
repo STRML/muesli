@@ -61,4 +61,22 @@ struct DiarizeCLITests {
         let segments = try await NativeFileDiarizer.diarize(wavURL: url, progress: { _ in })
         #expect(segments.isEmpty)
     }
+
+    @Test("a speaker's turn cut at the 10 s window boundaries comes back as one segment")
+    func windowCutsMerge() {
+        let merged = NativeFileDiarizer.mergingWindowCuts([
+            .init(speaker: "1", start: 2, end: 10),
+            .init(speaker: "1", start: 10, end: 20),
+            .init(speaker: "1", start: 20, end: 23.5),
+            .init(speaker: "2", start: 23.5, end: 26),
+            .init(speaker: "1", start: 27, end: 29),
+            .init(speaker: "1", start: 31, end: 33),
+        ])
+        #expect(merged == [
+            .init(speaker: "1", start: 2, end: 23.5),
+            .init(speaker: "2", start: 23.5, end: 26),
+            .init(speaker: "1", start: 27, end: 29),
+            .init(speaker: "1", start: 31, end: 33),
+        ])
+    }
 }

@@ -21,19 +21,34 @@ public enum NativeFileDiarizer {
         wavURL: URL,
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> [Segment] {
+        let suiteName = "muesli-cli-diarize-\(UUID().uuidString)"
+        guard let scratchDefaults = UserDefaults(suiteName: suiteName) else { throw CocoaError(.featureUnsupported) }
+        defer { scratchDefaults.removePersistentDomain(forName: suiteName) }
         let coordinator = TranscriptionCoordinator(
-            diarizerDiagnostics: DiarizerPreloadDiagnostics(
-                defaults: UserDefaults(suiteName: "muesli-cli-diarize") ?? UserDefaults(),
-                signalSink: { _, _ in }
-            )
+            diarizerDiagnostics: DiarizerPreloadDiagnostics(defaults: scratchDefaults, signalSink: { _, _ in })
         )
         progress("loading speaker diarization models")
         await coordinator.preloadDiarizer(trigger: .cli)
         progress("diarizing")
         let segments = try await coordinator.runRecordedAudioDiarization(at: wavURL) { _ in }
-        return segments.map {
+        return mergingWindowCuts(segments.map {
             Segment(speaker: $0.speakerId, start: milliseconds($0.startTimeSeconds), end: milliseconds($0.endTimeSeconds))
+        })
+    }
+
+    /// The diarizer runs in 10 s windows and clips each segment to its window, so one
+    /// speaker's turn arrives in pieces that touch at the cut. Joins those pieces.
+    public static func mergingWindowCuts(_ segments: [Segment], tolerance: Double = 0.05) -> [Segment] {
+        var merged: [Segment] = []
+        for segment in segments {
+            guard let last = merged.last, last.speaker == segment.speaker,
+                  segment.start - last.end <= tolerance else {
+                merged.append(segment)
+                continue
+            }
+            merged[merged.count - 1] = Segment(speaker: last.speaker, start: last.start, end: max(last.end, segment.end))
         }
+        return merged
     }
 
     private static func milliseconds(_ seconds: Float) -> Double {
