@@ -79,4 +79,18 @@ struct DiarizeCLITests {
             .init(speaker: "1", start: 31, end: 33),
         ])
     }
+
+    @Test("overlapping speakers each keep one segment across a window cut")
+    func overlappingWindowCutsMerge() {
+        let merged = NativeFileDiarizer.mergingWindowCuts([
+            .init(speaker: "A", start: 2, end: 10),
+            .init(speaker: "B", start: 8, end: 10),
+            .init(speaker: "A", start: 10, end: 13),
+            .init(speaker: "B", start: 10, end: 12),
+        ])
+        #expect(merged == [
+            .init(speaker: "A", start: 2, end: 13),
+            .init(speaker: "B", start: 8, end: 12),
+        ])
+    }
 }

@@ -192,7 +192,7 @@ actor TranscriptionCoordinator {
     // Product flows stop waiting after two minutes and continue without optional
     // diarization. The shared background load gets a longer cooperative deadline.
     private static let defaultDiarizerLoadWaitTimeout: Duration = .seconds(120)
-    private static let defaultDiarizerLoadOperationTimeout: Duration = .seconds(300)
+    static let defaultDiarizerLoadOperationTimeout: Duration = .seconds(300)
 
     static let explicitlyRoutedBackendIdentifiers: Set<String> = [
         "whisper", "nemotron35", "parakeet-unified", "qwen", "cohere", "medasr", "bodhan", "sensevoice", "gemma4-litert", "apple-speech",

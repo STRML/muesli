@@ -21,14 +21,16 @@ public enum NativeFileDiarizer {
         wavURL: URL,
         progress: @escaping @Sendable (String) -> Void
     ) async throws -> [Segment] {
-        let suiteName = "muesli-cli-diarize-\(UUID().uuidString)"
+        let suiteName = "muesli-cli-diarize"
         guard let scratchDefaults = UserDefaults(suiteName: suiteName) else { throw CocoaError(.featureUnsupported) }
-        defer { scratchDefaults.removePersistentDomain(forName: suiteName) }
         let coordinator = TranscriptionCoordinator(
             diarizerDiagnostics: DiarizerPreloadDiagnostics(defaults: scratchDefaults, signalSink: { _, _ in })
         )
         progress("loading speaker diarization models")
-        await coordinator.preloadDiarizer(trigger: .cli)
+        await coordinator.preloadDiarizer(
+            trigger: .cli,
+            waitTimeout: TranscriptionCoordinator.defaultDiarizerLoadOperationTimeout
+        )
         progress("diarizing")
         let segments = try await coordinator.runRecordedAudioDiarization(at: wavURL) { _ in }
         return mergingWindowCuts(segments.map {
@@ -40,13 +42,16 @@ public enum NativeFileDiarizer {
     /// speaker's turn arrives in pieces that touch at the cut. Joins those pieces.
     public static func mergingWindowCuts(_ segments: [Segment], tolerance: Double = 0.05) -> [Segment] {
         var merged: [Segment] = []
+        var lastIndexBySpeaker: [String: Int] = [:]
         for segment in segments {
-            guard let last = merged.last, last.speaker == segment.speaker,
-                  segment.start - last.end <= tolerance else {
+            guard let index = lastIndexBySpeaker[segment.speaker],
+                  segment.start - merged[index].end <= tolerance else {
+                lastIndexBySpeaker[segment.speaker] = merged.count
                 merged.append(segment)
                 continue
             }
-            merged[merged.count - 1] = Segment(speaker: last.speaker, start: last.start, end: max(last.end, segment.end))
+            let last = merged[index]
+            merged[index] = Segment(speaker: last.speaker, start: last.start, end: max(last.end, segment.end))
         }
         return merged
     }
