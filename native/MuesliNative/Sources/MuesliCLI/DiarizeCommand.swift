@@ -48,7 +48,7 @@ struct DiarizeCommand: AsyncParsableCommand {
         } catch DiarizerError.notInitialized {
             throw CLIError.notFound(
                 "Speaker diarization models could not be loaded.",
-                fix: "The models did not finish loading within 5 minutes; stderr shows any load error. The first run downloads them, so check the network and retry."
+                fix: "The load failed or ran past 5 minutes; stderr shows the load error if there was one. The first run downloads the models, so check the network and retry."
             )
         }
 
