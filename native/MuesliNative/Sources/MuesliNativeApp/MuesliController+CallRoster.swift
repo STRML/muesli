@@ -62,6 +62,7 @@ extension MuesliController {
         // Counts only: names stay out of the log.
         fputs("[call-roster] meeting \(meetingID): \(added.count) new on the call, \(callRosterBook.names(for: meetingID).count) seen\n", stderr)
         NotificationCenter.default.post(name: .meetingParticipantsDidChange, object: meetingID)
+        refreshLiveSpeakerDirectory(meetingID: meetingID)
     }
 
     private func browserProcessIDs(preferring bundleID: String?) -> [pid_t] {

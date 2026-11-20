@@ -359,6 +359,9 @@ case "${shard}" in
       CallRosterParserTests
       CallRosterNamingTests
       CallRosterTrackerTests
+      LiveMeetingSpeakerStateTests
+      LiveSpeakerReconcilerTests
+      SpeakerPickerTests
     )
     ;;
   *)

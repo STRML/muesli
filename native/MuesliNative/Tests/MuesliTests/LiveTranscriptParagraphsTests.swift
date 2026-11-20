@@ -321,6 +321,110 @@ struct LiveTranscriptParagraphsTests {
         let b = build([row(0, 0, "Speaker 1", "Hello there friend."), row(1, 2, "Speaker 1", "More.")])
         #expect(a[0].id == b[0].id)
     }
+
+    @Test("structured store builder propagates turnID, clusterID, and keeps paragraph IDs stable across renames")
+    func storeBuilderRenameStability() throws {
+        var store = LiveMeetingSpeakerStore()
+        let firstID = UUID()
+        let secondID = UUID()
+        store.appendTurn(
+            id: firstID,
+            source: "Others",
+            startSeconds: 0,
+            endSeconds: 4,
+            timestampLabel: "00:00:00",
+            liveClusterID: "Speaker 1",
+            text: "Hello from one."
+        )
+        store.appendTurn(
+            id: secondID,
+            source: "Others",
+            startSeconds: 10,
+            endSeconds: 14,
+            timestampLabel: "00:00:10",
+            liveClusterID: "Speaker 2",
+            text: "Reply from two."
+        )
+
+        let before = LiveTranscriptParagraphs.build(
+            turns: store.turns,
+            store: store,
+            partialYou: "",
+            partialOthers: ""
+        )
+        #expect(before.count == 2)
+        #expect(before[0].turnID == firstID)
+        #expect(before[0].liveClusterID == "Speaker 1")
+        #expect(before[0].speaker == "Speaker 1")
+        #expect(before[1].turnID == secondID)
+        #expect(before[1].liveClusterID == "Speaker 2")
+
+        try store.assignCluster("Speaker 1", to: .newName("Alice"))
+        let after = LiveTranscriptParagraphs.build(
+            turns: store.turns,
+            store: store,
+            partialYou: "",
+            partialOthers: ""
+        )
+        #expect(after.count == 2)
+        #expect(after[0].speaker == "Alice")
+        #expect(after[0].id == before[0].id)
+        #expect(after[0].turnID == firstID)
+        #expect(after[0].liveClusterID == "Speaker 1")
+        #expect(after[1].id == before[1].id)
+        #expect(after[1].speaker == "Speaker 2")
+    }
+
+    @Test("partialOthers avoids misattribution when multiple remote speakers are active")
+    func partialOthersMultiSpeakerResolution() throws {
+        var singleStore = LiveMeetingSpeakerStore()
+        singleStore.appendTurn(
+            source: "Others",
+            startSeconds: 0,
+            endSeconds: 3,
+            timestampLabel: "00:00:00",
+            liveClusterID: "Speaker 1",
+            text: "First point."
+        )
+        try singleStore.assignCluster("Speaker 1", to: .newName("Alice"))
+        let singleParagraphs = LiveTranscriptParagraphs.build(
+            turns: singleStore.turns,
+            store: singleStore,
+            partialYou: "",
+            partialOthers: "typing tail"
+        )
+        #expect(singleParagraphs.count == 1)
+        #expect(singleParagraphs[0].speaker == "Alice")
+        #expect(singleParagraphs[0].committed == "First point.")
+        #expect(singleParagraphs[0].tail == "typing tail")
+
+        var multiStore = LiveMeetingSpeakerStore()
+        multiStore.appendTurn(
+            source: "Others",
+            startSeconds: 0,
+            endSeconds: 3,
+            timestampLabel: "00:00:00",
+            liveClusterID: "Speaker 1",
+            text: "One."
+        )
+        multiStore.appendTurn(
+            source: "Others",
+            startSeconds: 5,
+            endSeconds: 8,
+            timestampLabel: "00:00:05",
+            liveClusterID: "Speaker 2",
+            text: "Two."
+        )
+        let multiParagraphs = LiveTranscriptParagraphs.build(
+            turns: multiStore.turns,
+            store: multiStore,
+            partialYou: "",
+            partialOthers: "someone talking"
+        )
+        #expect(multiParagraphs.last?.speaker == "Others")
+        #expect(multiParagraphs.last?.committed.isEmpty == true)
+        #expect(multiParagraphs.last?.tail == "someone talking")
+    }
 }
 
 private func select(_ s: inout LiveTabAutoSelect, _ id: Int64, _ isRecording: Bool) -> Bool {

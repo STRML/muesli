@@ -1654,16 +1654,28 @@ actor TranscriptionCoordinator {
         ))
     }
 
+    struct RecordedAudioDiarizationResult: Sendable {
+        let segments: [TimedSpeakerSegment]
+        let speakerCentroids: [String: [Float]]
+    }
+
     /// Shared bounded PCM diarization for imported/retained recordings and both
     /// meeting channels. Each invocation has independent speaker identities.
     func diarizeRecordedAudio(
         at url: URL,
         progress: @escaping @Sendable (Double) async -> Void = { _ in }
     ) async throws -> [TimedSpeakerSegment] {
+        try await diarizeRecordedAudioWithCentroids(at: url, progress: progress).segments
+    }
+
+    func diarizeRecordedAudioWithCentroids(
+        at url: URL,
+        progress: @escaping @Sendable (Double) async -> Void = { _ in }
+    ) async throws -> RecordedAudioDiarizationResult {
         do {
-            let segments = try await runRecordedAudioDiarization(at: url, progress: progress)
-            DiarizationOutcomeLog.shared.record(.applied(segments: segments.count, speakers: Set(segments.map(\.speakerId)).count))
-            return segments
+            let result = try await runRecordedAudioDiarizationWithCentroids(at: url, progress: progress)
+            DiarizationOutcomeLog.shared.record(.applied(segments: result.segments.count, speakers: Set(result.segments.map(\.speakerId)).count))
+            return result
         } catch {
             DiarizationOutcomeLog.shared.record(.failed(ContentPrivacy.shared.logDescription(error)))
             throw error
@@ -1674,6 +1686,13 @@ actor TranscriptionCoordinator {
         at url: URL,
         progress: @escaping @Sendable (Double) async -> Void
     ) async throws -> [TimedSpeakerSegment] {
+        try await runRecordedAudioDiarizationWithCentroids(at: url, progress: progress).segments
+    }
+
+    func runRecordedAudioDiarizationWithCentroids(
+        at url: URL,
+        progress: @escaping @Sendable (Double) async -> Void
+    ) async throws -> RecordedAudioDiarizationResult {
         try Task.checkCancellation()
         guard let diarizerManager, diarizerManager.isAvailable else { throw DiarizerError.notInitialized }
         let session = RecordedAudioDiarizationSession(manager: diarizerManager)
@@ -1684,19 +1703,26 @@ actor TranscriptionCoordinator {
             await progress(window.fraction)
         }
         try Task.checkCancellation()
-        return segments
+        return RecordedAudioDiarizationResult(
+            segments: segments,
+            speakerCentroids: session.speakerCentroids()
+        )
     }
 
     func diarizeSystemAudio(at url: URL) async throws -> [TimedSpeakerSegment]? {
+        try await diarizeSystemAudioWithCentroids(at: url)?.segments
+    }
+
+    func diarizeSystemAudioWithCentroids(at url: URL) async throws -> RecordedAudioDiarizationResult? {
         guard let diarizerManager, diarizerManager.isAvailable else {
             fputs("[muesli-native] diarization not available, skipping\n", stderr)
             DiarizationOutcomeLog.shared.record(.notLoaded)
             return nil
         }
         fputs("[muesli-native] running speaker diarization on system audio...\n", stderr)
-        let result = try await diarizeRecordedAudio(at: url)
-        let speakerCount = Set(result.map(\.speakerId)).count
-        fputs("[muesli-native] diarization complete: \(result.count) segments, \(speakerCount) speakers\n", stderr)
+        let result = try await diarizeRecordedAudioWithCentroids(at: url)
+        let speakerCount = Set(result.segments.map(\.speakerId)).count
+        fputs("[muesli-native] diarization complete: \(result.segments.count) segments, \(speakerCount) speakers\n", stderr)
         return result
     }
 

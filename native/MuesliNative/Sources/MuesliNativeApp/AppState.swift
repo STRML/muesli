@@ -259,6 +259,10 @@ final class AppState {
     /// source; owner-gated by `liveMeetingTranscriptOwnerID` like the transcript.
     var liveMeetingPartialYou: String = ""
     var liveMeetingPartialOthers: String = ""
+    var liveMeetingSpeakerStore: LiveMeetingSpeakerStore = LiveMeetingSpeakerStore()
+    var liveDiarizationStatus: LiveDiarizationStatus = .off
+    var liveSpeakerProfiles: [SpeakerProfileSummary] = []
+    var liveMeetingParticipants: [MeetingParticipant] = []
     var activeMeetingAudioWarning: ActiveMeetingAudioWarning?
     var dictationState: DictationState = .idle
     var isVoiceNoteRecording: Bool = false

@@ -71,6 +71,8 @@ struct ResponsiveHorizontalLayout<Wide: View, Compact: View>: View {
 // reference and never reads liveMeetingTranscript in its own body.
 private struct LiveTranscriptSection: View {
     let appState: AppState
+    let controller: MuesliController
+    let meetingID: Int64
     let transcriptPrefix: String
 
     var body: some View {
@@ -80,8 +82,26 @@ private struct LiveTranscriptSection: View {
                 new: appState.liveMeetingTranscript
             ),
             partialYou: appState.liveMeetingPartialYou,
-            partialOthers: appState.liveMeetingPartialOthers
+            partialOthers: appState.liveMeetingPartialOthers,
+            priorTranscript: transcriptPrefix,
+            speakerStore: appState.liveMeetingSpeakerStore,
+            diarizationStatus: appState.liveDiarizationStatus,
+            speakerProfiles: appState.liveSpeakerProfiles,
+            meetingParticipants: appState.liveMeetingParticipants,
+            onEnableLiveLabels: { controller.enableLiveSpeakerLabelsQuickAction() },
+            onSelectSpeaker: { clusterID, turnID, selection in
+                controller.applyLiveSpeakerSelection(clusterID: clusterID, turnID: turnID, selection: selection)
+            },
+            onRenameSpeakerEntry: { entryID, selection in
+                controller.renameLiveSpeaker(entryID: entryID, selection: selection)
+            },
+            onSearchPeople: { query in
+                (try? await controller.globalSearchWorker.people(matching: query)) ?? []
+            }
         )
+        .task(id: meetingID) {
+            controller.refreshLiveSpeakerDirectory(meetingID: meetingID)
+        }
     }
 }
 
@@ -680,7 +700,12 @@ struct MeetingDetailView: View {
                     .allowsHitTesting(recordingMode == .notes)
                     .accessibilityHidden(recordingMode != .notes)
 
-                    LiveTranscriptSection(appState: appState, transcriptPrefix: meeting.rawTranscript)
+                    LiveTranscriptSection(
+                        appState: appState,
+                        controller: controller,
+                        meetingID: meeting.id,
+                        transcriptPrefix: meeting.rawTranscript
+                    )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(recordingMode == .live ? 1 : 0)
                         .allowsHitTesting(recordingMode == .live)
@@ -789,7 +814,9 @@ struct MeetingDetailView: View {
                         highlightedRange: sourceTarget.flatMap { $0.showsTranscript ? $0.locate(in: meeting.rawTranscript) : nil },
                         recordingPath: meeting.savedRecordingPath.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil },
                         meetingStartTime: meeting.startTime,
-                        recordingDuration: meeting.durationSeconds
+                        recordingDuration: meeting.durationSeconds,
+                        meetingID: meeting.id,
+                        controller: controller
                     )
                         .opacity(documentMode == .transcript ? 1 : 0)
                         .allowsHitTesting(documentMode == .transcript)
@@ -1278,23 +1305,26 @@ struct MeetingDetailView: View {
     }
 
     private func recordingContextRow(for meeting: MeetingRecord) -> some View {
-        HStack(spacing: 16) {
+        WrappingHStack(spacing: MuesliTheme.spacing12, lineSpacing: MuesliTheme.spacing8) {
             recordingTemplatePicker(for: meeting)
+            MeetingParticipantsView(meetingID: meeting.id, controller: controller)
+                .frame(maxWidth: 200)
             Button { showRecordingDetails.toggle() } label: {
                 HStack(spacing: 5) {
                     Text("Details")
+                        .font(MuesliTheme.caption())
                     Image(systemName: "chevron.down").font(.system(size: 9))
                 }
                 .foregroundStyle(MuesliTheme.textSecondary)
-                .padding(.horizontal, 6)
-                .frame(minHeight: 28)
+                .padding(.horizontal, 8)
+                .frame(minHeight: MeetingHeaderLayout.contextControlHeight)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.muesli(.quiet))
+            .fixedSize()
             .popover(isPresented: $showRecordingDetails) {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: MuesliTheme.spacing12) {
                     folderPill(for: meeting)
-                    MeetingParticipantsView(meetingID: meeting.id, controller: controller)
                     if meeting.status == .recording, controller.visualMemory.recordingMeetingID != meeting.id {
                         Divider()
                         Button {
@@ -1307,11 +1337,11 @@ struct MeetingDetailView: View {
                                   || appState.isMeetingRecordingPaused || isPreparingThisMeeting(meeting))
                     }
                 }
-                .padding(20)
-                .frame(width: 280)
+                .padding(MuesliTheme.spacing16)
+                .frame(width: 240)
             }
-            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -2783,20 +2813,27 @@ private struct MeetingTranscriptView: View {
     var recordingPath: String? = nil
     var meetingStartTime = ""
     var recordingDuration: TimeInterval = 0
+    var meetingID: Int64? = nil
+    var controller: MuesliController? = nil
     @State private var messages: [TranscriptChatMessage]
+    @State private var speakerDirectory: LiveSpeakerDirectorySnapshot? = nil
 
     init(
         transcript: String,
         highlightedRange: NSRange? = nil,
         recordingPath: String? = nil,
         meetingStartTime: String = "",
-        recordingDuration: TimeInterval = 0
+        recordingDuration: TimeInterval = 0,
+        meetingID: Int64? = nil,
+        controller: MuesliController? = nil
     ) {
         self.transcript = transcript
         self.highlightedRange = highlightedRange
         self.recordingPath = recordingPath
         self.meetingStartTime = meetingStartTime
         self.recordingDuration = recordingDuration
+        self.meetingID = meetingID
+        self.controller = controller
         _messages = State(initialValue: TranscriptChatMessage.messages(from: transcript))
     }
 
@@ -2819,6 +2856,23 @@ private struct MeetingTranscriptView: View {
         }
     }
 
+    private var assignSpeakerAction: ((_ label: String, _ selection: SpeakerPickerSelection) -> Void)? {
+        guard let meetingID, let controller else { return nil }
+        return { label, selection in
+            Task {
+                try? await controller.assignPostCallSpeaker(meetingID: meetingID, label: label, selection: selection)
+                await reloadSpeakerDirectory()
+            }
+        }
+    }
+
+    private var searchPeopleAction: (@MainActor (String) async -> [MeetingParticipantDraft])? {
+        guard let controller else { return nil }
+        return { query in
+            (try? await controller.globalSearchWorker.people(matching: query)) ?? []
+        }
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
         ScrollView {
@@ -2832,7 +2886,13 @@ private struct MeetingTranscriptView: View {
                 } else {
                     let playback = playback
                     ForEach(messages) { message in
-                        TranscriptChatBubble(message: message, onPlay: playAction(for: message, playback: playback))
+                        TranscriptChatBubble(
+                            message: message,
+                            onPlay: playAction(for: message, playback: playback),
+                            speakerDirectory: speakerDirectory,
+                            onAssignSpeaker: assignSpeakerAction,
+                            onSearchPeople: searchPeopleAction
+                        )
                             .background(message.id == highlightedMessageID ? MuesliTheme.surfaceSelected : Color.clear)
                             .id(message.id)
                     }
@@ -2848,8 +2908,49 @@ private struct MeetingTranscriptView: View {
         .onChange(of: transcript) { _, newTranscript in
             messages = TranscriptChatMessage.messages(from: newTranscript)
         }
+        .task(id: meetingID) { await reloadSpeakerDirectory() }
+        .onReceive(NotificationCenter.default.publisher(for: .meetingSpeakersDidChange)) { notification in
+            if let id = notification.object as? Int64, id != meetingID { return }
+            Task { await reloadSpeakerDirectory() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .meetingParticipantsDidChange)) { notification in
+            if let id = notification.object as? Int64, id != meetingID { return }
+            Task { await reloadSpeakerDirectory() }
+        }
         }
     }
+
+    private func reloadSpeakerDirectory() async {
+        guard let meetingID, let controller else { return }
+        async let speakersTask = (try? controller.meetingSpeakers(meetingID: meetingID)) ?? []
+        async let profilesTask = (try? controller.speakerProfiles()) ?? []
+        async let participantsTask = (try? controller.meetingParticipants(meetingID: meetingID)) ?? []
+        async let knownTask = (try? controller.globalSearchWorker.people(matching: "")) ?? []
+        let (speakers, profiles, participants, known) = await (speakersTask, profilesTask, participantsTask, knownTask)
+        var names: [String] = []
+        var seen = Set<String>()
+        for speaker in speakers {
+            if let name = speaker.profileName {
+                let key = name.lowercased()
+                if seen.insert(key).inserted { names.append(name) }
+            }
+        }
+        for participant in participants {
+            let name = MeetingContactIdentity.compactDisplayName(
+                participant.displayName,
+                emailAddress: participant.emailAddress
+            )
+            let key = name.lowercased()
+            if !key.isEmpty, seen.insert(key).inserted { names.append(name) }
+        }
+        speakerDirectory = LiveSpeakerDirectorySnapshot(
+            inMeetingNames: names,
+            profiles: profiles,
+            knownPeople: known,
+            activeClusterLabels: speakers.map(\.label)
+        )
+    }
+
     private var highlightedMessageID: Int? {
         guard let range = highlightedRange else { return nil }
         return MeetingChatDocumentTarget.transcriptMessageID(in: transcript, range: range)
@@ -2859,6 +2960,22 @@ private struct MeetingTranscriptView: View {
 struct TranscriptChatBubble: View {
     let message: TranscriptChatMessage
     var onPlay: (() -> Void)? = nil
+    var speakerDirectory: LiveSpeakerDirectorySnapshot? = nil
+    var onAssignSpeaker: ((_ label: String, _ selection: SpeakerPickerSelection) -> Void)? = nil
+    var onSearchPeople: (@MainActor (String) async -> [MeetingParticipantDraft])? = nil
+
+    @State private var isSpeakerPickerPresented = false
+    @State private var isHoveringSpeaker = false
+
+    private var editableSpeakerLabel: String? {
+        guard !message.isUser,
+              let speaker = message.speaker,
+              onAssignSpeaker != nil,
+              !SpeakerVoiceprintMatcher.reservedLabels.contains(where: { $0.caseInsensitiveCompare(speaker) == .orderedSame }) else {
+            return nil
+        }
+        return speaker
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: MuesliTheme.spacing8) {
@@ -2867,12 +2984,66 @@ struct TranscriptChatBubble: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                if let metadata = metadata {
+                if let speaker = editableSpeakerLabel {
+                    HStack(spacing: 6) {
+                        Button {
+                            isSpeakerPickerPresented = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(SpeakerColorPalette.color(for: speaker))
+                                    .frame(width: 6, height: 6)
+                                Text(speaker)
+                                    .font(MuesliTheme.metadata())
+                                    .foregroundStyle(MuesliTheme.textSecondary)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 8, weight: .semibold))
+                                    .foregroundStyle(MuesliTheme.textTertiary)
+                                    .opacity(isHoveringSpeaker || isSpeakerPickerPresented ? 1 : 0.45)
+                            }
+                            .padding(.horizontal, 5)
+                            .frame(minHeight: 22)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.muesli(.quiet))
+                        .onHover { isHoveringSpeaker = $0 }
+                        .help("Rename or merge \(speaker)")
+                        .popover(isPresented: $isSpeakerPickerPresented, arrowEdge: .bottom) {
+                            let assignedName = SpeakerNameValidator.isReservedLabel(speaker) ? nil : speaker
+                            SpeakerPickerPopover(
+                                title: assignedName != nil ? "Rename \(speaker)" : "Name \(speaker)",
+                                currentClusterLabel: speaker,
+                                currentAssignedName: assignedName,
+                                inMeetingNames: speakerDirectory?.inMeetingNames ?? [],
+                                profiles: speakerDirectory?.profiles ?? [],
+                                knownPeople: speakerDirectory?.knownPeople ?? [],
+                                activeClusterLabels: speakerDirectory?.activeClusterLabels ?? [],
+                                allowMergeClusters: true,
+                                showsScopeSwitcher: false,
+                                searchPeople: onSearchPeople,
+                                onSelect: { selection in
+                                    isSpeakerPickerPresented = false
+                                    onAssignSpeaker?(speaker, selection)
+                                },
+                                onDismiss: {
+                                    isSpeakerPickerPresented = false
+                                }
+                            )
+                        }
+
+                        if let timestamp = message.timestamp {
+                            Text(timestamp)
+                                .font(MuesliTheme.metadata())
+                                .foregroundStyle(MuesliTheme.textTertiary)
+                        }
+                    }
+                    .padding(.trailing, onPlay == nil ? 0 : 24)
+                } else if let metadata = metadata {
                     Text(metadata)
-                        .font(MuesliTheme.font(size: 10, weight: .medium))
-                        .foregroundStyle(MuesliTheme.textTertiary)
+                        .font(MuesliTheme.metadata())
+                        .foregroundStyle(message.isUser ? MuesliTheme.accentText : MuesliTheme.textTertiary)
                         .textSelection(.enabled)
-                        .padding(.trailing, onPlay == nil ? 0 : 22)
+                        .padding(.trailing, onPlay == nil ? 0 : 24)
                 }
                 Text(message.text)
                     .font(MuesliTheme.reading())

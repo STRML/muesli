@@ -236,20 +236,40 @@ struct MeetingRecordingTranscriberTests {
         #expect(end == 3_601)
     }
 
-    @Test("diarization clips padded tail, drops embeddings and bounds speaker tracking")
+    @Test("diarization clips padded tail, preserves usable embeddings, and bounds speaker tracking")
     func diarizationBounds() throws {
         let segments = [
             TimedSpeakerSegment(speakerId: "1", embedding: [1, 2], startTimeSeconds: 9, endTimeSeconds: 20, qualityScore: 1),
             TimedSpeakerSegment(speakerId: "2", embedding: [3, 4], startTimeSeconds: 15, endTimeSeconds: 20, qualityScore: 1),
+            TimedSpeakerSegment(speakerId: "3", embedding: [0, 0], startTimeSeconds: 10, endTimeSeconds: 11, qualityScore: 1),
+            TimedSpeakerSegment(speakerId: "4", embedding: [.nan, 1], startTimeSeconds: 10, endTimeSeconds: 11, qualityScore: 1),
         ]
         let result = RecordedAudioDiarizationSession.clippedSegments(segments, start: 10, end: 11)
-        #expect(result.count == 1)
+        #expect(result.count == 3)
         #expect(result.first?.startTimeSeconds == 10)
         #expect(result.first?.endTimeSeconds == 11)
-        #expect(result.first?.embedding.isEmpty == true)
+        #expect(result.first?.embedding == [1, 2])
+        #expect(result[1].embedding.isEmpty)
+        #expect(result[2].embedding.isEmpty)
         try RecordedAudioDiarizationSession.validateSpeakerCount(128)
         #expect(throws: (any Error).self) { try RecordedAudioDiarizationSession.validateSpeakerCount(129) }
         #expect(MeetingRetranscriptionProgress(phase: .diarizing).isRunning)
+    }
+
+    @Test("diarization session accumulates duration-weighted centroids in O(speakers) state")
+    func sessionCentroidAccumulation() throws {
+        let session = RecordedAudioDiarizationSession(manager: DiarizerManager())
+        session.accumulateCentroids(from: [
+            TimedSpeakerSegment(speakerId: "spk_1", embedding: [2, 0], startTimeSeconds: 0, endTimeSeconds: 6, qualityScore: 1),
+            TimedSpeakerSegment(speakerId: "spk_1", embedding: [0, 1], startTimeSeconds: 6, endTimeSeconds: 8, qualityScore: 1),
+            TimedSpeakerSegment(speakerId: "spk_2", embedding: [0, 0], startTimeSeconds: 8, endTimeSeconds: 12, qualityScore: 1),
+        ])
+        let centroids = session.speakerCentroids()
+        #expect(centroids.keys.sorted() == ["spk_1"])
+        let spk1 = try #require(centroids["spk_1"])
+        let norm = (0.75 * 0.75 + 0.25 * 0.25 as Float).squareRoot()
+        #expect(abs(spk1[0] - 0.75 / norm) < 0.0001)
+        #expect(abs(spk1[1] - 0.25 / norm) < 0.0001)
     }
 
     @Test("mixed-speaker ASR windows are not attributed entirely to one voice")

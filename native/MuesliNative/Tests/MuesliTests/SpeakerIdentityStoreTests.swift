@@ -404,4 +404,98 @@ struct SpeakerIdentityStoreTests {
         let fieldNames = Mirror(reflecting: records[0]).children.compactMap(\.label).map { $0.lowercased() }
         #expect(!fieldNames.contains { $0.contains("embedding") || $0.contains("voiceprint") || $0.contains("profile") })
     }
+
+    // MARK: - Live pre-adds, cluster merges, and resumed meetings
+
+    @Test("findOrCreateSpeakerProfile creates and deduplicates profiles case-insensitively before diarization")
+    func preCreateSpeakerProfile() throws {
+        let store = try makeStore()
+        let first = try store.findOrCreateSpeakerProfile(name: "  Alex Chen ")
+        let second = try store.findOrCreateSpeakerProfile(name: "alex chen")
+        #expect(first.id == second.id)
+        #expect(first.name == "Alex Chen")
+        #expect(try store.speakerProfiles().count == 1)
+        #expect(throws: SpeakerIdentityError.self) {
+            _ = try store.findOrCreateSpeakerProfile(name: "Speaker 1")
+        }
+    }
+
+    @Test("merging two speakers in one meeting folds rows, rewrites transcript, and combines centroids")
+    func mergeMeetingSpeakers() throws {
+        let store = try makeStore()
+        let id = try insertMeeting(store)
+        _ = try store.recordMeetingSpeakers(
+            meetingID: id,
+            observations: [observation("Speaker 1", unit(0)), observation("Speaker 12", unit(1))],
+            renderNames: true
+        )
+        _ = try store.assignSpeaker(meetingID: id, label: "Speaker 1", name: "Alex")
+        let merged = try store.mergeMeetingSpeakers(meetingID: id, sourceLabel: "Speaker 12", intoTargetName: "alex")
+        #expect(merged.transcriptRewritten)
+        #expect(merged.voiceprintStored)
+        let speakers = try store.meetingSpeakers(meetingID: id)
+        #expect(speakers.count == 1)
+        #expect(speakers.first?.label == "Alex")
+        #expect(try rawTranscript(store, id) == """
+        [10:00:00] You: hello Speaker 1: are you there
+        [10:00:03] Alex: hi from one
+        [10:00:06] Alex: hi from twelve
+        [10:00:09] Alex: back to one
+        """)
+        #expect(try store.speakerProfiles().map(\.voiceprintCount) == [1])
+    }
+
+    @Test("explicit live assignments beat voiceprints, fold merged clusters, and store voiceprints")
+    func explicitLiveObservationsInPipeline() throws {
+        let store = try makeStore()
+        let prior = try insertMeeting(store)
+        _ = try store.recordMeetingSpeakers(meetingID: prior, observations: [observation("Speaker 1", unit(0))], renderNames: true)
+        _ = try store.assignSpeaker(meetingID: prior, label: "Speaker 1", name: "Alex")
+
+        let current = try insertMeeting(store)
+        let rendered = try store.recordMeetingSpeakers(
+            meetingID: current,
+            observations: [
+                // Even though unit(0) matches Alex by voiceprint, live edit assigned it to Blair.
+                MeetingSpeakerObservation(label: "Speaker 1", centroid: unit(0), speechSeconds: 20, assignedName: "Blair"),
+                // Speaker 12 was merged into Blair live as well.
+                MeetingSpeakerObservation(label: "Speaker 12", centroid: unit(2), speechSeconds: 20, assignedName: "Blair"),
+            ],
+            renderNames: true
+        )
+        #expect(rendered == ["Speaker 1": "Blair", "Speaker 12": "Blair"])
+        let speakers = try store.meetingSpeakers(meetingID: current)
+        #expect(speakers.count == 1)
+        #expect(speakers.first?.label == "Blair")
+        #expect(speakers.first?.hasVoiceprintFromMeeting == true)
+    }
+
+    @Test("resumed meeting preserves prior speaker rows and avoids label collisions")
+    func resumedMeetingPreservesSpeakers() throws {
+        let store = try makeStore()
+        let id = try insertMeeting(store)
+        _ = try store.recordMeetingSpeakers(
+            meetingID: id,
+            observations: [observation("Speaker 1", unit(0)), observation("Speaker 2", unit(1))],
+            renderNames: true
+        )
+        _ = try store.assignSpeaker(meetingID: id, label: "Speaker 1", name: "Alex")
+
+        // Second recording session on the same meeting: Alex returns as Speaker 2, and a new unnamed Speaker 1 speaks.
+        // Because Speaker 2 was still unnamed from the first session, the new unnamed Speaker 1 stays Speaker 1
+        // while a colliding unnamed Speaker 2 is allocated Speaker 3.
+        let rendered = try store.recordMeetingSpeakers(
+            meetingID: id,
+            observations: [
+                observation("Speaker 1", unit(0)), // matches Alex
+                observation("Speaker 2", unit(4)), // unnamed, collides with existing unnamed Speaker 2
+            ],
+            renderNames: true,
+            preservingExisting: true
+        )
+        #expect(rendered["Speaker 1"] == "Alex")
+        #expect(rendered["Speaker 2"] == "Speaker 3")
+        let labels = Set(try store.meetingSpeakers(meetingID: id).map(\.label))
+        #expect(labels == ["Alex", "Speaker 2", "Speaker 3"])
+    }
 }

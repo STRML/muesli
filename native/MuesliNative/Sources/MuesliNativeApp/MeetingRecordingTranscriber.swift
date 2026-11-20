@@ -165,13 +165,41 @@ final class DiarizationPCMWindowReader {
 }
 
 /// Reuses the loaded models, but never shares speaker identities across jobs.
-/// PCM is bounded to the model's native ten-second window; only lightweight
-/// speaker/timing output grows with the transcript, not audio or embeddings.
+/// PCM is bounded to the model's native ten-second window; per-speaker centroids
+/// accumulate in O(speakers) state alongside clipped timing segments.
 final class RecordedAudioDiarizationSession {
     static let windowSeconds: Double = 10
     static let maximumSpeakers = 128
     private let manager: DiarizerManager
     private var speakers: SpeakerManager
+    private var centroidAccumulators: [String: CentroidAccumulator] = [:]
+
+    private struct CentroidAccumulator {
+        var sumsByDimension: [Int: (sum: [Float], weight: Float)] = [:]
+
+        mutating func add(embedding: [Float], weight: Float) {
+            guard weight > 0, weight.isFinite, SpeakerVoiceprintMatcher.isUsable(embedding) else { return }
+            let norm = embedding.reduce(0) { $0 + $1 * $1 }.squareRoot()
+            guard norm > 0, norm.isFinite else { return }
+            let dimension = embedding.count
+            var entry = sumsByDimension[dimension] ?? (sum: [Float](repeating: 0, count: dimension), weight: 0)
+            for index in 0..<dimension {
+                entry.sum[index] += (embedding[index] / norm) * weight
+            }
+            entry.weight += weight
+            sumsByDimension[dimension] = entry
+        }
+
+        func centroid() -> [Float]? {
+            guard let dominant = sumsByDimension.values.max(by: { $0.weight < $1.weight }) else { return nil }
+            let sum = dominant.sum
+            guard SpeakerVoiceprintMatcher.isUsable(sum) else { return nil }
+            let norm = sum.reduce(0) { $0 + $1 * $1 }.squareRoot()
+            guard norm > 0, norm.isFinite else { return nil }
+            let normalized = sum.map { $0 / norm }
+            return SpeakerVoiceprintMatcher.isUsable(normalized) ? normalized : nil
+        }
+    }
 
     init(manager: DiarizerManager) {
         self.manager = manager
@@ -185,8 +213,32 @@ final class RecordedAudioDiarizationSession {
             let result = try withSpeakerState { model in
                 try model.performCompleteDiarization(window.samples, sampleRate: 16_000, atTime: window.start)
             }
-            return Self.clippedSegments(result.segments, start: window.start, end: window.end)
+            let clipped = Self.clippedSegments(result.segments, start: window.start, end: window.end)
+            accumulateCentroids(from: clipped)
+            return clipped
         }
+    }
+
+    /// Accumulates duration-weighted L2-normalized embeddings per speaker in O(speakers) memory.
+    func accumulateCentroids(from segments: [TimedSpeakerSegment]) {
+        for segment in segments {
+            let duration = segment.endTimeSeconds - segment.startTimeSeconds
+            guard !segment.speakerId.isEmpty, duration > 0, duration.isFinite else { continue }
+            var accumulator = centroidAccumulators[segment.speakerId] ?? CentroidAccumulator()
+            accumulator.add(embedding: segment.embedding, weight: duration)
+            centroidAccumulators[segment.speakerId] = accumulator
+        }
+    }
+
+    /// Normalized duration-weighted centroid for every speaker seen so far in this session.
+    func speakerCentroids() -> [String: [Float]] {
+        var result: [String: [Float]] = [:]
+        for (speakerID, accumulator) in centroidAccumulators {
+            if let centroid = accumulator.centroid() {
+                result[speakerID] = centroid
+            }
+        }
+        return result
     }
 
     func withSpeakerState<T>(_ infer: (DiarizerManager) throws -> T) throws -> T {
@@ -217,7 +269,8 @@ final class RecordedAudioDiarizationSession {
             let lower = max(Float(start), segment.startTimeSeconds)
             let upper = min(Float(end), segment.endTimeSeconds)
             guard !segment.speakerId.isEmpty, lower.isFinite, upper.isFinite, upper > lower else { return nil }
-            return TimedSpeakerSegment(speakerId: segment.speakerId, embedding: [],
+            let embedding = SpeakerVoiceprintMatcher.isUsable(segment.embedding) ? segment.embedding : []
+            return TimedSpeakerSegment(speakerId: segment.speakerId, embedding: embedding,
                                        startTimeSeconds: lower, endTimeSeconds: upper,
                                        qualityScore: segment.qualityScore)
         }
