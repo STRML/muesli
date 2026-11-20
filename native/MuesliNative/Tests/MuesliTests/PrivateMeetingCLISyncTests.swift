@@ -53,11 +53,13 @@ struct PrivateMeetingCLISyncTests {
         #expect(payload.startTime == "2026-03-22T10:00:00Z")
     }
 
-    @Test("a private meeting's list row drops notes and is flagged")
-    func listRowRedacts() {
+    @Test("a private meeting's list row omits notes and is flagged")
+    func listRowRedacts() throws {
         let row = MeetingListRow(record(private: true), isPrivate: true)
         #expect(row.isPrivate)
-        #expect(row.manualNotes.isEmpty)
+        let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
+        #expect(json["manualNotes"] == nil)
+        #expect(json["isPrivate"] as? Bool == true)
     }
 
     @Test("a normal meeting is unchanged and not flagged")
@@ -68,7 +70,9 @@ struct PrivateMeetingCLISyncTests {
         #expect(payload.rawTranscript == "settlement terms")
         #expect(payload.manualNotes == "my private note")
         #expect(payload.micAudioPath == "/tmp/mic.wav")
-        #expect(MeetingListRow(record(private: false)).manualNotes == "my private note")
+        let row = MeetingListRow(record(private: false))
+        #expect(row.isPrivate == false)
+        #expect(row.title == "Counsel call")
     }
 
     @Test("the encoded JSON of a private meeting never contains its text")
