@@ -418,9 +418,12 @@ enum SpeakerPickerFilter {
     }
 
     private static func profileSubtitle(_ profile: SpeakerProfileSummary) -> String {
-        let prints = profile.voiceprintCount == 1 ? "1 voiceprint" : "\(profile.voiceprintCount) voiceprints"
         let meetings = profile.meetingCount == 1 ? "1 meeting" : "\(profile.meetingCount) meetings"
-        return "\(prints) · \(meetings)"
+        if profile.voiceprintCount > 0 {
+            let prints = profile.voiceprintCount == 1 ? "1 voiceprint" : "\(profile.voiceprintCount) voiceprints"
+            return profile.meetingCount > 0 ? "\(prints) · \(meetings)" : prints
+        }
+        return profile.meetingCount > 0 ? meetings : "Saved speaker"
     }
 }
 

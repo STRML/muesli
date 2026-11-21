@@ -65,6 +65,11 @@ struct MeetingSpeakersView: View {
             if let id = notification.object as? Int64, id != meetingID { return }
             Task { await reload() }
         }
+        .onChange(of: controller.appState.voiceprintBackfillState) { _, newState in
+            if case .finished = newState {
+                Task { await reload() }
+            }
+        }
         .alert("Couldn't Name Speaker", isPresented: errorBinding) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
@@ -326,6 +331,7 @@ struct SpeakerProfilesView: View {
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            backfillBanner
             if profiles.isEmpty {
                 Text("No people yet. Name a speaker from a meeting's Speakers button.")
                     .font(MuesliTheme.callout())
@@ -393,7 +399,15 @@ struct SpeakerProfilesView: View {
         .padding(MuesliTheme.spacing20)
         .frame(width: 500)
         .background(MuesliTheme.backgroundBase)
-        .task { await reload() }
+        .task {
+            controller.refreshVoiceprintBackfillEligibility()
+            await reload()
+        }
+        .onChange(of: controller.appState.voiceprintBackfillState) { _, newState in
+            if case .finished = newState {
+                Task { await reload() }
+            }
+        }
         .confirmationDialog(
             "Delete \(pendingDelete?.name ?? "person")?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
@@ -406,8 +420,157 @@ struct SpeakerProfilesView: View {
         }
     }
 
+    @ViewBuilder
+    private var backfillBanner: some View {
+        switch controller.appState.voiceprintBackfillState {
+        case .idle:
+            let count = controller.appState.voiceprintBackfillEligibleCount
+            if count > 0 {
+                let recordings = count == 1 ? "1 saved recording" : "\(count) saved recordings"
+                backfillCard {
+                    VStack(alignment: .leading, spacing: MuesliTheme.spacing8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(recordings) with unlearned speakers")
+                                .font(MuesliTheme.callout().weight(.medium))
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                            Text("Extracts voiceprints on this Mac without changing transcripts or notes.")
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Button {
+                            controller.startVoiceprintBackfill()
+                        } label: {
+                            Label("Learn voices from saved recordings", systemImage: "person.wave.2")
+                                .font(MuesliTheme.caption().weight(.medium))
+                                .padding(.horizontal, MuesliTheme.spacing12)
+                                .frame(minHeight: 28)
+                        }
+                        .buttonStyle(.muesli(.secondary))
+                        .accessibilityIdentifier("speakers.backfill.startButton")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+        case .running(let completed, let total, let learned, let currentTitle):
+            backfillCard {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 16, height: 16)
+                        .accessibilityLabel("Learning voices")
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: MuesliTheme.spacing8) {
+                            Text(total > 0 ? "Learning voices · \(min(completed + 1, total)) of \(total)" : "Learning voices…")
+                                .font(MuesliTheme.callout().weight(.medium))
+                                .foregroundStyle(MuesliTheme.textPrimary)
+                                .lineLimit(1)
+                            if learned > 0 {
+                                Text("· \(learned) learned")
+                                    .font(MuesliTheme.caption())
+                                    .foregroundStyle(MuesliTheme.textSecondary)
+                                    .fixedSize()
+                            }
+                        }
+                        let trimmedTitle = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmedTitle.isEmpty {
+                            Text(trimmedTitle)
+                                .font(MuesliTheme.caption())
+                                .foregroundStyle(MuesliTheme.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+
+                    Spacer(minLength: MuesliTheme.spacing8)
+
+                    Button {
+                        controller.cancelVoiceprintBackfill()
+                    } label: {
+                        Text("Cancel")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.textSecondary)
+                            .padding(.horizontal, MuesliTheme.spacing8)
+                            .frame(minHeight: 28)
+                    }
+                    .buttonStyle(.muesli(.quiet))
+                    .accessibilityIdentifier("speakers.backfill.cancelButton")
+                }
+            }
+
+        case .finished(let learned, let scanned):
+            backfillCard {
+                HStack(spacing: MuesliTheme.spacing8) {
+                    Image(systemName: learned > 0 ? "checkmark.circle.fill" : "info.circle")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(learned > 0 ? MuesliTheme.successText : MuesliTheme.textSecondary)
+
+                    Text(finishedBackfillMessage(learned: learned, scanned: scanned))
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(learned > 0 ? MuesliTheme.textPrimary : MuesliTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+        case .failed(let message):
+            backfillCard {
+                HStack(spacing: MuesliTheme.spacing12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(MuesliTheme.destructiveText)
+
+                    Text(message)
+                        .font(MuesliTheme.caption())
+                        .foregroundStyle(MuesliTheme.destructiveText)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: MuesliTheme.spacing8)
+
+                    Button {
+                        controller.startVoiceprintBackfill()
+                    } label: {
+                        Text("Retry")
+                            .font(MuesliTheme.caption().weight(.medium))
+                            .padding(.horizontal, MuesliTheme.spacing8)
+                            .frame(minHeight: 28)
+                    }
+                    .buttonStyle(.muesli(.secondary))
+                    .accessibilityIdentifier("speakers.backfill.retryButton")
+                }
+            }
+        }
+    }
+
+    private func backfillCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(MuesliTheme.spacing12)
+            .background(MuesliTheme.backgroundRaised)
+            .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium))
+            .overlay {
+                RoundedRectangle(cornerRadius: MuesliTheme.cornerMedium)
+                    .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+            }
+    }
+
+    private func finishedBackfillMessage(learned: Int, scanned: Int) -> String {
+        if learned > 0 {
+            let prints = learned == 1 ? "1 voiceprint" : "\(learned) voiceprints"
+            let recordings = scanned == 1 ? "1 recording" : "\(scanned) recordings"
+            return "Learned \(prints) from \(recordings)."
+        }
+        return "No new voiceprints found — speakers need at least 10s of speech in a saved recording."
+    }
+
     private func counts(_ profile: SpeakerProfileSummary) -> String {
-        let prints = profile.voiceprintCount == 1 ? "1 voiceprint" : "\(profile.voiceprintCount) voiceprints"
+        let prints: String
+        switch profile.voiceprintCount {
+        case 0: prints = "No voiceprint yet"
+        case 1: prints = "1 voiceprint"
+        default: prints = "\(profile.voiceprintCount) voiceprints"
+        }
         let meetings = profile.meetingCount == 1 ? "1 meeting" : "\(profile.meetingCount) meetings"
         return "\(prints) · \(meetings)"
     }
@@ -424,6 +587,9 @@ struct SpeakerProfilesView: View {
     private func forget(_ profile: SpeakerProfileSummary) async {
         do { try await controller.forgetSpeakerVoiceprints(profileID: profile.id, sourceMeetingID: nil) } catch {
             errorMessage = error.localizedDescription
+        }
+        if case .idle = controller.appState.voiceprintBackfillState {
+            controller.refreshVoiceprintBackfillEligibility()
         }
         await reload()
     }

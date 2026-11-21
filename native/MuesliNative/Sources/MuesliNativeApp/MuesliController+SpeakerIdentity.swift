@@ -342,6 +342,296 @@ extension MuesliController {
         NotificationCenter.default.post(name: .meetingSpeakersDidChange, object: nil)
     }
 
+    // MARK: Voiceprint backfill
+
+    func refreshVoiceprintBackfillEligibility() {
+        voiceprintBackfillEligibilityTask?.cancel()
+        let databaseURL = speakerIdentityDatabaseURL
+        voiceprintBackfillEligibilityTask = Task { @MainActor [weak self] in
+            do {
+                let count = try await Task.detached(priority: .utility) {
+                    try DictationStore(databaseURL: databaseURL).meetingsEligibleForVoiceprintBackfill().count
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                self.appState.voiceprintBackfillEligibleCount = count
+            } catch is CancellationError {
+                return
+            } catch {
+                fputs("[speakers] backfill eligibility check failed\n", stderr)
+            }
+        }
+    }
+
+    func startVoiceprintBackfill() {
+        if case .running = appState.voiceprintBackfillState { return }
+        if voiceprintBackfillTask != nil { return }
+
+        let attemptID = UUID()
+        voiceprintBackfillAttemptID = attemptID
+        let coordinator = transcriptionCoordinator
+        let databaseURL = speakerIdentityDatabaseURL
+
+        appState.voiceprintBackfillState = .running(completed: 0, total: 0, learned: 0, currentTitle: "")
+
+        voiceprintBackfillTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.voiceprintBackfillAttemptID == attemptID {
+                    self.voiceprintBackfillTask = nil
+                    self.voiceprintBackfillAttemptID = nil
+                }
+            }
+
+            do {
+                let (candidates, profiles) = try await Task.detached(priority: .userInitiated) {
+                    let store = DictationStore(databaseURL: databaseURL)
+                    return (try store.meetingsEligibleForVoiceprintBackfill(), try store.speakerProfiles())
+                }.value
+                try Task.checkCancellation()
+                guard self.voiceprintBackfillAttemptID == attemptID else { return }
+
+                guard !candidates.isEmpty else {
+                    self.appState.voiceprintBackfillEligibleCount = 0
+                    self.appState.voiceprintBackfillState = .finished(learned: 0, scanned: 0)
+                    return
+                }
+
+                self.appState.voiceprintBackfillState = .running(
+                    completed: 0,
+                    total: candidates.count,
+                    learned: 0,
+                    currentTitle: candidates[0].title
+                )
+
+                await coordinator.preloadDiarizer(trigger: .retranscription)
+                try Task.checkCancellation()
+                guard self.voiceprintBackfillAttemptID == attemptID else { return }
+
+                guard let diarizer = await coordinator.getDiarizerManager(),
+                      diarizer.isAvailable else {
+                    self.appState.voiceprintBackfillState = .failed("Speaker identification model is unavailable.")
+                    return
+                }
+
+                var totalLearned = 0
+                var scanned = 0
+                var diarizationFailures = 0
+                var lastFailureMessage: String?
+
+                for (index, candidate) in candidates.enumerated() {
+                    try Task.checkCancellation()
+                    guard self.voiceprintBackfillAttemptID == attemptID else { return }
+
+                    self.appState.voiceprintBackfillState = .running(
+                        completed: index,
+                        total: candidates.count,
+                        learned: totalLearned,
+                        currentTitle: candidate.title
+                    )
+
+                    let recordingURL = URL(fileURLWithPath: candidate.recordingPath)
+                    guard FileManager.default.fileExists(atPath: recordingURL.path) else {
+                        scanned += 1
+                        continue
+                    }
+
+                    do {
+                        let diarizationResult = try await coordinator.diarizeRecordedAudioWithCentroids(at: recordingURL)
+                        try Task.checkCancellation()
+                        guard self.voiceprintBackfillAttemptID == attemptID else { return }
+
+                        let matches = await Task.detached(priority: .userInitiated) {
+                            VoiceprintBackfiller.match(
+                                candidate: candidate,
+                                segments: diarizationResult.segments,
+                                speakerCentroids: diarizationResult.speakerCentroids,
+                                profiles: profiles
+                            )
+                        }.value
+
+                        if !matches.isEmpty {
+                            let stored = try await Task.detached(priority: .userInitiated) {
+                                try DictationStore(databaseURL: databaseURL).applyBackfilledVoiceprints(
+                                    meetingID: candidate.meetingID,
+                                    matches: matches
+                                )
+                            }.value
+                            totalLearned += stored
+                        }
+                        scanned += 1
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        try Task.checkCancellation()
+                        diarizationFailures += 1
+                        lastFailureMessage = error.localizedDescription
+                        fputs("[speakers] backfill meeting \(candidate.meetingID): diarization failed\n", stderr)
+                    }
+                }
+
+                try Task.checkCancellation()
+                guard self.voiceprintBackfillAttemptID == attemptID else { return }
+
+                let (updatedProfiles, remainingEligible) = try await Task.detached(priority: .utility) {
+                    let store = DictationStore(databaseURL: databaseURL)
+                    return (
+                        try store.speakerProfiles(),
+                        try store.meetingsEligibleForVoiceprintBackfill().count
+                    )
+                }.value
+                guard self.voiceprintBackfillAttemptID == attemptID else { return }
+
+                self.appState.liveSpeakerProfiles = updatedProfiles
+                self.appState.voiceprintBackfillEligibleCount = remainingEligible
+                if totalLearned > 0 {
+                    NotificationCenter.default.post(name: .meetingSpeakersDidChange, object: nil)
+                }
+
+                if scanned == 0, diarizationFailures > 0, let lastFailureMessage {
+                    self.appState.voiceprintBackfillState = .failed(lastFailureMessage)
+                } else {
+                    fputs("[speakers] backfill finished: scanned=\(scanned) learned=\(totalLearned) failed=\(diarizationFailures)\n", stderr)
+                    self.appState.voiceprintBackfillState = .finished(learned: totalLearned, scanned: scanned)
+                }
+            } catch is CancellationError {
+                guard self.voiceprintBackfillAttemptID == attemptID else { return }
+                self.appState.voiceprintBackfillState = .idle
+                self.refreshVoiceprintBackfillEligibility()
+            } catch {
+                guard self.voiceprintBackfillAttemptID == attemptID else { return }
+                fputs("[speakers] backfill failed\n", stderr)
+                self.appState.voiceprintBackfillState = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func cancelVoiceprintBackfill() {
+        let wasRunning = voiceprintBackfillTask != nil
+        voiceprintBackfillAttemptID = nil
+        voiceprintBackfillTask?.cancel()
+        voiceprintBackfillTask = nil
+        if case .running = appState.voiceprintBackfillState {
+            appState.voiceprintBackfillState = .idle
+        }
+        refreshVoiceprintBackfillEligibility()
+        if wasRunning {
+            refreshLiveSpeakerDirectory(meetingID: activeMeetingID)
+        }
+    }
+
+    // MARK: Live voiceprint recognition
+
+    func prepareLiveVoiceprintRecognition(
+        meetingID: Int64,
+        generation: UUID,
+        session: MeetingSession
+    ) {
+        liveVoiceprintSessionState?.task?.cancel()
+        let coordinator = transcriptionCoordinator
+        let audioBuffer = session.voiceprintAudioBuffer
+        let extractor = FluidAudioLiveVoiceprintExtractor { [weak coordinator] samples in
+            await coordinator?.diarizeLiveVoiceprintClip(samples)
+        }
+        let voiceprintCoordinator = LiveVoiceprintCoordinator(
+            extractor: extractor,
+            sliceAudio: { [weak audioBuffer] intervals in
+                audioBuffer?.slice(intervals: intervals)
+            }
+        )
+        liveVoiceprintSessionState = (
+            ownerID: meetingID,
+            generation: generation,
+            coordinator: voiceprintCoordinator,
+            task: nil
+        )
+    }
+
+    func resetLiveVoiceprintRecognition() {
+        liveVoiceprintSessionState?.task?.cancel()
+        liveVoiceprintSessionState = nil
+    }
+
+    func scheduleLiveVoiceprintRecognition(meetingID: Int64, generation: UUID) {
+        guard isCurrentLiveMeetingTranscriptSession(ownerID: meetingID, generation: generation),
+              !isMeetingPrivateFailingClosed(id: meetingID),
+              let state = liveVoiceprintSessionState,
+              state.ownerID == meetingID,
+              state.generation == generation,
+              state.task == nil else {
+            return
+        }
+        let storeSnapshot = appState.liveMeetingSpeakerStore
+        guard !storeSnapshot.unnamedLiveClustersEligibleForVoiceprint(
+            minimumSeconds: LiveVoiceprintCoordinator.defaultMinimumFirstAttemptSeconds
+        ).isEmpty else {
+            return
+        }
+
+        let databaseURL = speakerIdentityDatabaseURL
+        let voiceprintCoordinator = state.coordinator
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if let current = self.liveVoiceprintSessionState,
+                   current.ownerID == meetingID,
+                   current.generation == generation {
+                    self.liveVoiceprintSessionState?.task = nil
+                }
+            }
+
+            let savedProfiles: [LiveVoiceprintProfile]
+            do {
+                let loaded = try await Task.detached(priority: .utility) {
+                    try DictationStore(databaseURL: databaseURL).savedVoiceprintProfiles()
+                }.value
+                savedProfiles = loaded.map {
+                    LiveVoiceprintProfile(id: $0.id, name: $0.name, voiceprints: $0.voiceprints)
+                }
+            } catch {
+                fputs("[speakers] live voiceprint profile load failed\n", stderr)
+                return
+            }
+
+            guard !Task.isCancelled,
+                  !savedProfiles.isEmpty,
+                  self.isCurrentLiveMeetingTranscriptSession(ownerID: meetingID, generation: generation),
+                  !self.isMeetingPrivateFailingClosed(id: meetingID) else {
+                return
+            }
+
+            let matches = await voiceprintCoordinator.evaluate(
+                store: storeSnapshot,
+                profiles: savedProfiles,
+                isPrivate: false
+            )
+            guard !Task.isCancelled,
+                  !matches.isEmpty,
+                  self.isCurrentLiveMeetingTranscriptSession(ownerID: meetingID, generation: generation),
+                  !self.isMeetingPrivateFailingClosed(id: meetingID) else {
+                return
+            }
+
+            var appliedCount = 0
+            for match in matches {
+                if self.appState.liveMeetingSpeakerStore.autoAssignCluster(
+                    match.clusterID,
+                    profileID: match.profileID,
+                    name: match.name
+                ) {
+                    appliedCount += 1
+                }
+            }
+            if appliedCount > 0 {
+                fputs("[speakers] meeting \(meetingID): live voiceprint matched \(appliedCount) cluster(s)\n", stderr)
+                self.syncLiveMeetingSpeakerTranscript()
+                if let session = self.activeMeetingSession {
+                    self.appState.liveDiarizationStatus = session.currentLiveDiarizationStatus()
+                }
+            }
+        }
+        liveVoiceprintSessionState?.task = task
+    }
+
     private func onSpeakerStore<T: Sendable>(_ operation: @escaping @Sendable (DictationStore) throws -> T) async throws -> T {
         let databaseURL = speakerIdentityDatabaseURL
         return try await Task.detached(priority: .userInitiated) {

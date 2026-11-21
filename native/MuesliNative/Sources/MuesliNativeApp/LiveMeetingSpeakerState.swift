@@ -28,6 +28,7 @@ struct LiveSpeakerEntry: Identifiable, Equatable, Sendable {
     var clusterIDs: Set<String>
     let isSelf: Bool
     var isGenericCluster: Bool
+    var isAutoMatched: Bool = false
 }
 
 /// One committed live caption segment with timing and speaker resolution metadata.
@@ -224,12 +225,15 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
            let oldIndex = entries.firstIndex(where: { $0.id == oldEntryID }) {
             entries[oldIndex].clusterIDs.remove(cleanCluster)
             let wasGeneric = entries[oldIndex].isGenericCluster
+            let wasAutoMatched = entries[oldIndex].isAutoMatched
             if wasGeneric {
                 for index in turns.indices where turns[index].explicitSpeakerID == oldEntryID {
                     turns[index].explicitSpeakerID = targetEntry.id
                 }
             }
-            if wasGeneric && entries[oldIndex].clusterIDs.isEmpty && !turns.contains(where: { $0.explicitSpeakerID == oldEntryID }) {
+            if (wasGeneric || wasAutoMatched)
+                && entries[oldIndex].clusterIDs.isEmpty
+                && !turns.contains(where: { $0.explicitSpeakerID == oldEntryID }) {
                 entries.remove(at: oldIndex)
             }
         }
@@ -237,9 +241,91 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
         clusterToEntryID[cleanCluster] = targetEntry.id
         if let targetIndex = entries.firstIndex(where: { $0.id == targetEntry.id }) {
             entries[targetIndex].clusterIDs.insert(cleanCluster)
+            entries[targetIndex].isAutoMatched = false
             return entries[targetIndex]
         }
         return targetEntry
+    }
+
+    /// Automatically assigns an unnamed diarized cluster from a live voiceprint match.
+    /// Returns `false` if the cluster is already manually assigned, already auto-matched,
+    /// or if `profileID` is already assigned to another active entry in this meeting.
+    @discardableResult
+    mutating func autoAssignCluster(_ clusterID: String, profileID: Int64, name rawName: String) -> Bool {
+        let cleanCluster = clusterID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanCluster.isEmpty,
+              cleanCluster.caseInsensitiveCompare("You") != .orderedSame,
+              !SpeakerVoiceprintMatcher.reservedLabels.contains(where: {
+                  $0.caseInsensitiveCompare(cleanCluster) == .orderedSame
+              }),
+              let cleanName = try? DictationStore.validatedSpeakerName(rawName) else {
+            return false
+        }
+
+        let currentEntryID = clusterToEntryID[cleanCluster]
+        if let currentEntryID,
+           let currentEntry = entries.first(where: { $0.id == currentEntryID }),
+           !currentEntry.isGenericCluster {
+            // Never overwrite a manual assignment, and avoid churning an existing auto-match.
+            return false
+        }
+
+        let profileInUse = entries.contains { entry in
+            guard !entry.isSelf, entry.id != currentEntryID else { return false }
+            let matchesIdentity = entry.profileID == profileID
+                || (!entry.isGenericCluster && entry.displayName.caseInsensitiveCompare(cleanName) == .orderedSame)
+            guard matchesIdentity else { return false }
+            return !entry.clusterIDs.isEmpty || turns.contains(where: { $0.explicitSpeakerID == entry.id })
+        }
+        guard !profileInUse else { return false }
+
+        let targetID: String
+        if let reuseIndex = entries.firstIndex(where: {
+            !$0.isSelf && !$0.isGenericCluster && $0.id != currentEntryID && (
+                $0.profileID == profileID
+                    || ($0.profileID == nil && $0.displayName.caseInsensitiveCompare(cleanName) == .orderedSame)
+            )
+        }) {
+            entries[reuseIndex].profileID = profileID
+            entries[reuseIndex].displayName = cleanName
+            entries[reuseIndex].source = .savedProfile
+            entries[reuseIndex].isAutoMatched = true
+            entries[reuseIndex].clusterIDs.insert(cleanCluster)
+            targetID = entries[reuseIndex].id
+        } else {
+            targetID = "profile:\(profileID)"
+            let newEntry = LiveSpeakerEntry(
+                id: targetID,
+                displayName: cleanName,
+                profileID: profileID,
+                participantIdentifier: nil,
+                source: .savedProfile,
+                clusterIDs: [cleanCluster],
+                isSelf: false,
+                isGenericCluster: false,
+                isAutoMatched: true
+            )
+            entries.append(newEntry)
+        }
+
+        if let currentEntryID, currentEntryID != targetID,
+           let oldIndex = entries.firstIndex(where: { $0.id == currentEntryID }) {
+            entries[oldIndex].clusterIDs.remove(cleanCluster)
+            let wasGeneric = entries[oldIndex].isGenericCluster
+            if wasGeneric {
+                for index in turns.indices where turns[index].explicitSpeakerID == currentEntryID {
+                    turns[index].explicitSpeakerID = targetID
+                }
+            }
+            if wasGeneric
+                && entries[oldIndex].clusterIDs.isEmpty
+                && !turns.contains(where: { $0.explicitSpeakerID == currentEntryID }) {
+                entries.remove(at: oldIndex)
+            }
+        }
+
+        clusterToEntryID[cleanCluster] = targetID
+        return true
     }
 
     /// Reassigns only one specific turn without changing other turns in its cluster.
@@ -279,12 +365,40 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
             if entries[existingIndex].participantIdentifier == nil {
                 entries[existingIndex].participantIdentifier = sourceEntry.participantIdentifier
             }
+            entries[existingIndex].isAutoMatched = false
             let updated = entries[existingIndex]
             entries.remove(at: index)
             return updated
         }
 
+        let wasAutoMatched = entries[index].isAutoMatched
+        let nameChanged = entries[index].displayName.caseInsensitiveCompare(name) != .orderedSame
+        if wasAutoMatched && nameChanged && entries[index].id.hasPrefix("profile:") {
+            let oldEntry = entries[index]
+            let newID = "manual:\(UUID().uuidString)"
+            for cluster in oldEntry.clusterIDs {
+                clusterToEntryID[cluster] = newID
+            }
+            for turnIndex in turns.indices where turns[turnIndex].explicitSpeakerID == entryID {
+                turns[turnIndex].explicitSpeakerID = newID
+            }
+            let replacement = LiveSpeakerEntry(
+                id: newID,
+                displayName: name,
+                profileID: nil,
+                participantIdentifier: oldEntry.participantIdentifier,
+                source: .manual,
+                clusterIDs: oldEntry.clusterIDs,
+                isSelf: false,
+                isGenericCluster: false,
+                isAutoMatched: false
+            )
+            entries[index] = replacement
+            return replacement
+        }
+
         entries[index].displayName = name
+        entries[index].isAutoMatched = false
         if entries[index].isGenericCluster {
             entries[index].isGenericCluster = false
             entries[index].source = .manual
@@ -317,6 +431,7 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
         if entries[destinationIndex].participantIdentifier == nil {
             entries[destinationIndex].participantIdentifier = sourceEntry.participantIdentifier
         }
+        entries[destinationIndex].isAutoMatched = false
         let updated = entries[destinationIndex]
         entries.remove(at: sourceIndex)
         return updated
@@ -406,7 +521,8 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
             guard clusterID != "You",
                   let entry = entriesByID[entryID],
                   !entry.isSelf,
-                  !entry.isGenericCluster else { continue }
+                  !entry.isGenericCluster,
+                  !entry.isAutoMatched else { continue }
             assignments.append(
                 LiveSpeakerAssignmentRecord(
                     clusterID: clusterID,
@@ -425,6 +541,52 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
             entriesByID: entriesByID,
             isInPerson: isInPerson
         )
+    }
+
+    /// Returns generic unnamed diarized clusters (`"Speaker N"`) whose committed, non-overridden
+    /// turns sum to at least `minimumSeconds` and have not been manually assigned or auto-matched.
+    func unnamedLiveClustersEligibleForVoiceprint(
+        minimumSeconds: Double = 10
+    ) -> [(clusterID: String, intervals: [LiveSpeakerInterval], totalSeconds: Double)] {
+        let entriesByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        var intervalsByCluster: [String: [LiveSpeakerInterval]] = [:]
+        var durationsByCluster: [String: Double] = [:]
+        var clusterOrder: [String] = []
+
+        for turn in turns where !isSelfTurn(turn) && turn.explicitSpeakerID == nil {
+            guard let clusterID = effectiveClusterID(for: turn),
+                  clusterID != "You",
+                  clusterID != LiveSpeakerLabeler.fallbackLabel,
+                  !SpeakerVoiceprintMatcher.reservedLabels.contains(where: {
+                      $0.caseInsensitiveCompare(clusterID) == .orderedSame
+                  }),
+                  let entryID = clusterToEntryID[clusterID],
+                  let entry = entriesByID[entryID],
+                  !entry.isSelf,
+                  entry.isGenericCluster,
+                  !entry.isAutoMatched else {
+                continue
+            }
+            let interval = LiveSpeakerInterval(
+                start: turn.startSeconds,
+                end: max(turn.endSeconds, turn.startSeconds)
+            )
+            if intervalsByCluster[clusterID] == nil {
+                clusterOrder.append(clusterID)
+            }
+            intervalsByCluster[clusterID, default: []].append(interval)
+            durationsByCluster[clusterID, default: 0] += interval.duration
+        }
+
+        return clusterOrder.compactMap { clusterID in
+            let totalSeconds = durationsByCluster[clusterID] ?? 0
+            guard totalSeconds >= minimumSeconds,
+                  let intervals = intervalsByCluster[clusterID],
+                  !intervals.isEmpty else {
+                return nil
+            }
+            return (clusterID: clusterID, intervals: intervals, totalSeconds: totalSeconds)
+        }
     }
 
     // MARK: - Private helpers
@@ -466,10 +628,13 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
     private mutating func resolveTargetEntry(_ target: LiveSpeakerTarget) throws -> LiveSpeakerEntry {
         switch target {
         case .existingEntry(let id):
-            guard let entry = entries.first(where: { $0.id == id }) else {
+            guard let index = entries.firstIndex(where: { $0.id == id }) else {
                 throw SpeakerIdentityError.speakerNotFound
             }
-            return entry
+            if !entries[index].isGenericCluster {
+                entries[index].isAutoMatched = false
+            }
+            return entries[index]
         case .savedProfile(let id, let rawName):
             let name = try DictationStore.validatedSpeakerName(rawName)
             return upsertNamedEntry(displayName: name, profileID: id, participantIdentifier: nil, source: .savedProfile)
@@ -502,17 +667,19 @@ struct LiveMeetingSpeakerStore: Equatable, Sendable {
             if source == .savedProfile {
                 entries[existingIndex].source = .savedProfile
             }
+            entries[existingIndex].isAutoMatched = false
             return entries[existingIndex]
         }
 
-        let id: String
+        let baseID: String
         if let profileID {
-            id = "profile:\(profileID)"
+            baseID = "profile:\(profileID)"
         } else if let participantIdentifier {
-            id = "participant:\(participantIdentifier)"
+            baseID = "participant:\(participantIdentifier)"
         } else {
-            id = "manual:\(UUID().uuidString)"
+            baseID = "manual:\(UUID().uuidString)"
         }
+        let id = entries.contains(where: { $0.id == baseID }) ? "\(baseID):\(UUID().uuidString)" : baseID
 
         let entry = LiveSpeakerEntry(
             id: id,
