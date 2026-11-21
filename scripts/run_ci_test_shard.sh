@@ -57,6 +57,7 @@ case "${shard}" in
       ChatGPTTokenStorageTests
       OpenRouterAuthTests
       SettingsPermissionRefreshReasonTests
+      SettingsSearchTests
       InteractionPermissionMonitorTests
       PermissionRestartRecoveryTests
       AccessibilityPermissionGuideTests

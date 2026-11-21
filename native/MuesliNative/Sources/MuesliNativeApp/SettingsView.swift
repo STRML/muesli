@@ -160,6 +160,7 @@ struct SettingsView: View {
     @State private var audioInputDeviceRefreshTask: Task<Void, Never>?
     @State private var permissionMonitoringClientID = UUID()
     @State private var isCleanupPromptManagerPresented = false
+    @State private var isSpeakerProfilesSheetPresented = false
     @AppStorage("settings.pendingScreenContextEnable") private var pendingScreenContextEnable = false
     @AppStorage("settings.pendingScreenContextRequestedAt") private var pendingScreenContextRequestedAt = 0.0
     @State private var systemAudioGranted = false
@@ -172,6 +173,12 @@ struct SettingsView: View {
     @State private var openAIDictationAPIKey: String = ""
     @State private var openAITestState: OpenAIConnectionTestState = .idle
     @State private var stacksSettingsControls = false
+    @State private var searchQuery = ""
+    @FocusState private var isSearchFocused: Bool
+    @State private var highlightedSearchResultIndex = 0
+    @State private var highlightedSearchTargetID: String?
+    @State private var searchNavigationTask: Task<Void, Never>?
+    @State private var searchHighlightTask: Task<Void, Never>?
 
     init(appState: AppState, controller: MuesliController) {
         self.appState = appState
@@ -400,6 +407,18 @@ struct SettingsView: View {
 
     @State private var presentationCatalog = SettingsPresentationCatalog()
 
+    private var trimmedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isSearchingSettings: Bool {
+        !trimmedSearchQuery.isEmpty
+    }
+
+    private var searchResults: [SettingsSearchEntry] {
+        SettingsSearchIndex.search(trimmedSearchQuery)
+    }
+
     private var activeFeatureTourTarget: FeatureTourTarget? {
         appState.activeFeatureTourTarget
     }
@@ -420,12 +439,51 @@ struct SettingsView: View {
         ScrollViewReader { scrollProxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-                    Text("Settings")
-                        .font(MuesliTheme.title1())
-                        .foregroundStyle(MuesliTheme.textPrimary)
+                    let headerLayout = stacksSettingsControls
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: MuesliTheme.spacing12))
+                        : AnyLayout(HStackLayout(alignment: .center, spacing: MuesliTheme.spacing16))
+
+                    headerLayout {
+                        Text("Settings")
+                            .font(MuesliTheme.title1())
+                            .foregroundStyle(MuesliTheme.textPrimary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        SettingsSearchBar(
+                            query: $searchQuery,
+                            isFocused: $isSearchFocused,
+                            hasResults: !searchResults.isEmpty,
+                            onMoveHighlight: { delta in
+                                moveSearchHighlight(by: delta, scrollProxy: scrollProxy)
+                            },
+                            onSubmit: {
+                                jumpToHighlightedSearchResult(using: scrollProxy)
+                            },
+                            onClear: {
+                                clearSettingsSearch(unfocus: true)
+                            }
+                        )
+                        .frame(maxWidth: stacksSettingsControls ? .infinity : 260)
+                    }
 
                     settingsPanePicker
-                    paneContent
+
+                    if isSearchingSettings {
+                        SettingsSearchResultsView(
+                            query: trimmedSearchQuery,
+                            results: searchResults,
+                            highlightedIndex: clampedSearchHighlightIndex(for: searchResults),
+                            stacksControls: stacksSettingsControls,
+                            onSelect: { entry in
+                                selectSearchResult(entry, using: scrollProxy)
+                            },
+                            onClear: {
+                                clearSettingsSearch(unfocus: true)
+                            }
+                        )
+                    } else {
+                        paneContent
+                    }
                 }
                 .background {
                     // One page-level breakpoint; individual rows do not measure themselves.
@@ -443,6 +501,16 @@ struct SettingsView: View {
             .padding(.bottom, MuesliTheme.spacing32)
             }
             .background(MuesliTheme.backgroundBase)
+            .background {
+                Button("") {
+                    isSearchFocused = true
+                }
+                .keyboardShortcut("f", modifiers: .command)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             .onAppear {
                 refreshDownloadedModelOptions(force: true)
                 refreshAudioInputDevices()
@@ -460,7 +528,14 @@ struct SettingsView: View {
                 isPreviewingClip = false
                 audioInputDeviceRefreshTask?.cancel()
                 audioInputDeviceRefreshTask = nil
+                searchNavigationTask?.cancel()
+                searchNavigationTask = nil
+                searchHighlightTask?.cancel()
+                searchHighlightTask = nil
                 stopPermissionMonitoring()
+            }
+            .onChange(of: searchQuery) { _, _ in
+                highlightedSearchResultIndex = 0
             }
             .onChange(of: appState.selectedTab) { _, tab in
                 if tab != .settings { appState.requestsPermissionsSettings = false }
@@ -476,15 +551,27 @@ struct SettingsView: View {
             }
             .onChange(of: selectedPane) { _, pane in
                 if pane != .general { appState.requestsPermissionsSettings = false }
+                if isSearchingSettings {
+                    clearSettingsSearch(unfocus: false)
+                }
+                highlightedSearchTargetID = nil
                 appState.selectedSettingsPane = pane
                 calendarPermission.refresh()
                 if pane == .dictation || pane == .meetings {
                     loadCachedAudioInputDevices()
                 }
             }
+            .onChange(of: activeFeatureTourTarget) { _, target in
+                if target != nil, isSearchingSettings {
+                    clearSettingsSearch(unfocus: true)
+                }
+            }
             .task(id: appState.requestsPermissionsSettings && selectedPane == .general && appState.selectedTab == .settings) {
                 guard appState.requestsPermissionsSettings, selectedPane == .general,
                       appState.selectedTab == .settings else { return }
+                if isSearchingSettings {
+                    clearSettingsSearch(unfocus: true)
+                }
                 await Task.yield()
                 guard !Task.isCancelled, selectedPane == .general,
                       appState.selectedTab == .settings else { return }
@@ -604,6 +691,9 @@ struct SettingsView: View {
                     onClose: { isCleanupPromptManagerPresented = false }
                 )
             }
+            .sheet(isPresented: $isSpeakerProfilesSheetPresented) {
+                SpeakerProfilesView(controller: controller)
+            }
         }
 
     }
@@ -611,6 +701,108 @@ struct SettingsView: View {
     private func updateSettingsControlStacking(contentWidth: CGFloat) {
         let stacks = contentWidth < SettingsLayout.stackedContentWidth
         if stacksSettingsControls != stacks { stacksSettingsControls = stacks }
+    }
+
+    private func clampedSearchHighlightIndex(for results: [SettingsSearchEntry]) -> Int {
+        guard !results.isEmpty else { return 0 }
+        return min(max(highlightedSearchResultIndex, 0), results.count - 1)
+    }
+
+    private func moveSearchHighlight(by delta: Int, scrollProxy: ScrollViewProxy) {
+        let results = searchResults
+        guard !results.isEmpty else { return }
+        let current = clampedSearchHighlightIndex(for: results)
+        let next = min(max(current + delta, 0), results.count - 1)
+        highlightedSearchResultIndex = next
+        let rowID = SettingsSearchResultsView.rowScrollID(for: results[next])
+        if MuesliMotion.prefersReducedMotion {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                scrollProxy.scrollTo(rowID, anchor: .center)
+            }
+        } else {
+            withAnimation(MuesliMotion.feedback) {
+                scrollProxy.scrollTo(rowID, anchor: .center)
+            }
+        }
+    }
+
+    private func jumpToHighlightedSearchResult(using scrollProxy: ScrollViewProxy) {
+        let results = searchResults
+        guard !results.isEmpty else { return }
+        let index = clampedSearchHighlightIndex(for: results)
+        selectSearchResult(results[index], using: scrollProxy)
+    }
+
+    private func clearSettingsSearch(unfocus: Bool) {
+        searchQuery = ""
+        highlightedSearchResultIndex = 0
+        if unfocus {
+            isSearchFocused = false
+        }
+    }
+
+    private func resolvedSearchAnchorID(for entry: SettingsSearchEntry) -> String {
+        switch entry.id {
+        case "settings.general.backup":
+            return controller.configBackupDirectoryPath != nil ? entry.id : "settings.general.localStorage"
+        case FeatureTourTarget.liveDictation.rawValue:
+            let showsLiveDictation = appState.dictationProvider == .local
+                && displayedDictationBackend?.supportsBufferedLiveTranscription == true
+            return showsLiveDictation ? entry.id : "settings.dictation.model"
+        case "settings.dictation.cleanupPreset":
+            return (appState.config.enablePostProcessor && !cleanupModelUsesFixedPrompt)
+                ? entry.id
+                : "settings.dictation.cleanup"
+        case FeatureTourTarget.cloudCleanupSetting.rawValue:
+            return appState.config.enablePostProcessor ? entry.id : "settings.dictation.cleanup"
+        default:
+            return entry.id
+        }
+    }
+
+    private func selectSearchResult(_ entry: SettingsSearchEntry, using scrollProxy: ScrollViewProxy) {
+        searchNavigationTask?.cancel()
+        searchHighlightTask?.cancel()
+        highlightedSearchTargetID = nil
+
+        let targetID = resolvedSearchAnchorID(for: entry)
+        clearSettingsSearch(unfocus: true)
+        selectedPane = entry.pane
+        appState.selectedSettingsPane = entry.pane
+
+        searchNavigationTask = Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(25))
+            guard !Task.isCancelled, !isSearchingSettings, selectedPane == entry.pane else { return }
+
+            if MuesliMotion.prefersReducedMotion {
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    scrollProxy.scrollTo(targetID, anchor: .center)
+                }
+            } else {
+                withAnimation(MuesliMotion.navigation) {
+                    scrollProxy.scrollTo(targetID, anchor: .center)
+                }
+            }
+
+            MuesliMotion.perform(MuesliMotion.feedback) {
+                highlightedSearchTargetID = targetID
+            }
+
+            searchHighlightTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.8))
+                guard !Task.isCancelled else { return }
+                MuesliMotion.perform(MuesliMotion.feedback) {
+                    if highlightedSearchTargetID == targetID {
+                        highlightedSearchTargetID = nil
+                    }
+                }
+            }
+        }
     }
 
     private func refreshDownloadedModelOptions(force: Bool = false) {
@@ -723,6 +915,7 @@ struct SettingsView: View {
                 settingsCompactRow("Launch at login") {
                     settingsControl("launch_at_login")
                 }
+                .settingsSearchAnchor("settings.general.launchAtLogin", highlightedID: highlightedSearchTargetID)
                 if appState.launchAtLoginRegistrationState == .requiresApproval {
                     launchAtLoginApprovalPrompt
                 }
@@ -730,15 +923,18 @@ struct SettingsView: View {
                 settingsCompactRow("Open dashboard on launch") {
                     settingsControl("open_dashboard")
                 }
+                .settingsSearchAnchor("settings.general.openDashboard", highlightedID: highlightedSearchTargetID)
             }
 
             syncSettingsPane
+                .settingsSearchAnchor("settings.general.icloudSync", highlightedID: highlightedSearchTargetID, isSection: true)
 
             permissionsSection
 
             settingsSection("Local storage") {
                 LocalStorageUsageView()
             }
+            .settingsSearchAnchor("settings.general.localStorage", highlightedID: highlightedSearchTargetID, isSection: true)
 
             if let backupPath = controller.configBackupDirectoryPath {
                 settingsSection("Settings backup") {
@@ -751,6 +947,7 @@ struct SettingsView: View {
                         }
                     }
                 }
+                .settingsSearchAnchor("settings.general.backup", highlightedID: highlightedSearchTargetID, isSection: true)
             }
 
             settingsSection("Data") {
@@ -765,6 +962,7 @@ struct SettingsView: View {
                     .help("Stop the current meeting recording before clearing meeting history.")
                 }
             }
+            .settingsSearchAnchor("settings.general.data", highlightedID: highlightedSearchTargetID, isSection: true)
         }
     }
 
@@ -976,7 +1174,7 @@ struct SettingsView: View {
             settingsRow("Provider", controlWidth: meetingControlWidth) {
                 settingsControl("dictation_provider")
             }
-            .id(FeatureTourTarget.dictationProviderSetting.rawValue)
+            .settingsSearchAnchor(FeatureTourTarget.dictationProviderSetting.rawValue, highlightedID: highlightedSearchTargetID)
             .featureTourTarget(.dictationProviderSetting)
             Divider().background(MuesliTheme.surfaceBorder)
             if appState.dictationProvider == .openAI {
@@ -999,6 +1197,7 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
             }
+            .settingsSearchAnchor("settings.dictation.model", highlightedID: highlightedSearchTargetID)
             if appState.dictationProvider == .local,
                displayedDictationBackend?.supportsBufferedLiveTranscription == true {
                 Divider().background(MuesliTheme.surfaceBorder)
@@ -1009,7 +1208,7 @@ struct SettingsView: View {
                 ) {
                     settingsControl("buffered_live_dictation")
                 }
-                .id(FeatureTourTarget.liveDictation.rawValue)
+                .settingsSearchAnchor(FeatureTourTarget.liveDictation.rawValue, highlightedID: highlightedSearchTargetID)
                 .featureTourTarget(.liveDictation)
             }
             if displayedDictationBackend?.backend == BackendOption.cohereTranscribe.backend {
@@ -1169,6 +1368,7 @@ struct SettingsView: View {
                 settingsControl("meeting_microphone")
                 .frame(height: 24)
             }
+            .settingsSearchAnchor("settings.meetings.microphone", highlightedID: highlightedSearchTargetID)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsCompactRow(
                 "Show transcript on hover",
@@ -1176,6 +1376,7 @@ struct SettingsView: View {
             ) {
                 settingsControl("meeting_hover_transcript")
             }
+            .settingsSearchAnchor("settings.meetings.hoverTranscript", highlightedID: highlightedSearchTargetID)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow(
                 "Live transcript model",
@@ -1190,16 +1391,17 @@ struct SettingsView: View {
                         .foregroundStyle(MuesliTheme.textSecondary)
                 }
             }
-            .id(FeatureTourTarget.liveCaptionsSetting.rawValue)
+            .settingsSearchAnchor(FeatureTourTarget.liveCaptionsSetting.rawValue, highlightedID: highlightedSearchTargetID)
             .featureTourTarget(.liveCaptionsSetting)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow(
                 "Live speaker labels",
-                description: "Labels other voices Speaker 1, 2 while recording. The final transcript is unchanged. Downloads a model on first use.",
+                description: "Labels other voices Speaker 1, 2 while recording and matches saved voiceprints live. Downloads a model on first use.",
                 controlWidth: meetingControlWidth
             ) {
                 settingsControl("live_speaker_labels")
             }
+            .settingsSearchAnchor("settings.meetings.liveSpeakerLabels", highlightedID: highlightedSearchTargetID)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsCompactRow(
                 "Identify in-room speakers",
@@ -1207,6 +1409,19 @@ struct SettingsView: View {
             ) {
                 settingsControl("diarize_microphone")
             }
+            .settingsSearchAnchor("settings.meetings.inRoomSpeakers", highlightedID: highlightedSearchTargetID)
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow(
+                "Saved speakers",
+                description: "Manage named voices and learn voiceprints from saved recordings. Voiceprints stay on this Mac.",
+                controlWidth: meetingControlWidth
+            ) {
+                compactActionButton("Manage Speakers…", systemImage: "person.wave.2") {
+                    isSpeakerProfilesSheetPresented = true
+                }
+                .accessibilityIdentifier("settings.meetings.manageSpeakers")
+            }
+            .settingsSearchAnchor("settings.meetings.savedSpeakers", highlightedID: highlightedSearchTargetID)
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("Final transcript", controlWidth: meetingControlWidth) {
                 if usesUnifiedMeetingTranscript {
@@ -1221,6 +1436,7 @@ struct SettingsView: View {
                     settingsControl("meeting_model")
                 }
             }
+            .settingsSearchAnchor("settings.meetings.finalTranscript", highlightedID: highlightedSearchTargetID)
             if usesUnifiedMeetingTranscript {
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Language", controlWidth: meetingControlWidth) {
@@ -1263,6 +1479,7 @@ struct SettingsView: View {
                     fixedCleanupPromptNotice
                 } else {
                     cleanupPromptSettings
+                        .settingsSearchAnchor("settings.dictation.cleanupPreset", highlightedID: highlightedSearchTargetID)
                 }
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow(
@@ -1272,7 +1489,7 @@ struct SettingsView: View {
                 ) {
                     settingsControl("cleanup_source")
                 }
-                .id(FeatureTourTarget.cloudCleanupSetting.rawValue)
+                .settingsSearchAnchor(FeatureTourTarget.cloudCleanupSetting.rawValue, highlightedID: highlightedSearchTargetID)
                 .featureTourTarget(.cloudCleanupSetting)
                 if appState.selectedPostProcessorBackend.isOnDevice {
                     Divider().background(MuesliTheme.surfaceBorder)
@@ -1339,7 +1556,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .id(FeatureTourTarget.quillSettings.rawValue)
+        .settingsSearchAnchor(FeatureTourTarget.quillSettings.rawValue, highlightedID: highlightedSearchTargetID, isSection: true)
         .featureTourTarget(.quillSettings)
     }
 
@@ -1642,6 +1859,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .settingsSearchAnchor("settings.meetings.privateMeetings", highlightedID: highlightedSearchTargetID, isSection: true)
     }
 
     private var meetingSummarySettingsSection: some View {
@@ -1654,7 +1872,7 @@ struct SettingsView: View {
             ) {
                 VStack(alignment: .trailing, spacing: 4) {
                     settingsControl("summary_source")
-                        .id(FeatureTourTarget.meetingSummaryProvider.rawValue)
+                        .settingsSearchAnchor(FeatureTourTarget.meetingSummaryProvider.rawValue, highlightedID: highlightedSearchTargetID)
                         .featureTourTarget(.meetingSummaryProvider)
                     if !appState.settingsModelAvailability.claudeCodeAvailable,
                        appState.selectedMeetingSummaryBackend != .claudeCode {
@@ -2068,6 +2286,7 @@ struct SettingsView: View {
                     settingsControl("dictation_microphone")
                     .frame(height: 24)
                 }
+                .settingsSearchAnchor("settings.dictation.microphone", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow(
                     "Dictionary suggestions",
@@ -2075,6 +2294,7 @@ struct SettingsView: View {
                 ) {
                     settingsControl("dictionary_suggestions")
                 }
+                .settingsSearchAnchor("settings.dictation.dictionarySuggestions", highlightedID: highlightedSearchTargetID)
             }
 
             settingsSection("Recordings") {
@@ -2091,13 +2311,15 @@ struct SettingsView: View {
                     }
                 }
             }
+            .settingsSearchAnchor("settings.dictation.recordings", highlightedID: highlightedSearchTargetID, isSection: true)
 
             dictationCleanupSettingsSection
+                .settingsSearchAnchor("settings.dictation.cleanup", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("App Formatting", newFeature: .appFormatting) {
                 DictationFormattingSettingsView(appState: appState, controller: controller)
             }
-            .id(FeatureTourTarget.appFormatting.rawValue)
+            .settingsSearchAnchor(FeatureTourTarget.appFormatting.rawValue, highlightedID: highlightedSearchTargetID, isSection: true)
             .featureTourTarget(.appFormatting)
 
             settingsSection("Advanced") {
@@ -2109,18 +2331,24 @@ struct SettingsView: View {
                     PasteShortcutControl(controller: controller, appState: appState)
                         .help("Custom applies to keyboard paste in Dictation, Quill, and Computer Use. Browser Paste commands and live streaming are unchanged. Re-record custom shortcuts after changing keyboard layouts.")
                 }
+                .settingsSearchAnchor("settings.dictation.pasteShortcut", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow("Pause media during dictation") {
                     settingsControl("pause_media")
                 }
+                .settingsSearchAnchor("settings.dictation.pauseMedia", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow("Mute system audio during dictation") {
                     settingsControl("mute_audio")
                 }
+                .settingsSearchAnchor("settings.dictation.muteAudio", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
-                screenContextRow("App context")
-                Divider().background(MuesliTheme.surfaceBorder)
-                dictationOCRContextRow
+                VStack(spacing: 0) {
+                    screenContextRow("App context")
+                    Divider().background(MuesliTheme.surfaceBorder)
+                    dictationOCRContextRow
+                }
+                .settingsSearchAnchor("settings.dictation.appContext", highlightedID: highlightedSearchTargetID)
             }
         }
     }
@@ -2148,7 +2376,7 @@ struct SettingsView: View {
                 cotypistOptions
             }
         }
-        .id(FeatureTourTarget.cotypistSettings.rawValue)
+        .settingsSearchAnchor(FeatureTourTarget.cotypistSettings.rawValue, highlightedID: highlightedSearchTargetID, isSection: true)
         .featureTourTarget(.cotypistSettings)
     }
 
@@ -2474,8 +2702,11 @@ struct SettingsView: View {
                 compactActionButton(controller.feedbackCaptureOwnsMicrophone ? "Finish Vidshot" : "Start Vidshot") { controller.toggleFeedbackCapture() }
                     .disabled(!appState.config.enableFeedbackCapture)
             }
+            .settingsSearchAnchor("settings.experimental.vidshot", highlightedID: highlightedSearchTargetID, isSection: true)
             TimeTurnerSettingsView(controller: controller, appState: appState)
+                .settingsSearchAnchor("settings.experimental.timeTurner", highlightedID: highlightedSearchTargetID, isSection: true)
             computerUseSettingsPane
+                .settingsSearchAnchor("settings.experimental.computerUse", highlightedID: highlightedSearchTargetID, isSection: true)
             quilSettingsSection
             if appState.settingsModelAvailability.cotypistAvailable {
                 cotypistSettingsSection
@@ -2552,6 +2783,7 @@ struct SettingsView: View {
             settingsSection("Meeting Context") {
                 screenContextRow("Meeting context", includesScreenOCR: true)
             }
+            .settingsSearchAnchor("settings.meetings.context", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("Recordings storage") {
                 settingsRow("Storage budget", controlWidth: meetingControlWidth) {
@@ -2564,6 +2796,7 @@ struct SettingsView: View {
                 RecordingsUsageText(controller: controller, budgetGB: appState.config.recordingsBudgetGB)
                     .padding(.top, MuesliTheme.spacing8)
             }
+            .settingsSearchAnchor("settings.meetings.recordingsStorage", highlightedID: highlightedSearchTargetID, isSection: true)
 
             meetingSummarySettingsSection
 
@@ -2602,28 +2835,34 @@ struct SettingsView: View {
                     }
                 }
             }
+            .settingsSearchAnchor("settings.meetings.notes", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("Recording") {
                 settingsCompactRow("Auto-record calendar meetings") {
                     settingsControl("auto_record_meetings")
                 }
+                .settingsSearchAnchor("settings.meetings.autoRecord", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow("Stop recording when a meeting ends", description: "Supports Zoom, Teams, Webex and browser meetings. Checks connectivity with Google when the meeting signal disappears. If the check fails, recording may continue for up to 8 minutes.") {
                     settingsControl("meeting_auto_stop")
                 }
+                .settingsSearchAnchor("settings.meetings.autoStop", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
-                settingsRow("Save meeting recording") {
-                    settingsControl("recording_policy")
-                }
-                if appState.config.meetingRecordingSavePolicy != .never {
-                    Divider().background(MuesliTheme.surfaceBorder)
-                    settingsRow(
-                        "Recording format",
-                        description: "M4A is recommended for smaller files. WAV is lossless and uses more storage."
-                    ) {
-                        settingsControl("recording_format")
+                VStack(spacing: 0) {
+                    settingsRow("Save meeting recording") {
+                        settingsControl("recording_policy")
+                    }
+                    if appState.config.meetingRecordingSavePolicy != .never {
+                        Divider().background(MuesliTheme.surfaceBorder)
+                        settingsRow(
+                            "Recording format",
+                            description: "M4A is recommended for smaller files. WAV is lossless and uses more storage."
+                        ) {
+                            settingsControl("recording_format")
+                        }
                     }
                 }
+                .settingsSearchAnchor("settings.meetings.recordingPolicy", highlightedID: highlightedSearchTargetID)
             }
 
             settingsSection("Auto Export") {
@@ -2660,6 +2899,7 @@ struct SettingsView: View {
                     }
                 }
             }
+            .settingsSearchAnchor("settings.meetings.autoExport", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("Folder Suggestions") {
                 settingsRow("Suggest folders for meetings") {
@@ -2677,6 +2917,7 @@ struct SettingsView: View {
                 }
                 SettingsNote("Suggestions appear in the Meetings Inbox. muesli learns from where you file meetings: recurring series, attendees and titles. When nothing matches, your summary model may suggest a folder; private meetings are only sent to backends you trust. AI suggestions are never filed automatically.")
             }
+            .settingsSearchAnchor("settings.meetings.folderSuggestions", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("Meeting Notifications") {
                 settingsCompactRow("Scheduled meetings", description: "For calendar events with a join link.") {
@@ -2732,6 +2973,7 @@ struct SettingsView: View {
                 }
                 SettingsNote("Open the meeting link and start transcribing when a calendar meeting starts. You can also turn this on for one meeting from the sidebar.")
             }
+            .settingsSearchAnchor("settings.meetings.notifications", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("Calendars") {
                 settingsCompactRow(
@@ -2763,6 +3005,7 @@ struct SettingsView: View {
                 Divider().background(MuesliTheme.surfaceBorder)
                 calendarSourcesControl
             }
+            .settingsSearchAnchor("settings.meetings.calendars", highlightedID: highlightedSearchTargetID, isSection: true)
 
             settingsSection("Advanced") {
                 settingsCompactRow(
@@ -2790,6 +3033,7 @@ struct SettingsView: View {
                     meetingHookTimeoutControl
                 }
             }
+            .settingsSearchAnchor("settings.meetings.postMeetingHook", highlightedID: highlightedSearchTargetID, isSection: true)
             .padding(.top, MuesliTheme.spacing8)
         }
         .onAppear {
@@ -2820,7 +3064,7 @@ struct SettingsView: View {
                     controller.setSettingFromUI("indicator_style", value: style.rawValue)
                 }
                 .disabled(controller.feedbackCaptureOwnsMicrophone)
-                .id(FeatureTourTarget.recordingIndicatorStyle.rawValue)
+                .settingsSearchAnchor(FeatureTourTarget.recordingIndicatorStyle.rawValue, highlightedID: highlightedSearchTargetID)
                 .padding(.bottom, MuesliTheme.spacing8)
                 if appState.config.recordingIndicatorStyle == .notch {
                     SettingsNote("Shows during recording and processing. Click the logo or status to open muesli. On external displays, it appears at the top center.")
@@ -2847,26 +3091,32 @@ struct SettingsView: View {
                 settingsRow("Theme") {
                     settingsControl("appearance")
                 }
+                .settingsSearchAnchor("settings.appearance.theme", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Menu bar icon") {
                     menuBarIconPicker
                 }
+                .settingsSearchAnchor("settings.appearance.menuBarIcon", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow("Show hotkey in menu bar") {
                     settingsControl("show_hotkey_menu")
                 }
+                .settingsSearchAnchor("settings.appearance.showHotkeyMenu", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsRow("Accent color", description: appState.config.appearanceMode == .ultraDark ? "Used for toggles in Ultra Dark." : nil) {
                     glassTintPicker
                 }
+                .settingsSearchAnchor("settings.appearance.accentColor", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow("Play sound effects") {
                     settingsControl("sound")
                 }
+                .settingsSearchAnchor("settings.appearance.soundEffects", highlightedID: highlightedSearchTargetID)
                 Divider().background(MuesliTheme.surfaceBorder)
                 settingsCompactRow("Show next meeting in menu bar") {
                     settingsControl("show_next_meeting")
                 }
+                .settingsSearchAnchor("settings.appearance.showNextMeeting", highlightedID: highlightedSearchTargetID)
             }
 
             if appState.config.maraudersMapUnlocked {
@@ -3425,7 +3675,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .id("settings.permissions")
+        .settingsSearchAnchor("settings.permissions", highlightedID: highlightedSearchTargetID, isSection: true)
     }
 
     @ViewBuilder
