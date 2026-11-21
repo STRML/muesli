@@ -238,6 +238,7 @@ case "${shard}" in
       SpeakerIdentityPipelineTests
       SpeakerIdentityStoreTests
       SpeakerVoiceprintMatcherTests
+      VoiceprintBackfillTests
     )
     ;;
   meetings)
@@ -360,6 +361,7 @@ case "${shard}" in
       CallRosterNamingTests
       CallRosterTrackerTests
       LiveMeetingSpeakerStateTests
+      LiveVoiceprintMatcherTests
       LiveSpeakerReconcilerTests
       SpeakerPickerTests
     )

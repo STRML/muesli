@@ -45,6 +45,75 @@ public struct MeetingSpeaker: Sendable, Equatable, Identifiable {
     public let hasVoiceprintSource: Bool
     /// Whether the assigned profile holds a voiceprint taken from this meeting.
     public let hasVoiceprintFromMeeting: Bool
+
+    public init(
+        label: String,
+        profileID: Int64?,
+        profileName: String?,
+        hasVoiceprintSource: Bool = false,
+        hasVoiceprintFromMeeting: Bool = false
+    ) {
+        self.label = label
+        self.profileID = profileID
+        self.profileName = profileName
+        self.hasVoiceprintSource = hasVoiceprintSource
+        self.hasVoiceprintFromMeeting = hasVoiceprintFromMeeting
+    }
+}
+
+public struct SavedVoiceprintProfile: Sendable, Equatable {
+    public let id: Int64
+    public let name: String
+    public let voiceprints: [[Float]]
+
+    public init(id: Int64, name: String, voiceprints: [[Float]]) {
+        self.id = id
+        self.name = name
+        self.voiceprints = voiceprints
+    }
+}
+
+public struct VoiceprintBackfillCandidate: Sendable, Equatable {
+    public let meetingID: Int64
+    public let title: String
+    public let recordingPath: String
+    public let startTime: String
+    public let durationSeconds: Double
+    public let rawTranscript: String
+    public let createdAt: Date
+    public let existingSpeakers: [MeetingSpeaker]
+
+    public init(
+        meetingID: Int64,
+        title: String,
+        recordingPath: String,
+        startTime: String = "",
+        durationSeconds: Double = 0,
+        rawTranscript: String,
+        createdAt: Date,
+        existingSpeakers: [MeetingSpeaker]
+    ) {
+        self.meetingID = meetingID
+        self.title = title
+        self.recordingPath = recordingPath
+        self.startTime = startTime
+        self.durationSeconds = durationSeconds
+        self.rawTranscript = rawTranscript
+        self.createdAt = createdAt
+        self.existingSpeakers = existingSpeakers
+    }
+}
+
+public struct BackfilledVoiceprintMatch: Sendable, Equatable {
+    public let label: String
+    public let profileID: Int64
+    public let centroid: [Float]
+
+    public init(label: String, profileID: Int64, centroid: [Float]) {
+        self.label = label
+        self.profileID = profileID
+        self.centroid = centroid
+    }
 }
 
 public struct SpeakerProfileSummary: Sendable, Equatable, Identifiable {
@@ -52,6 +121,13 @@ public struct SpeakerProfileSummary: Sendable, Equatable, Identifiable {
     public let name: String
     public let voiceprintCount: Int
     public let meetingCount: Int
+
+    public init(id: Int64, name: String, voiceprintCount: Int, meetingCount: Int) {
+        self.id = id
+        self.name = name
+        self.voiceprintCount = voiceprintCount
+        self.meetingCount = meetingCount
+    }
 }
 
 public struct SpeakerAssignmentResult: Sendable, Equatable {
@@ -402,6 +478,37 @@ extension DictationStore {
                     voiceprintCount: Int(sqlite3_column_int64(statement, 2)),
                     meetingCount: Int(sqlite3_column_int64(statement, 3))
                 )
+            }
+        }
+    }
+
+    /// Loads saved profiles that have at least one usable biometric voiceprint for in-process matching.
+    public func savedVoiceprintProfiles() throws -> [SavedVoiceprintProfile] {
+        try withChatDatabase { db in
+            let rows = try SpeakerIdentitySQL.rows("""
+            SELECT p.id, p.name, v.embedding
+            FROM speaker_profiles p
+            JOIN speaker_voiceprints v ON v.profile_id = p.id
+            ORDER BY p.id, v.id
+            """, db: db) {
+                (
+                    sqlite3_column_int64($0, 0),
+                    SpeakerIdentitySQL.text($0, 1) ?? "",
+                    SpeakerIdentitySQL.blob($0, 2).map(SpeakerIdentitySQL.decode) ?? []
+                )
+            }
+            var grouped: [Int64: (name: String, voiceprints: [[Float]])] = [:]
+            for (id, name, embedding) in rows where !name.isEmpty && SpeakerVoiceprintMatcher.isUsable(embedding) {
+                if var existing = grouped[id] {
+                    existing.voiceprints.append(embedding)
+                    grouped[id] = existing
+                } else {
+                    grouped[id] = (name: name, voiceprints: [embedding])
+                }
+            }
+            return grouped.keys.sorted().compactMap { id in
+                guard let entry = grouped[id], !entry.voiceprints.isEmpty else { return nil }
+                return SavedVoiceprintProfile(id: id, name: entry.name, voiceprints: entry.voiceprints)
             }
         }
     }
@@ -841,5 +948,251 @@ extension DictationStore {
             [.text(rewritten), .integer(Int64(wordCount)), .real(Date().timeIntervalSince1970), .integer(meetingID)], db: db
         )
         return true
+    }
+
+    // MARK: Voiceprint backfill
+
+    private struct VoiceprintKey: Hashable {
+        let profileID: Int64
+        let meetingID: Int64
+    }
+
+    private struct BackfillMeetingRow {
+        let id: Int64
+        let title: String
+        let recordingPath: String
+        let startTime: String
+        let durationSeconds: Double
+        let rawTranscript: String
+        let createdAtRaw: String
+    }
+
+    private struct BackfillMatchedRow {
+        let row: BackfillMeetingRow
+        let existingSpeakers: [MeetingSpeaker]
+    }
+
+    /// Returns meetings with an existing saved recording on disk where at least one
+    /// named speaker lacks a voiceprint derived from that meeting.
+    public func meetingsEligibleForVoiceprintBackfill(
+        requireExistingFile: Bool = true
+    ) throws -> [VoiceprintBackfillCandidate] {
+        let matchedRows: [BackfillMatchedRow] = try withChatDatabase { db in
+            let profiles: [(Int64, String)] = try SpeakerIdentitySQL.rows(
+                "SELECT id, name FROM speaker_profiles",
+                db: db
+            ) { (sqlite3_column_int64($0, 0), SpeakerIdentitySQL.text($0, 1) ?? "") }
+            let profilesByLowerName = Dictionary(
+                profiles.map { ($0.1.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), $0.0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+
+            let voiceprintRows: [VoiceprintKey] = try SpeakerIdentitySQL.rows(
+                "SELECT profile_id, source_meeting_id FROM speaker_voiceprints WHERE source_meeting_id IS NOT NULL",
+                db: db
+            ) {
+                VoiceprintKey(
+                    profileID: sqlite3_column_int64($0, 0),
+                    meetingID: sqlite3_column_int64($0, 1)
+                )
+            }
+            let existingVoiceprints = Set(voiceprintRows)
+
+            let speakerRows: [(Int64, MeetingSpeaker)] = try SpeakerIdentitySQL.rows("""
+            SELECT ms.meeting_id, ms.label, ms.profile_id, sp.name, ms.embedding IS NOT NULL
+            FROM meeting_speakers ms
+            LEFT JOIN speaker_profiles sp ON sp.id = ms.profile_id
+            ORDER BY ms.meeting_id, ms.rowid
+            """, db: db) { statement in
+                let meetingID = sqlite3_column_int64(statement, 0)
+                let label = SpeakerIdentitySQL.text(statement, 1) ?? ""
+                let profileID = SpeakerIdentitySQL.integer(statement, 2)
+                let profileName = SpeakerIdentitySQL.text(statement, 3)
+                let hasSource = sqlite3_column_int(statement, 4) != 0
+                let hasVoiceprint = profileID.map {
+                    existingVoiceprints.contains(VoiceprintKey(profileID: $0, meetingID: meetingID))
+                } ?? false
+                return (
+                    meetingID,
+                    MeetingSpeaker(
+                        label: label,
+                        profileID: profileID,
+                        profileName: profileName,
+                        hasVoiceprintSource: hasSource,
+                        hasVoiceprintFromMeeting: hasVoiceprint
+                    )
+                )
+            }
+            let speakersByMeeting = Dictionary(grouping: speakerRows, by: \.0)
+                .mapValues { $0.map(\.1) }
+
+            let meetingRows: [BackfillMeetingRow] = try SpeakerIdentitySQL.rows("""
+            SELECT id, title, saved_recording_path, start_time, COALESCE(duration_seconds, 0),
+                   COALESCE(raw_transcript, ''), COALESCE(created_at, '')
+            FROM meetings
+            WHERE deleted_at IS NULL
+              AND meeting_status <> 'recording'
+              AND saved_recording_path IS NOT NULL
+              AND TRIM(saved_recording_path) <> ''
+            ORDER BY julianday(start_time) DESC, id DESC
+            """, db: db) { statement in
+                BackfillMeetingRow(
+                    id: sqlite3_column_int64(statement, 0),
+                    title: SpeakerIdentitySQL.text(statement, 1) ?? "",
+                    recordingPath: SpeakerIdentitySQL.text(statement, 2) ?? "",
+                    startTime: SpeakerIdentitySQL.text(statement, 3) ?? "",
+                    durationSeconds: sqlite3_column_double(statement, 4),
+                    rawTranscript: SpeakerIdentitySQL.text(statement, 5) ?? "",
+                    createdAtRaw: SpeakerIdentitySQL.text(statement, 6) ?? ""
+                )
+            }
+
+            return meetingRows.compactMap { row in
+                let existingSpeakers = speakersByMeeting[row.id] ?? []
+                let hasSpeakerNeedingVoiceprint = existingSpeakers.contains { speaker in
+                    guard let profileID = speaker.profileID else { return false }
+                    return !existingVoiceprints.contains(
+                        VoiceprintKey(profileID: profileID, meetingID: row.id)
+                    )
+                }
+                if hasSpeakerNeedingVoiceprint {
+                    return BackfillMatchedRow(row: row, existingSpeakers: existingSpeakers)
+                }
+
+                // Also eligible when raw_transcript references an existing speaker profile
+                // (even if no meeting_speakers row exists yet) that lacks a voiceprint here.
+                let transcriptSpeakers = Self.transcriptSpeakerNames(in: row.rawTranscript)
+                let hasTranscriptMatch = transcriptSpeakers.contains { label in
+                    guard let profileID = profilesByLowerName[label.lowercased()] else { return false }
+                    return !existingVoiceprints.contains(
+                        VoiceprintKey(profileID: profileID, meetingID: row.id)
+                    )
+                }
+                return hasTranscriptMatch
+                    ? BackfillMatchedRow(row: row, existingSpeakers: existingSpeakers)
+                    : nil
+            }
+        }
+
+        let dateParser = MeetingHistoryDateParser()
+        let sqliteDateFormatter = DateFormatter()
+        sqliteDateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        sqliteDateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        sqliteDateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        var candidates: [VoiceprintBackfillCandidate] = []
+        for entry in matchedRows {
+            let row = entry.row
+            if requireExistingFile, !FileManager.default.fileExists(atPath: row.recordingPath) {
+                continue
+            }
+            let createdAt = sqliteDateFormatter.date(from: row.createdAtRaw)
+                ?? dateParser.date(row.startTime)
+                ?? Date(timeIntervalSince1970: 0)
+            candidates.append(
+                VoiceprintBackfillCandidate(
+                    meetingID: row.id,
+                    title: row.title,
+                    recordingPath: row.recordingPath,
+                    startTime: row.startTime,
+                    durationSeconds: row.durationSeconds,
+                    rawTranscript: row.rawTranscript,
+                    createdAt: createdAt,
+                    existingSpeakers: entry.existingSpeakers
+                )
+            )
+        }
+        return candidates
+    }
+
+    /// Persists backfilled voiceprints and speaker embeddings for `meetingID` inside one
+    /// SQLite transaction without modifying `raw_transcript` or `formatted_notes`, and
+    /// without removing existing `meeting_speakers` rows.
+    @discardableResult
+    public func applyBackfilledVoiceprints(
+        meetingID: Int64,
+        matches: [BackfilledVoiceprintMatch]
+    ) throws -> Int {
+        guard !matches.isEmpty else { return 0 }
+        return try withChatDatabase { db in
+            try SpeakerIdentitySQL.transaction(db: db) {
+                let live = try SpeakerIdentitySQL.rows(
+                    "SELECT 1 FROM meetings WHERE id = ? AND deleted_at IS NULL",
+                    [.integer(meetingID)], db: db
+                ) { _ in true }
+                guard !live.isEmpty else { return 0 }
+
+                var storedProfileIDs = Set<Int64>()
+                for match in matches {
+                    guard let normalized = Self.usableVector(match.centroid) else { continue }
+                    let profileRows = try SpeakerIdentitySQL.rows(
+                        "SELECT name FROM speaker_profiles WHERE id = ?",
+                        [.integer(match.profileID)], db: db
+                    ) { SpeakerIdentitySQL.text($0, 0) }
+                    guard let profileName = profileRows.first.flatMap({ $0 }) else { continue }
+
+                    let trimmedLabel = match.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let targetLabel = trimmedLabel.isEmpty ? profileName : trimmedLabel
+                    let embeddingData = SpeakerIdentitySQL.encode(normalized)
+
+                    if try meetingSpeakerRow(meetingID: meetingID, label: targetLabel, db: db) != nil {
+                        try SpeakerIdentitySQL.execute(
+                            "UPDATE meeting_speakers SET embedding = ?, profile_id = ? WHERE meeting_id = ? AND label = ?",
+                            [.blob(embeddingData), .integer(match.profileID), .integer(meetingID), .text(targetLabel)],
+                            db: db
+                        )
+                    } else if let existingByProfile = try otherMeetingSpeakerRow(
+                        meetingID: meetingID,
+                        profileID: match.profileID,
+                        excludingLabel: targetLabel,
+                        db: db
+                    ) {
+                        try SpeakerIdentitySQL.execute(
+                            "UPDATE meeting_speakers SET embedding = ? WHERE meeting_id = ? AND label = ?",
+                            [.blob(embeddingData), .integer(meetingID), .text(existingByProfile.label)],
+                            db: db
+                        )
+                    } else {
+                        try SpeakerIdentitySQL.execute(
+                            "INSERT INTO meeting_speakers (meeting_id, label, embedding, profile_id) VALUES (?, ?, ?, ?)",
+                            [.integer(meetingID), .text(targetLabel), .blob(embeddingData), .integer(match.profileID)],
+                            db: db
+                        )
+                    }
+
+                    if try storeVoiceprint(
+                        embeddingData,
+                        profileID: match.profileID,
+                        meetingID: meetingID,
+                        replaceExisting: true,
+                        db: db
+                    ) {
+                        storedProfileIDs.insert(match.profileID)
+                    }
+                }
+                return storedProfileIDs.count
+            }
+        }
+    }
+
+    private static func transcriptSpeakerNames(in transcript: String) -> Set<String> {
+        guard !transcript.isEmpty else { return [] }
+        var names = Set<String>()
+        for rawLine in transcript.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard line.hasPrefix("["),
+                  let bracketEnd = line.firstIndex(of: "]") else { continue }
+            let remainder = line[line.index(after: bracketEnd)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let colon = remainder.firstIndex(of: ":") else { continue }
+            let candidate = remainder[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !candidate.isEmpty,
+                  candidate.count <= 64,
+                  !isReservedSpeakerName(candidate),
+                  candidate.range(of: #"^local\s+speaker(\s+\d+)?$"#, options: [.regularExpression, .caseInsensitive]) == nil else {
+                continue
+            }
+            names.insert(candidate)
+        }
+        return names
     }
 }

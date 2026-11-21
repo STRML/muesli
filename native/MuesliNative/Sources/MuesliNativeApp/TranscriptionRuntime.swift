@@ -1734,6 +1734,19 @@ actor TranscriptionCoordinator {
         diarizerManager
     }
 
+    /// Runs serialized single-clip diarization on the preloaded `DiarizerManager` without
+    /// mutating its shared speaker state. Returns `nil` if the diarizer is not yet available.
+    func diarizeLiveVoiceprintClip(_ samples: [Float]) -> [TimedSpeakerSegment]? {
+        guard let diarizerManager, diarizerManager.isAvailable else { return nil }
+        return try? FluidAudioLiveVoiceprintExtractor.diarizeClip(samples, using: diarizerManager)
+    }
+
+    /// Extracts an L2-normalized centroid for a single live speaker cluster clip.
+    func extractLiveSpeakerCentroid(from samples: [Float]) -> [Float]? {
+        guard let segments = diarizeLiveVoiceprintClip(samples) else { return nil }
+        return FluidAudioLiveVoiceprintExtractor.dominantCentroid(from: segments)
+    }
+
     func shutdown() async {
         _ = try? await withModelReservation(for: "fluidaudio") { await fluidTranscriber.shutdown() }
         _ = try? await withModelReservation(for: "parakeet-unified") { await parakeetUnifiedTranscriber.shutdown() }

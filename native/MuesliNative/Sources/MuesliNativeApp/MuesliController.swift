@@ -1070,6 +1070,10 @@ public final class MuesliController: NSObject {
     private var streamingRecoveryAlertID: UUID?
     private var discardingDictationRecoveryIDs: Set<UUID> = []
     private var dictationRecoveryRefreshGeneration = 0
+    var voiceprintBackfillTask: Task<Void, Never>?
+    var voiceprintBackfillEligibilityTask: Task<Void, Never>?
+    var voiceprintBackfillAttemptID: UUID?
+    var liveVoiceprintSessionState: (ownerID: Int64, generation: UUID, coordinator: LiveVoiceprintCoordinator, task: Task<Void, Never>?)?
 
     init(
         runtime: RuntimePaths,
@@ -2523,6 +2527,7 @@ public final class MuesliController: NSObject {
     private func clearLiveMeetingTranscript(ownerID: Int64? = nil, generation: UUID? = nil) {
         if let ownerID, appState.liveMeetingTranscriptOwnerID != ownerID { return }
         if let generation, liveMeetingTranscriptGeneration != generation { return }
+        resetLiveVoiceprintRecognition()
         appState.liveMeetingSpeakerStore = LiveMeetingSpeakerStore()
         appState.liveDiarizationStatus = .off
         appState.liveMeetingParticipants = []
@@ -9555,6 +9560,10 @@ public final class MuesliController: NSObject {
                         if changed {
                             self.syncLiveMeetingSpeakerTranscript()
                             self.appState.liveDiarizationStatus = meetingSession.currentLiveDiarizationStatus()
+                            self.scheduleLiveVoiceprintRecognition(
+                                meetingID: meetingID,
+                                generation: transcriptGeneration
+                            )
                         }
                     }
                 }
@@ -9615,6 +9624,10 @@ public final class MuesliController: NSObject {
                         if let meetingSession {
                             self.appState.liveDiarizationStatus = meetingSession.currentLiveDiarizationStatus()
                         }
+                        self.scheduleLiveVoiceprintRecognition(
+                            meetingID: meetingID,
+                            generation: transcriptGeneration
+                        )
                     }
                 }
                 meetingSession.onPartialTranscript = { [weak self] speaker, tail in
@@ -9654,6 +9667,11 @@ public final class MuesliController: NSObject {
                     transcript: "",
                     partialYou: "",
                     partialOthers: ""
+                )
+                prepareLiveVoiceprintRecognition(
+                    meetingID: meetingID,
+                    generation: transcriptGeneration,
+                    session: meetingSession
                 )
                 refreshLiveSpeakerDirectory(meetingID: meetingID)
                 let micHealthWarningLock = NSLock()
@@ -10328,6 +10346,7 @@ public final class MuesliController: NSObject {
             }
         }
 
+        resetLiveVoiceprintRecognition()
         beginMeetingCaptureShutdown(session: sessionToStop)
 
         if let liveMeetingID {

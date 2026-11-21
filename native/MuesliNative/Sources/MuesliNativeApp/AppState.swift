@@ -263,6 +263,8 @@ final class AppState {
     var liveDiarizationStatus: LiveDiarizationStatus = .off
     var liveSpeakerProfiles: [SpeakerProfileSummary] = []
     var liveMeetingParticipants: [MeetingParticipant] = []
+    var voiceprintBackfillState: VoiceprintBackfillState = .idle
+    var voiceprintBackfillEligibleCount: Int = 0
     var activeMeetingAudioWarning: ActiveMeetingAudioWarning?
     var dictationState: DictationState = .idle
     var isVoiceNoteRecording: Bool = false

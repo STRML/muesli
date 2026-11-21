@@ -498,4 +498,154 @@ struct SpeakerIdentityStoreTests {
         let labels = Set(try store.meetingSpeakers(meetingID: id).map(\.label))
         #expect(labels == ["Alex", "Speaker 2", "Speaker 3"])
     }
+
+    // MARK: - Voiceprint backfill
+
+    private func makeTempRecordingFile() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("muesli-backfill-test-\(UUID().uuidString).wav")
+        try Data([0x52, 0x49, 0x46, 0x46]).write(to: url)
+        return url
+    }
+
+    @Test("meetingsEligibleForVoiceprintBackfill finds meetings needing voiceprints via rows or transcript labels")
+    func eligibleMeetingsForBackfill() throws {
+        let store = try makeStore()
+        let alex = try store.findOrCreateSpeakerProfile(name: "Alex")
+        let blair = try store.findOrCreateSpeakerProfile(name: "Blair")
+
+        let fileA = try makeTempRecordingFile()
+        let fileB = try makeTempRecordingFile()
+        let fileDone = try makeTempRecordingFile()
+        let fileReserved = try makeTempRecordingFile()
+        let fileDeleted = try makeTempRecordingFile()
+        defer {
+            for url in [fileA, fileB, fileDone, fileReserved, fileDeleted] {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+
+        // (a) meeting_speakers row with profile_id and no voiceprint row for this meeting
+        let meetingA = try insertMeeting(store, transcript: "[10:00:00] Speaker 1: hello")
+        try store.updateMeetingSavedRecordingPath(id: meetingA, path: fileA.path)
+        _ = try store.recordMeetingSpeakers(
+            meetingID: meetingA,
+            observations: [MeetingSpeakerObservation(label: "Speaker 1", centroid: nil, speechSeconds: 20, assignedProfileID: alex.id)],
+            renderNames: false
+        )
+
+        // (b) no meeting_speakers row, but raw_transcript has a case-insensitive match for Blair
+        let meetingB = try insertMeeting(store, transcript: "[00:00:05] blair: welcome everyone")
+        try store.updateMeetingSavedRecordingPath(id: meetingB, path: fileB.path)
+
+        // Missing file on disk -> excluded
+        let meetingMissingFile = try insertMeeting(store, transcript: "[00:00:05] Alex: missing file")
+        try store.updateMeetingSavedRecordingPath(id: meetingMissingFile, path: "/tmp/does-not-exist-\(UUID().uuidString).wav")
+
+        // Already has voiceprint for this meeting -> excluded
+        let meetingDone = try insertMeeting(store, transcript: "[10:00:00] Alex: already learned")
+        try store.updateMeetingSavedRecordingPath(id: meetingDone, path: fileDone.path)
+        _ = try store.recordMeetingSpeakers(
+            meetingID: meetingDone,
+            observations: [MeetingSpeakerObservation(label: "Speaker 1", centroid: unit(0), speechSeconds: 20, assignedProfileID: alex.id)],
+            renderNames: true
+        )
+
+        // Only reserved labels -> excluded
+        let meetingReserved = try insertMeeting(store, transcript: "[10:00:00] You: hi\n[10:00:05] Speaker 1: hello\n[10:00:10] Others: bye")
+        try store.updateMeetingSavedRecordingPath(id: meetingReserved, path: fileReserved.path)
+
+        // Deleted meeting -> excluded
+        let meetingDeleted = try insertMeeting(store, transcript: "[10:00:00] Alex: deleted")
+        try store.updateMeetingSavedRecordingPath(id: meetingDeleted, path: fileDeleted.path)
+        try store.deleteMeeting(id: meetingDeleted)
+
+        // Recording-in-progress meeting -> excluded
+        let activeID = try insertMeeting(store, transcript: "[10:00:00] Alex: live")
+        try store.updateMeetingSavedRecordingPath(id: activeID, path: fileA.path)
+        try store.updateMeetingStatus(id: activeID, status: .recording)
+
+        let candidates = try store.meetingsEligibleForVoiceprintBackfill()
+        let ids = Set(candidates.map(\.meetingID))
+        #expect(ids == [meetingA, meetingB])
+
+        let candA = try #require(candidates.first { $0.meetingID == meetingA })
+        #expect(candA.existingSpeakers.count == 1)
+        #expect(candA.existingSpeakers.first?.profileID == alex.id)
+        #expect(candA.existingSpeakers.first?.hasVoiceprintFromMeeting == false)
+
+        let candB = try #require(candidates.first { $0.meetingID == meetingB })
+        #expect(candB.existingSpeakers.isEmpty)
+        #expect(blair.id != alex.id)
+    }
+
+    @Test("applyBackfilledVoiceprints stores voiceprints and preserves transcripts, notes, and other speakers")
+    func applyBackfilledVoiceprintsPreservesContent() throws {
+        let store = try makeStore()
+        let alex = try store.findOrCreateSpeakerProfile(name: "Alex")
+        let blair = try store.findOrCreateSpeakerProfile(name: "Blair")
+        let file = try makeTempRecordingFile()
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let originalTranscript = "[10:00:00] You: hello\n[10:00:04] Alex: hey\n[10:00:20] Speaker 2: hi"
+        let originalNotes = "## Summary\nImportant notes that must never change."
+        let meetingID = try store.insertMeeting(
+            title: "Sync",
+            calendarEventID: nil,
+            startTime: Date(),
+            endTime: Date().addingTimeInterval(60),
+            rawTranscript: originalTranscript,
+            formattedNotes: originalNotes,
+            micAudioPath: nil,
+            systemAudioPath: nil,
+            savedRecordingPath: file.path
+        )
+
+        // Pre-existing unnamed Speaker 2 row that must remain untouched
+        _ = try store.recordMeetingSpeakers(
+            meetingID: meetingID,
+            observations: [MeetingSpeakerObservation(label: "Speaker 2", centroid: unit(5), speechSeconds: 20)],
+            renderNames: true
+        )
+
+        let stored = try store.applyBackfilledVoiceprints(
+            meetingID: meetingID,
+            matches: [
+                BackfilledVoiceprintMatch(label: "Alex", profileID: alex.id, centroid: unit(0)),
+                // Invalid zero centroid should be ignored
+                BackfilledVoiceprintMatch(label: "Blair", profileID: blair.id, centroid: [0, 0, 0]),
+            ]
+        )
+        #expect(stored == 1)
+
+        // Transcript and notes must be byte-for-byte preserved
+        let meeting = try #require(try store.meeting(id: meetingID))
+        #expect(meeting.rawTranscript == originalTranscript)
+        #expect(meeting.formattedNotes == originalNotes)
+
+        // Both Alex and Speaker 2 rows exist in meeting_speakers
+        let speakers = try store.meetingSpeakers(meetingID: meetingID)
+        #expect(Set(speakers.map(\.label)) == ["Alex", "Speaker 2"])
+        let alexRow = try #require(speakers.first { $0.label == "Alex" })
+        #expect(alexRow.profileID == alex.id)
+        #expect(alexRow.hasVoiceprintSource)
+        #expect(alexRow.hasVoiceprintFromMeeting)
+        let speaker2Row = try #require(speakers.first { $0.label == "Speaker 2" })
+        #expect(speaker2Row.profileID == nil)
+        #expect(speaker2Row.hasVoiceprintSource)
+
+        // Profile voiceprint count updated and meeting is no longer eligible
+        let profiles = Dictionary(uniqueKeysWithValues: try store.speakerProfiles().map { ($0.id, $0.voiceprintCount) })
+        #expect(profiles[alex.id] == 1)
+        #expect(profiles[blair.id] == 0)
+        #expect(try store.meetingsEligibleForVoiceprintBackfill().isEmpty)
+
+        // Re-applying updates the existing voiceprint row cleanly instead of duplicating
+        let restored = try store.applyBackfilledVoiceprints(
+            meetingID: meetingID,
+            matches: [BackfilledVoiceprintMatch(label: "Alex", profileID: alex.id, centroid: unit(1))]
+        )
+        #expect(restored == 1)
+        #expect(try count(store, "SELECT COUNT(*) FROM speaker_voiceprints WHERE profile_id = \(alex.id) AND source_meeting_id = \(meetingID)") == 1)
+    }
 }

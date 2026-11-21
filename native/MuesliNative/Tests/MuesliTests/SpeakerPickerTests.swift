@@ -71,6 +71,33 @@ struct SpeakerPickerTests {
         #expect(output.candidates[2].participantIdentifier == "c2")
     }
 
+    @Test("saved profile subtitles omit 0 voiceprints clutter and show positive counts")
+    func savedProfileSubtitles() {
+        let output = SpeakerPickerFilter.filter(
+            query: "",
+            inMeetingNames: ["Alex Kim"],
+            profiles: [
+                profile(1, "Alex Kim", voiceprints: 0, meetings: 3),
+                profile(2, "Blair Hosie", voiceprints: 0, meetings: 1),
+                profile(3, "Ken Thwaites", voiceprints: 0, meetings: 0),
+                profile(4, "Sarah Lin", voiceprints: 1, meetings: 2),
+                profile(5, "Devon Brooks", voiceprints: 2, meetings: 0),
+            ]
+        )
+
+        let subtitlesByName = Dictionary(
+            uniqueKeysWithValues: output.candidates.map { ($0.displayName, $0.subtitle) }
+        )
+        #expect(subtitlesByName["Alex Kim"] == "3 meetings")
+        #expect(subtitlesByName["Blair Hosie"] == "1 meeting")
+        #expect(subtitlesByName["Ken Thwaites"] == "Saved speaker")
+        #expect(subtitlesByName["Sarah Lin"] == "1 voiceprint · 2 meetings")
+        #expect(subtitlesByName["Devon Brooks"] == "2 voiceprints")
+        for subtitle in subtitlesByName.values {
+            #expect(subtitle?.contains("0 voiceprints") != true)
+        }
+    }
+
     @Test("prefix matches rank ahead of substring matches when filtering")
     func prefixBeforeSubstring() {
         let output = SpeakerPickerFilter.filter(

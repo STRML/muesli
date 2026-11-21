@@ -289,6 +289,7 @@ final class MeetingSession {
     /// Provisional speaker labels for system audio. Created from the config
     /// snapshot at start, or hot-attached mid-meeting via `enableLiveSpeakerLabelsMidMeeting`.
     private let liveSpeakerSessionStorage = OSAllocatedUnfairLock<LiveSpeakerLabelSession?>(initialState: nil)
+    private let liveVoiceprintAudioBuffer = LiveVoiceprintAudioBuffer()
     private let liveSpeakerClockOffsetStorage = OSAllocatedUnfairLock<TimeInterval>(initialState: 0)
     private let totalLiveSpeakerSamplesStorage = OSAllocatedUnfairLock<Int64>(initialState: 0)
     private let liveSpeakerStatusHandlerStorage = OSAllocatedUnfairLock<(@Sendable (LiveSpeakerLabelSession.Status) -> Void)?>(initialState: nil)
@@ -482,6 +483,7 @@ final class MeetingSession {
             try prepareRealtimeAudioPipeline(vadManager: vadManager)
             setupRetainedRecordingWriterIfNeeded()
             // Created before the first system sample so its clock matches the chunk timing.
+            liveVoiceprintAudioBuffer.reset()
             liveSpeakerClockOffsetStorage.withLock { $0 = 0 }
             totalLiveSpeakerSamplesStorage.withLock { $0 = 0 }
             let initialLiveSpeakerSession = Self.makeLiveSpeakerSession(
@@ -716,6 +718,14 @@ final class MeetingSession {
         liveSpeakerSessionStorage.withLock { $0 }
     }
 
+    var voiceprintAudioBuffer: LiveVoiceprintAudioBuffer {
+        liveVoiceprintAudioBuffer
+    }
+
+    func sliceLiveVoiceprintAudio(intervals: [LiveSpeakerInterval]) -> [Float]? {
+        liveVoiceprintAudioBuffer.slice(intervals: intervals)
+    }
+
     private func micPartialSession() -> MeetingStreamingPartialSession? {
         partialSessionsStorage.withLock { $0.mic }
     }
@@ -938,6 +948,7 @@ final class MeetingSession {
         stopSystemAudioWatchdog()
         stopPartialSessions()
         liveSpeakerSession()?.stop()
+        liveVoiceprintAudioBuffer.reset()
         vadController?.stop()
         vadController = nil
         systemVadController?.stop()
@@ -1023,6 +1034,7 @@ final class MeetingSession {
         // flushes its last partial window now. Chunks still committing keep their
         // text either way; at worst their live label is "Others".
         liveSpeakerSession()?.stop()
+        liveVoiceprintAudioBuffer.reset()
         let retainedRecordingResult = retainedRecordingWriter?.stopRecording()
         retainedRecordingWriter = nil
         if let error = retainedRecordingResult?.error {
@@ -1694,6 +1706,7 @@ final class MeetingSession {
             self.feedSystemPartialSession(floatSamples)
             if !self.inPerson {
                 self.totalLiveSpeakerSamplesStorage.withLock { $0 += Int64(floatSamples.count) }
+                self.liveVoiceprintAudioBuffer.append(floatSamples)
                 self.liveSpeakerSession()?.enqueue(floatSamples)
             }
             self.neuralAec.feedSystemSamples(floatSamples)
@@ -1714,6 +1727,7 @@ final class MeetingSession {
         // labels read; same samples, same clock as the chunk timing below.
         if inPerson {
             totalLiveSpeakerSamplesStorage.withLock { $0 += Int64(cleanedFloat.count) }
+            liveVoiceprintAudioBuffer.append(cleanedFloat)
             liveSpeakerSession()?.enqueue(cleanedFloat)
         }
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
