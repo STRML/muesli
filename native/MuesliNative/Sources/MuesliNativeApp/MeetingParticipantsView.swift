@@ -134,6 +134,7 @@ struct MeetingParticipantsView: View {
     @State private var isContactPickerPresented = false
     @State private var isNewContactPresented = false
     @State private var isPeoplePopoverPresented = false
+    @State private var isSpeakerProfilesSheetPresented = false
     @State private var suggestions: [MeetingParticipantSuggestion] = []
     @State private var suggestionFingerprint = ""
     @State private var suggestionTask: Task<Void, Never>?
@@ -216,6 +217,9 @@ struct MeetingParticipantsView: View {
                 NewMeetingContactView { participant in
                     Task { await attach(participant) }
                 }
+            }
+            .sheet(isPresented: $isSpeakerProfilesSheetPresented) {
+                SpeakerProfilesView(controller: controller)
             }
             .alert("Couldn't Update People", isPresented: errorBinding) {
                 Button("OK", role: .cancel) {
@@ -393,6 +397,19 @@ struct MeetingParticipantsView: View {
                     .accessibilityIdentifier("meeting.participants.findButton")
 
                     Spacer(minLength: 0)
+
+                    Button {
+                        isPeoplePopoverPresented = false
+                        isSpeakerProfilesSheetPresented = true
+                    } label: {
+                        Text("Saved speakers…")
+                            .font(MuesliTheme.caption())
+                            .foregroundStyle(MuesliTheme.accentText)
+                            .padding(.horizontal, 6)
+                            .frame(height: 28)
+                    }
+                    .buttonStyle(.muesli(.quiet))
+                    .accessibilityIdentifier("meeting.participants.savedSpeakersButton")
                 }
 
                 Text(ParticipantSuggestionPrivacy.disclosure)
