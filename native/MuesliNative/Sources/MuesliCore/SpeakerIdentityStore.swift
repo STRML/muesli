@@ -14,11 +14,23 @@ public struct MeetingSpeakerObservation: Sendable, Equatable {
     /// Normalized centroid, or nil when the speaker had too little usable audio.
     public let centroid: [Float]?
     public let speechSeconds: Double
+    /// Explicit speaker name supplied by live user edits (overrides automatic voiceprint matching).
+    public let assignedName: String?
+    /// Explicit saved profile ID supplied by live user edits (overrides automatic voiceprint matching).
+    public let assignedProfileID: Int64?
 
-    public init(label: String, centroid: [Float]?, speechSeconds: Double) {
+    public init(
+        label: String,
+        centroid: [Float]?,
+        speechSeconds: Double,
+        assignedName: String? = nil,
+        assignedProfileID: Int64? = nil
+    ) {
         self.label = label
         self.centroid = centroid
         self.speechSeconds = speechSeconds
+        self.assignedName = assignedName
+        self.assignedProfileID = assignedProfileID
     }
 }
 
@@ -194,43 +206,160 @@ enum SpeakerIdentitySQL {
 extension DictationStore {
     // MARK: Pipeline
 
-    /// Replaces this meeting's speaker rows with the new diarization, then matches the
-    /// centroids against saved voiceprints. Returns `observed label -> profile name` for
-    /// confident matches when `renderNames` is true; when false (private meetings) the
-    /// match is recorded locally but nothing is returned for the transcript.
+    /// Replaces (or merges into, when `preservingExisting` is true for resumed meetings) this
+    /// meeting's speaker rows with the new diarization, honors explicit live assignments first,
+    /// and matches remaining centroids against saved voiceprints.
+    /// Returns `observed label -> rendered name` when `renderNames` is true; when false (private
+    /// meetings) assignments and voiceprint matches are recorded locally without returning names
+    /// for the transcript.
     public func recordMeetingSpeakers(
         meetingID: Int64,
         observations: [MeetingSpeakerObservation],
-        renderNames: Bool
+        renderNames: Bool,
+        preservingExisting: Bool = false
     ) throws -> [String: String] {
         try withChatDatabase { db in
             try SpeakerIdentitySQL.transaction(db: db) {
-                try SpeakerIdentitySQL.deleteMeetingSpeakers(meetingID: meetingID, db: db)
+                if !preservingExisting {
+                    try SpeakerIdentitySQL.deleteMeetingSpeakers(meetingID: meetingID, db: db)
+                }
                 // A discard or delete can race with the end of processing; never leave a
                 // centroid behind for a meeting that is gone.
                 let live = try SpeakerIdentitySQL.rows(
                     "SELECT 1 FROM meetings WHERE id = ? AND deleted_at IS NULL", [.integer(meetingID)], db: db
-                ) { _ in () }
+                ) { _ in true }
                 guard !live.isEmpty else { return [:] }
+
                 let speakers = observations.filter { !SpeakerVoiceprintMatcher.reservedLabels.contains($0.label) }
-                let matches = SpeakerVoiceprintMatcher.match(
-                    candidates: speakers.map { .init(label: $0.label, centroid: $0.centroid) },
-                    profiles: try loadMatcherProfiles(db: db)
-                )
-                let names = try profileNames(ids: Array(matches.values), db: db)
-                var rendered: [String: String] = [:]
+                let existingRows = preservingExisting ? try loadMeetingSpeakerRows(meetingID: meetingID, db: db) : []
+                var usedLabels = Set(existingRows.map(\.label))
+                var nextSpeakerNumber = Self.nextSpeakerNumber(existingLabels: usedLabels)
+
+                // 1. Resolve explicit live assignments first so automatic voiceprint matching never
+                // steals a profile the user explicitly bound to another speaker.
+                var explicitProfiles: [String: Int64] = [:]
+                var explicitlyUsedProfileIDs = Set<Int64>()
                 for speaker in speakers {
-                    let profileID = matches[speaker.label]
-                    let name = profileID.flatMap { names[$0] }
-                    let label = renderNames ? (name ?? speaker.label) : speaker.label
-                    if renderNames, let name { rendered[speaker.label] = name }
-                    let embedding = speaker.centroid.flatMap { SpeakerVoiceprintMatcher.isUsable($0) ? SpeakerIdentitySQL.encode($0) : nil }
+                    if let profileID = try resolveExplicitProfileID(for: speaker, db: db) {
+                        explicitProfiles[speaker.label] = profileID
+                        explicitlyUsedProfileIDs.insert(profileID)
+                    }
+                }
+
+                // 2. Match remaining unnamed observations against saved voiceprints.
+                let unnamedCandidates = speakers
+                    .filter { explicitProfiles[$0.label] == nil }
+                    .map { SpeakerVoiceprintMatcher.Candidate(label: $0.label, centroid: $0.centroid) }
+                let availableProfiles = try loadMatcherProfiles(db: db)
+                    .filter { !explicitlyUsedProfileIDs.contains($0.id) }
+                let matchedProfiles = SpeakerVoiceprintMatcher.match(
+                    candidates: unnamedCandidates,
+                    profiles: availableProfiles
+                )
+
+                var allProfileIDs = Set(explicitProfiles.values).union(matchedProfiles.values)
+                allProfileIDs.formUnion(existingRows.compactMap(\.profileID))
+                let names = try profileNames(ids: Array(allProfileIDs), db: db)
+
+                // 3. Fold multiple observations that resolved to the same profile (e.g. merged clusters).
+                var resolvedByProfile: [Int64: (labels: [String], centroid: [Float]?, isExplicit: Bool)] = [:]
+                var orderedProfileIDs: [Int64] = []
+                var unnamedSpeakers: [MeetingSpeakerObservation] = []
+
+                for speaker in speakers {
+                    let explicitID = explicitProfiles[speaker.label]
+                    let resolvedID = explicitID ?? matchedProfiles[speaker.label]
+                    if let profileID = resolvedID {
+                        if var group = resolvedByProfile[profileID] {
+                            group.labels.append(speaker.label)
+                            group.centroid = Self.combinedNormalizedVectors(group.centroid, speaker.centroid)
+                            group.isExplicit = group.isExplicit || (explicitID != nil)
+                            resolvedByProfile[profileID] = group
+                        } else {
+                            orderedProfileIDs.append(profileID)
+                            resolvedByProfile[profileID] = (
+                                labels: [speaker.label],
+                                centroid: Self.usableVector(speaker.centroid),
+                                isExplicit: explicitID != nil
+                            )
+                        }
+                    } else {
+                        unnamedSpeakers.append(speaker)
+                    }
+                }
+
+                var rendered: [String: String] = [:]
+
+                for profileID in orderedProfileIDs {
+                    guard let group = resolvedByProfile[profileID],
+                          let profileName = names[profileID] else { continue }
+
+                    if preservingExisting,
+                       let existing = existingRows.first(where: { $0.profileID == profileID }) {
+                        let combinedData = Self.combinedEmbeddingData(
+                            existing.embedding,
+                            group.centroid.map(SpeakerIdentitySQL.encode)
+                        )
+                        try SpeakerIdentitySQL.execute(
+                            "UPDATE meeting_speakers SET embedding = ? WHERE meeting_id = ? AND label = ?",
+                            [combinedData.map { .blob($0) } ?? .null, .integer(meetingID), .text(existing.label)],
+                            db: db
+                        )
+                        if group.isExplicit {
+                            _ = try storeVoiceprint(combinedData, profileID: profileID, meetingID: meetingID, replaceExisting: true, db: db)
+                        }
+                        if renderNames {
+                            for observedLabel in group.labels {
+                                rendered[observedLabel] = existing.label
+                            }
+                        }
+                        continue
+                    }
+
+                    let rowLabel: String
+                    if renderNames {
+                        rowLabel = profileName
+                    } else {
+                        let preferred = group.labels.first ?? "Speaker \(nextSpeakerNumber)"
+                        rowLabel = Self.allocateLabel(preferred: preferred, used: &usedLabels, nextNumber: &nextSpeakerNumber)
+                    }
+                    usedLabels.insert(rowLabel)
+
+                    let embeddingData = group.centroid.map(SpeakerIdentitySQL.encode)
                     try SpeakerIdentitySQL.execute(
                         "INSERT OR REPLACE INTO meeting_speakers (meeting_id, label, embedding, profile_id) VALUES (?, ?, ?, ?)",
-                        [.integer(meetingID), .text(label), embedding.map { .blob($0) } ?? .null, profileID.map { .integer($0) } ?? .null],
+                        [.integer(meetingID), .text(rowLabel), embeddingData.map { .blob($0) } ?? .null, .integer(profileID)],
+                        db: db
+                    )
+                    if group.isExplicit {
+                        _ = try storeVoiceprint(embeddingData, profileID: profileID, meetingID: meetingID, replaceExisting: true, db: db)
+                    }
+                    if renderNames {
+                        for observedLabel in group.labels {
+                            rendered[observedLabel] = profileName
+                        }
+                    }
+                }
+
+                for speaker in unnamedSpeakers {
+                    let rowLabel: String
+                    if preservingExisting {
+                        rowLabel = Self.allocateLabel(preferred: speaker.label, used: &usedLabels, nextNumber: &nextSpeakerNumber)
+                    } else {
+                        rowLabel = speaker.label
+                        usedLabels.insert(rowLabel)
+                    }
+                    if renderNames, rowLabel != speaker.label {
+                        rendered[speaker.label] = rowLabel
+                    }
+                    let embeddingData = Self.usableVector(speaker.centroid).map(SpeakerIdentitySQL.encode)
+                    try SpeakerIdentitySQL.execute(
+                        "INSERT OR REPLACE INTO meeting_speakers (meeting_id, label, embedding, profile_id) VALUES (?, ?, ?, NULL)",
+                        [.integer(meetingID), .text(rowLabel), embeddingData.map { .blob($0) } ?? .null],
                         db: db
                     )
                 }
+
                 return rendered
             }
         }
@@ -277,42 +406,169 @@ extension DictationStore {
         }
     }
 
+    /// Finds or creates a speaker profile by name (case-insensitive) without requiring a
+    /// diarized `meeting_speakers` row, so mid-call pre-added speakers can be linked immediately.
+    @discardableResult
+    public func findOrCreateSpeakerProfile(name rawName: String) throws -> SpeakerProfileSummary {
+        let name = try Self.validatedSpeakerName(rawName)
+        return try withChatDatabase { db in
+            try SpeakerIdentitySQL.transaction(db: db) {
+                let profileID = try findOrCreateProfile(named: name, db: db)
+                let rows = try SpeakerIdentitySQL.rows("""
+                SELECT p.id, p.name,
+                       (SELECT COUNT(*) FROM speaker_voiceprints v WHERE v.profile_id = p.id),
+                       (SELECT COUNT(DISTINCT ms.meeting_id) FROM meeting_speakers ms WHERE ms.profile_id = p.id)
+                FROM speaker_profiles p
+                WHERE p.id = ?
+                """, [.integer(profileID)], db: db) { statement in
+                    SpeakerProfileSummary(
+                        id: sqlite3_column_int64(statement, 0),
+                        name: SpeakerIdentitySQL.text(statement, 1) ?? name,
+                        voiceprintCount: Int(sqlite3_column_int64(statement, 2)),
+                        meetingCount: Int(sqlite3_column_int64(statement, 3))
+                    )
+                }
+                guard let summary = rows.first else { throw SpeakerIdentityError.speakerNotFound }
+                return summary
+            }
+        }
+    }
+
     // MARK: Naming
 
     /// Names a meeting speaker ("This is Alex"). In one transaction: finds or creates the
     /// profile (case-insensitive, so an existing name merges), rewrites the label in the
     /// raw transcript unless the meeting is private, stores this meeting's centroid as a
     /// voiceprint, and moves any voiceprint this meeting gave a previous profile.
+    /// When `allowMerge` is true, assigning a name already used by another cluster in this
+    /// meeting folds the source cluster into that target speaker and merges their centroids.
     /// Repeating the same call is a no-op.
     @discardableResult
-    public func assignSpeaker(meetingID: Int64, label: String, name rawName: String) throws -> SpeakerAssignmentResult {
+    public func assignSpeaker(
+        meetingID: Int64,
+        label: String,
+        name rawName: String,
+        allowMerge: Bool = false
+    ) throws -> SpeakerAssignmentResult {
         let name = try Self.validatedSpeakerName(rawName)
         guard !SpeakerVoiceprintMatcher.reservedLabels.contains(label) else { throw SpeakerIdentityError.reservedLabel }
         let isPrivate = try isMeetingPrivate(id: meetingID)
         return try withChatDatabase { db in
             try SpeakerIdentitySQL.transaction(db: db) {
-                try assignSpeaker(meetingID: meetingID, label: label, name: name, rewrite: !isPrivate, db: db)
+                try assignSpeaker(meetingID: meetingID, label: label, name: name, rewrite: !isPrivate, allowMerge: allowMerge, db: db)
             }
         }
     }
 
-    private func assignSpeaker(meetingID: Int64, label: String, name: String, rewrite: Bool, db: OpaquePointer?) throws -> SpeakerAssignmentResult {
+    /// Convenience alias for merging `sourceLabel` into `intoTargetName` within a meeting.
+    @discardableResult
+    public func mergeMeetingSpeakers(
+        meetingID: Int64,
+        sourceLabel: String,
+        intoTargetName rawName: String
+    ) throws -> SpeakerAssignmentResult {
+        try assignSpeaker(meetingID: meetingID, label: sourceLabel, name: rawName, allowMerge: true)
+    }
+
+    /// Merges `sourceLabel` into `targetLabel` within a meeting, supporting both named
+    /// speakers and generic cluster labels (e.g. merging `"Speaker 1"` into `"Speaker 2"`).
+    @discardableResult
+    public func mergeMeetingSpeakerLabels(
+        meetingID: Int64,
+        sourceLabel: String,
+        targetLabel: String
+    ) throws -> SpeakerAssignmentResult {
+        let trimmedTarget = targetLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let validName = try? Self.validatedSpeakerName(trimmedTarget) {
+            return try assignSpeaker(meetingID: meetingID, label: sourceLabel, name: validName, allowMerge: true)
+        }
+        guard !SpeakerVoiceprintMatcher.reservedLabels.contains(sourceLabel),
+              !SpeakerVoiceprintMatcher.reservedLabels.contains(trimmedTarget),
+              !trimmedTarget.isEmpty,
+              sourceLabel != trimmedTarget else {
+            throw SpeakerIdentityError.reservedLabel
+        }
+        let isPrivate = try isMeetingPrivate(id: meetingID)
+        let rewrite = !isPrivate
+        return try withChatDatabase { db in
+            try SpeakerIdentitySQL.transaction(db: db) {
+                guard let sourceRow = try meetingSpeakerRow(meetingID: meetingID, label: sourceLabel, db: db),
+                      let targetRow = try meetingSpeakerRow(meetingID: meetingID, label: trimmedTarget, db: db) else {
+                    throw SpeakerIdentityError.speakerNotFound
+                }
+                if let previous = sourceRow.profileID, previous != targetRow.profileID {
+                    try forgetVoiceprints(profileID: previous, sourceMeetingID: meetingID, db: db)
+                }
+                let combinedEmbedding = Self.combinedEmbeddingData(targetRow.embedding, sourceRow.embedding)
+                try SpeakerIdentitySQL.execute(
+                    "UPDATE meeting_speakers SET embedding = ? WHERE meeting_id = ? AND label = ?",
+                    [combinedEmbedding.map { .blob($0) } ?? .null, .integer(meetingID), .text(trimmedTarget)],
+                    db: db
+                )
+                try SpeakerIdentitySQL.execute(
+                    "DELETE FROM meeting_speakers WHERE meeting_id = ? AND label = ?",
+                    [.integer(meetingID), .text(sourceLabel)],
+                    db: db
+                )
+                let stored: Bool
+                if let targetProfileID = targetRow.profileID {
+                    stored = try storeVoiceprint(combinedEmbedding, profileID: targetProfileID, meetingID: meetingID, replaceExisting: true, db: db)
+                } else {
+                    stored = false
+                }
+                let rewritten = rewrite ? try rewriteTranscriptLabel(meetingID: meetingID, from: sourceLabel, to: trimmedTarget, db: db) : false
+                return SpeakerAssignmentResult(
+                    profileID: targetRow.profileID ?? 0,
+                    profileName: trimmedTarget,
+                    transcriptRewritten: rewritten,
+                    voiceprintStored: stored
+                )
+            }
+        }
+    }
+
+    private func assignSpeaker(
+        meetingID: Int64,
+        label: String,
+        name: String,
+        rewrite: Bool,
+        allowMerge: Bool,
+        db: OpaquePointer?
+    ) throws -> SpeakerAssignmentResult {
         let profileID = try findOrCreateProfile(named: name, db: db)
         let profileName = try profileNames(ids: [profileID], db: db)[profileID] ?? name
         guard let row = try meetingSpeakerRow(meetingID: meetingID, label: label, db: db) else {
             return try alreadyAssigned(meetingID: meetingID, label: profileName, profileID: profileID, db: db)
         }
         let newLabel = rewrite ? profileName : label
-        if newLabel != label, try meetingSpeakerRow(meetingID: meetingID, label: newLabel, db: db) != nil {
-            throw SpeakerIdentityError.nameInUseInMeeting
+        let otherByProfile = try otherMeetingSpeakerRow(meetingID: meetingID, profileID: profileID, excludingLabel: label, db: db)
+        let otherByLabel = newLabel != label ? try meetingSpeakerRow(meetingID: meetingID, label: newLabel, db: db).map { (label: newLabel, row: $0) } : nil
+
+        if let target = otherByProfile ?? otherByLabel {
+            guard allowMerge else { throw SpeakerIdentityError.nameInUseInMeeting }
+            if let previous = row.profileID, previous != profileID {
+                try forgetVoiceprints(profileID: previous, sourceMeetingID: meetingID, db: db)
+            }
+            let combinedEmbedding = Self.combinedEmbeddingData(target.row.embedding, row.embedding)
+            try SpeakerIdentitySQL.execute(
+                "UPDATE meeting_speakers SET embedding = ?, profile_id = ? WHERE meeting_id = ? AND label = ?",
+                [combinedEmbedding.map { .blob($0) } ?? .null, .integer(profileID), .integer(meetingID), .text(target.label)],
+                db: db
+            )
+            try SpeakerIdentitySQL.execute(
+                "DELETE FROM meeting_speakers WHERE meeting_id = ? AND label = ?",
+                [.integer(meetingID), .text(label)],
+                db: db
+            )
+            let stored = try storeVoiceprint(combinedEmbedding, profileID: profileID, meetingID: meetingID, replaceExisting: true, db: db)
+            let rewritten = (rewrite && target.label != label) ? try rewriteTranscriptLabel(meetingID: meetingID, from: label, to: target.label, db: db) : false
+            return SpeakerAssignmentResult(profileID: profileID, profileName: profileName, transcriptRewritten: rewritten, voiceprintStored: stored)
         }
-        if try profileAssignedElsewhereInMeeting(meetingID: meetingID, profileID: profileID, label: label, db: db) {
-            throw SpeakerIdentityError.nameInUseInMeeting
-        }
+
         if let previous = row.profileID, previous != profileID {
             try forgetVoiceprints(profileID: previous, sourceMeetingID: meetingID, db: db)
         }
-        let stored = try storeVoiceprint(row.embedding, profileID: profileID, meetingID: meetingID, db: db)
+        let stored = try storeVoiceprint(row.embedding, profileID: profileID, meetingID: meetingID, replaceExisting: false, db: db)
         try SpeakerIdentitySQL.execute(
             "UPDATE meeting_speakers SET label = ?, profile_id = ? WHERE meeting_id = ? AND label = ?",
             [.text(newLabel), .integer(profileID), .integer(meetingID), .text(label)], db: db
@@ -359,7 +615,7 @@ extension DictationStore {
         return regex.stringByReplacingMatches(in: transcript, range: range, withTemplate: template)
     }
 
-    static func validatedSpeakerName(_ raw: String) throws -> String {
+    public static func validatedSpeakerName(_ raw: String) throws -> String {
         let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw SpeakerIdentityError.emptyName }
         // A name becomes a transcript line prefix, so it must not break that format.
@@ -369,7 +625,7 @@ extension DictationStore {
         return name
     }
 
-    static func isReservedSpeakerName(_ name: String) -> Bool {
+    public static func isReservedSpeakerName(_ name: String) -> Bool {
         if SpeakerVoiceprintMatcher.reservedLabels.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
             return true
         }
@@ -383,6 +639,94 @@ extension DictationStore {
         let profileID: Int64?
     }
 
+    private struct StoredMeetingSpeakerRow {
+        let label: String
+        let embedding: Data?
+        let profileID: Int64?
+    }
+
+    private func loadMeetingSpeakerRows(meetingID: Int64, db: OpaquePointer?) throws -> [StoredMeetingSpeakerRow] {
+        try SpeakerIdentitySQL.rows(
+            "SELECT label, embedding, profile_id FROM meeting_speakers WHERE meeting_id = ? ORDER BY rowid",
+            [.integer(meetingID)],
+            db: db
+        ) {
+            StoredMeetingSpeakerRow(
+                label: SpeakerIdentitySQL.text($0, 0) ?? "",
+                embedding: SpeakerIdentitySQL.blob($0, 1),
+                profileID: SpeakerIdentitySQL.integer($0, 2)
+            )
+        }
+    }
+
+    private func resolveExplicitProfileID(for observation: MeetingSpeakerObservation, db: OpaquePointer?) throws -> Int64? {
+        if let profileID = observation.assignedProfileID {
+            let exists = try !SpeakerIdentitySQL.rows(
+                "SELECT 1 FROM speaker_profiles WHERE id = ?",
+                [.integer(profileID)],
+                db: db
+            ) { _ in () }.isEmpty
+            if exists { return profileID }
+        }
+        if let rawName = observation.assignedName,
+           let validName = try? Self.validatedSpeakerName(rawName) {
+            return try findOrCreateProfile(named: validName, db: db)
+        }
+        return nil
+    }
+
+    private static func nextSpeakerNumber(existingLabels: Set<String>) -> Int {
+        var maxNumber = 0
+        for label in existingLabels {
+            if label.hasPrefix("Speaker "), let number = Int(label.dropFirst("Speaker ".count)) {
+                maxNumber = max(maxNumber, number)
+            }
+        }
+        return maxNumber + 1
+    }
+
+    private static func allocateLabel(preferred: String, used: inout Set<String>, nextNumber: inout Int) -> String {
+        if !used.contains(preferred) {
+            used.insert(preferred)
+            return preferred
+        }
+        while used.contains("Speaker \(nextNumber)") {
+            nextNumber += 1
+        }
+        let allocated = "Speaker \(nextNumber)"
+        used.insert(allocated)
+        nextNumber += 1
+        return allocated
+    }
+
+    private static func usableVector(_ vector: [Float]?) -> [Float]? {
+        guard let vector, SpeakerVoiceprintMatcher.isUsable(vector) else { return nil }
+        let norm = vector.reduce(0) { $0 + $1 * $1 }.squareRoot()
+        guard norm > 0, norm.isFinite else { return nil }
+        let unit = vector.map { $0 / norm }
+        return SpeakerVoiceprintMatcher.isUsable(unit) ? unit : nil
+    }
+
+    private static func combinedNormalizedVectors(_ lhs: [Float]?, _ rhs: [Float]?) -> [Float]? {
+        let left = usableVector(lhs)
+        let right = usableVector(rhs)
+        switch (left, right) {
+        case (nil, nil): return nil
+        case (let l?, nil): return l
+        case (nil, let r?): return r
+        case (let l?, let r?):
+            guard l.count == r.count else { return l }
+            let sum = zip(l, r).map(+)
+            return usableVector(sum) ?? l
+        }
+    }
+
+    private static func combinedEmbeddingData(_ lhs: Data?, _ rhs: Data?) -> Data? {
+        let left = lhs.map(SpeakerIdentitySQL.decode)
+        let right = rhs.map(SpeakerIdentitySQL.decode)
+        return combinedNormalizedVectors(left, right).map(SpeakerIdentitySQL.encode)
+    }
+
     private func meetingSpeakerRow(meetingID: Int64, label: String, db: OpaquePointer?) throws -> MeetingSpeakerRow? {
         try SpeakerIdentitySQL.rows(
             "SELECT embedding, profile_id FROM meeting_speakers WHERE meeting_id = ? AND label = ?",
@@ -390,11 +734,21 @@ extension DictationStore {
         ) { MeetingSpeakerRow(embedding: SpeakerIdentitySQL.blob($0, 0), profileID: SpeakerIdentitySQL.integer($0, 1)) }.first
     }
 
-    private func profileAssignedElsewhereInMeeting(meetingID: Int64, profileID: Int64, label: String, db: OpaquePointer?) throws -> Bool {
-        try !SpeakerIdentitySQL.rows(
-            "SELECT 1 FROM meeting_speakers WHERE meeting_id = ? AND profile_id = ? AND label <> ?",
+    private func otherMeetingSpeakerRow(
+        meetingID: Int64,
+        profileID: Int64,
+        excludingLabel label: String,
+        db: OpaquePointer?
+    ) throws -> (label: String, row: MeetingSpeakerRow)? {
+        try SpeakerIdentitySQL.rows(
+            "SELECT label, embedding, profile_id FROM meeting_speakers WHERE meeting_id = ? AND profile_id = ? AND label <> ? ORDER BY rowid LIMIT 1",
             [.integer(meetingID), .integer(profileID), .text(label)], db: db
-        ) { _ in () }.isEmpty
+        ) {
+            (
+                label: SpeakerIdentitySQL.text($0, 0) ?? "",
+                row: MeetingSpeakerRow(embedding: SpeakerIdentitySQL.blob($0, 1), profileID: SpeakerIdentitySQL.integer($0, 2))
+            )
+        }.first
     }
 
     private func findOrCreateProfile(named name: String, db: OpaquePointer?) throws -> Int64 {
@@ -420,15 +774,30 @@ extension DictationStore {
         return names
     }
 
-    private func storeVoiceprint(_ embedding: Data?, profileID: Int64, meetingID: Int64, db: OpaquePointer?) throws -> Bool {
+    private func storeVoiceprint(
+        _ embedding: Data?,
+        profileID: Int64,
+        meetingID: Int64,
+        replaceExisting: Bool = false,
+        db: OpaquePointer?
+    ) throws -> Bool {
         guard let embedding else { return false }
         let vector = SpeakerIdentitySQL.decode(embedding)
         guard SpeakerVoiceprintMatcher.isUsable(vector) else { return false }
         let existing = try SpeakerIdentitySQL.rows(
-            "SELECT 1 FROM speaker_voiceprints WHERE profile_id = ? AND source_meeting_id = ?",
+            "SELECT id FROM speaker_voiceprints WHERE profile_id = ? AND source_meeting_id = ? ORDER BY id LIMIT 1",
             [.integer(profileID), .integer(meetingID)], db: db
-        ) { _ in () }
-        guard existing.isEmpty else { return true }
+        ) { sqlite3_column_int64($0, 0) }
+        if let existingID = existing.first {
+            if replaceExisting {
+                try SpeakerIdentitySQL.execute(
+                    "UPDATE speaker_voiceprints SET embedding = ?, dimension = ?, created_at = ? WHERE id = ?",
+                    [.blob(embedding), .integer(Int64(vector.count)), .real(Date().timeIntervalSince1970), .integer(existingID)],
+                    db: db
+                )
+            }
+            return true
+        }
         try SpeakerIdentitySQL.execute(
             "INSERT INTO speaker_voiceprints (profile_id, embedding, dimension, source_meeting_id, created_at) VALUES (?, ?, ?, ?, ?)",
             [.integer(profileID), .blob(embedding), .integer(Int64(vector.count)), .integer(meetingID), .real(Date().timeIntervalSince1970)],

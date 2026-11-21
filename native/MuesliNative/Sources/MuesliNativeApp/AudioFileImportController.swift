@@ -193,13 +193,17 @@ enum AudioFileImportController {
 
         // Run speaker diarization if available
         var diarizedTranscript = rawTranscript
+        var speakerSegments: [TimedSpeakerSegment] = []
+        var speakerCentroids: [String: [Float]] = [:]
         if let diarizerManager = await transcriptionCoordinator.getDiarizerManager(),
            diarizerManager.isAvailable {
             progress("Identifying speakers...")
             do {
-                let speakerSegments = try await transcriptionCoordinator.diarizeRecordedAudio(at: wavURL) { fraction in
+                let diarizationResult = try await transcriptionCoordinator.diarizeRecordedAudioWithCentroids(at: wavURL) { fraction in
                     progress("Identifying speakers · \(Int(fraction * 100))%")
                 }
+                speakerSegments = diarizationResult.segments
+                speakerCentroids = diarizationResult.speakerCentroids
                 if !speakerSegments.isEmpty {
                     diarizedTranscript = formatTranscriptWithSpeakers(
                         transcription: transcription,
@@ -276,6 +280,15 @@ enum AudioFileImportController {
             selectedTemplatePrompt: templateSnapshot.prompt,
             folderID: folderID
         )
+
+        if !speakerSegments.isEmpty {
+            diarizedTranscript = await controller.recordAndApplyPostDiarizationSpeakers(
+                meetingID: meetingID,
+                segments: speakerSegments,
+                speakerCentroids: speakerCentroids,
+                existingTranscript: diarizedTranscript
+            )
+        }
 
         return ImportResult(
             meetingID: meetingID,

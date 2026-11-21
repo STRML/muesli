@@ -50,7 +50,7 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
         var loadTimeout: Duration = .seconds(30)
         var maxBacklogSeconds: Double = 60
         var coverageWait: Duration = .seconds(2)
-        var retainSeconds: Double = 300
+        var retainSeconds: Double = .infinity
     }
 
     static let sampleRate = 16_000
@@ -66,17 +66,21 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
         var droppedSamples = 0
         var loadTask: Task<Void, Never>?
         var timeoutTask: Task<Void, Never>?
+        var onStatusChanged: (@Sendable (Status) -> Void)?
+        var onCoverageAdvanced: (@Sendable (TimeInterval) -> Void)?
 
         var acceptsAudio: Bool { status == .loading || status == .running }
 
         /// Terminal states stay put; only a live session can fail.
-        mutating func fail(_ failure: Failure) {
-            guard status == .loading || status == .running || status == .stopping else { return }
+        @discardableResult
+        mutating func fail(_ failure: Failure) -> (Status, (@Sendable (Status) -> Void)?)? {
+            guard status == .loading || status == .running || status == .stopping else { return nil }
             status = .failed(failure)
             engine = nil
             pending = []
             loadTask?.cancel()
             timeoutTask?.cancel()
+            return (status, onStatusChanged)
         }
 
         /// True once waiting for the diarizer cannot improve an answer.
@@ -94,13 +98,36 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let processingQueue = DispatchQueue(label: "com.muesli.live-speaker-labels", qos: .userInitiated)
 
-    init(factory: @escaping EngineFactory, limits: Limits = Limits()) {
+    init(
+        factory: @escaping EngineFactory,
+        limits: Limits = Limits(),
+        onStatusChanged: (@Sendable (Status) -> Void)? = nil,
+        onCoverageAdvanced: (@Sendable (TimeInterval) -> Void)? = nil
+    ) {
         self.factory = factory
         self.limits = limits
         maxBacklogSamples = Int(limits.maxBacklogSeconds * Double(Self.sampleRate))
+        state.withLock { s in
+            s.onStatusChanged = onStatusChanged
+            s.onCoverageAdvanced = onCoverageAdvanced
+        }
+    }
+
+    var onStatusChanged: (@Sendable (Status) -> Void)? {
+        get { state.withLock { $0.onStatusChanged } }
+        set { state.withLock { $0.onStatusChanged = newValue } }
+    }
+
+    var onCoverageAdvanced: (@Sendable (TimeInterval) -> Void)? {
+        get { state.withLock { $0.onCoverageAdvanced } }
+        set { state.withLock { $0.onCoverageAdvanced = newValue } }
     }
 
     var status: Status { state.withLock { $0.status } }
+
+    var activeSpeakerCount: Int { state.withLock { $0.labeler?.speakerCount ?? 0 } }
+
+    var coveredThrough: TimeInterval { state.withLock { $0.labeler?.coveredThrough ?? 0 } }
 
     /// True once the engine has produced a labeler and the session has not failed.
     /// Labels stay answerable after `stop()`, so chunks still committing keep them.
@@ -113,6 +140,12 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
 
     /// Begins loading the engine. Audio enqueued before this is buffered.
     func start() {
+        let initialNotification = state.withLock { s -> (Status, (@Sendable (Status) -> Void)?)? in
+            guard s.status == .loading else { return nil }
+            return (s.status, s.onStatusChanged)
+        }
+        initialNotification?.1?(initialNotification?.0 ?? .loading)
+
         let factory = factory
         let loadTask = Task { [weak self] in
             do {
@@ -140,18 +173,19 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
     /// Cheap and non-blocking: called from the audio queue for every system buffer.
     func enqueue(_ samples: [Float]) {
         guard !samples.isEmpty else { return }
-        let isRunning = state.withLock { s -> Bool in
-            guard s.acceptsAudio else { return false }
+        let (isRunning, statusNotification) = state.withLock { s -> (Bool, (Status, (@Sendable (Status) -> Void)?)?) in
+            guard s.acceptsAudio else { return (false, nil) }
             s.pending.append(contentsOf: samples)
-            guard s.pending.count > maxBacklogSamples else { return s.status == .running }
+            guard s.pending.count > maxBacklogSamples else { return (s.status == .running, nil) }
             if s.status == .loading {
                 dropOldestPending(&s)
-                return false
+                return (false, nil)
             }
-            s.fail(.backlogOverflow)
+            let notification = s.fail(.backlogOverflow)
             Self.logger.error("live speaker labels off: audio backlog exceeded \(self.limits.maxBacklogSeconds)s")
-            return false
+            return (false, notification)
         }
+        statusNotification?.1?(statusNotification?.0 ?? .failed(.backlogOverflow))
         if isRunning { processingQueue.async { self.drainPending() } }
     }
 
@@ -165,32 +199,46 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
         return state.withLock { $0.labeler?.label(start: start, end: end) } ?? LiveSpeakerLabeler.fallbackLabel
     }
 
+    /// Non-blocking retroactive label lookup once the diarizer has covered `[start, end]`.
+    /// Returns `nil` while loading, after failure, or before `coveredThrough` reaches `end`.
+    func labelIfCovered(start: TimeInterval, end: TimeInterval) -> String? {
+        state.withLock { s in
+            if case .failed = s.status { return nil }
+            guard var labeler = s.labeler else { return nil }
+            guard s.status == .stopped || labeler.coveredThrough >= end else { return nil }
+            let resolved = labeler.label(start: start, end: end)
+            s.labeler = labeler
+            return resolved
+        }
+    }
+
     /// Flushes the last partial window through the engine, then releases it.
     func stop() {
-        let finishEngine = state.withLock { s -> Bool in
+        let (finishEngine, statusNotification) = state.withLock { s -> (Bool, (Status, (@Sendable (Status) -> Void)?)?) in
             switch s.status {
             case .running:
                 s.status = .stopping
-                return true
+                return (true, (s.status, s.onStatusChanged))
             case .loading:
                 s.status = .stopped
                 s.loadTask?.cancel()
                 s.timeoutTask?.cancel()
                 s.pending = []
-                return false
+                return (false, (s.status, s.onStatusChanged))
             case .stopping, .stopped, .failed:
-                return false
+                return (false, nil)
             }
         }
+        statusNotification?.1?(statusNotification?.0 ?? .stopped)
         if finishEngine { processingQueue.async { self.finishAndRelease() } }
     }
 
     // MARK: - Engine lifecycle
 
     private func engineLoaded(_ engine: LiveSpeakerEngine) {
-        let shouldDrain = state.withLock { s -> Bool in
+        let (shouldDrain, statusNotification) = state.withLock { s -> (Bool, (Status, (@Sendable (Status) -> Void)?)?) in
             // A late engine (timed out, failed or stopped meanwhile) is dropped.
-            guard s.status == .loading else { return false }
+            guard s.status == .loading else { return (false, nil) }
             s.status = .running
             s.engine = engine
             s.labeler = LiveSpeakerLabeler(
@@ -200,18 +248,20 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
                 retainSeconds: limits.retainSeconds
             )
             s.timeoutTask?.cancel()
-            return s.pending.count >= Self.blockSamples
+            return (s.pending.count >= Self.blockSamples, (s.status, s.onStatusChanged))
         }
+        statusNotification?.1?(statusNotification?.0 ?? .running)
         if shouldDrain { processingQueue.async { self.drainPending() } }
     }
 
     private func failed(_ failure: Failure, _ message: String) {
-        let didFail = state.withLock { s -> Bool in
-            let wasLive = s.status == .loading || s.status == .running || s.status == .stopping
+        let statusNotification = state.withLock { s -> (Status, (@Sendable (Status) -> Void)?)? in
             s.fail(failure)
-            return wasLive
         }
-        if didFail { Self.logger.error("live speaker labels off: \(message)") }
+        if let statusNotification {
+            Self.logger.error("live speaker labels off: \(message)")
+            statusNotification.1?(statusNotification.0)
+        }
     }
 
     private func dropOldestPending(_ s: inout State) {
@@ -254,15 +304,25 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
                 Self.logger.error("live speaker labels: tail flush failed: \(error)")
             }
         }
-        state.withLock { s in
-            guard s.status == .stopping else { return }
+        let statusNotification = state.withLock { s -> (Status, (@Sendable (Status) -> Void)?)? in
+            guard s.status == .stopping else { return nil }
             s.status = .stopped
             s.engine = nil
+            return (s.status, s.onStatusChanged)
         }
+        statusNotification?.1?(statusNotification?.0 ?? .stopped)
     }
 
     private func ingest(_ frames: LiveSpeakerFrames?) {
         guard let frames else { return }
-        state.withLock { $0.labeler?.ingest(frames) }
+        let coverageNotification = state.withLock { s -> (TimeInterval, (@Sendable (TimeInterval) -> Void)?)? in
+            guard s.labeler != nil else { return nil }
+            s.labeler?.ingest(frames)
+            guard let covered = s.labeler?.coveredThrough else { return nil }
+            return (covered, s.onCoverageAdvanced)
+        }
+        if let coverageNotification {
+            coverageNotification.1?(coverageNotification.0)
+        }
     }
 }

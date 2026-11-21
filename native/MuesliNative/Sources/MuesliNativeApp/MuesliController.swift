@@ -798,7 +798,7 @@ public final class MuesliController: NSObject {
 
     lazy var visualMemory = VisualMemoryController(databaseURL: dictationStore.resolvedDatabaseURL, supportDirectory: configStore.supportDirectory())
     private var meetingCapture: (id: Int64, session: MeetingSession)?
-    private var activeMeetingSession: MeetingSession? {
+    var activeMeetingSession: MeetingSession? {
         guard let capture = meetingCapture, capture.session.capturePhase.isRecording else { return nil }
         return capture.session
     }
@@ -813,7 +813,7 @@ public final class MuesliController: NSObject {
     /// the stopping session (after activeMeetingID becomes nil) still pass the
     /// session-identity gate. Replaced on the next meeting start.
     private var micEpisodeTelemetryGate = RecentMeetingIdentityGate()
-    private var liveMeetingTranscriptGeneration: UUID?
+    var liveMeetingTranscriptGeneration: UUID?
     private var lastRecordingTemplateSelection: (meetingID: Int64, template: MeetingTemplateSnapshot)?
     private var activeMeetingAudioWarning: ActiveMeetingAudioWarning?
     private var liveMeetingTitleCache: [Int64: String] = [:]
@@ -2523,6 +2523,9 @@ public final class MuesliController: NSObject {
     private func clearLiveMeetingTranscript(ownerID: Int64? = nil, generation: UUID? = nil) {
         if let ownerID, appState.liveMeetingTranscriptOwnerID != ownerID { return }
         if let generation, liveMeetingTranscriptGeneration != generation { return }
+        appState.liveMeetingSpeakerStore = LiveMeetingSpeakerStore()
+        appState.liveDiarizationStatus = .off
+        appState.liveMeetingParticipants = []
         appState.liveMeetingTranscript = ""
         appState.liveMeetingPartialYou = ""
         appState.liveMeetingPartialOthers = ""
@@ -2531,9 +2534,19 @@ public final class MuesliController: NSObject {
         indicator.updateMeetingTranscript(transcript: "", partialYou: "", partialOthers: "")
     }
 
-    private func isCurrentLiveMeetingTranscriptSession(ownerID: Int64, generation: UUID) -> Bool {
+    func isCurrentLiveMeetingTranscriptSession(ownerID: Int64, generation: UUID) -> Bool {
         appState.liveMeetingTranscriptOwnerID == ownerID
             && liveMeetingTranscriptGeneration == generation
+    }
+
+    func syncLiveMeetingSpeakerTranscript() {
+        let rendered = appState.liveMeetingSpeakerStore.renderedTranscript()
+        appState.liveMeetingTranscript = rendered
+        indicator.updateMeetingTranscript(
+            transcript: rendered,
+            partialYou: appState.liveMeetingPartialYou,
+            partialOthers: appState.liveMeetingPartialOthers
+        )
     }
 
     private func refreshContributionMilestonePrompt(totalWords: Int, totalMeetings: Int) {
@@ -4187,16 +4200,36 @@ public final class MuesliController: NSObject {
 
     /// Turning the labels on fetches the speaker model once, outside any meeting.
     /// Meetings only ever read the local copy, so a failed download leaves the Live
-    /// tab on "Others" rather than touching the network mid-recording.
+    /// tab on "Others" unless triggered during an active session.
     func setLiveSpeakerLabelsEnabled(_ enabled: Bool) {
         updateConfig { $0.enableLiveSpeakerLabels = enabled }
-        guard enabled, !LiveSpeakerModelStore.isDownloaded() else { return }
-        Task.detached(priority: .utility) {
+        guard enabled else { return }
+        if LiveSpeakerModelStore.isDownloaded() {
+            if let session = activeMeetingSession {
+                session.enableLiveSpeakerLabelsMidMeeting()
+                appState.liveDiarizationStatus = session.currentLiveDiarizationStatus()
+            }
+            return
+        }
+        if activeMeetingSession != nil {
+            appState.liveDiarizationStatus = .downloading(progress: nil)
+        }
+        Task.detached(priority: .utility) { [weak self] in
             do {
                 try await LiveSpeakerModelStore.download()
                 fputs("[muesli-native] live speaker label model downloaded\n", stderr)
+                await MainActor.run {
+                    guard let self, self.config.enableLiveSpeakerLabels,
+                          let session = self.activeMeetingSession else { return }
+                    session.enableLiveSpeakerLabelsMidMeeting()
+                    self.appState.liveDiarizationStatus = session.currentLiveDiarizationStatus()
+                }
             } catch {
                 fputs("[muesli-native] live speaker label model download failed: \(error)\n", stderr)
+                await MainActor.run {
+                    guard let self, self.activeMeetingSession != nil else { return }
+                    self.appState.liveDiarizationStatus = .failed(reason: error.localizedDescription)
+                }
             }
         }
     }
@@ -7373,9 +7406,10 @@ public final class MuesliController: NSObject {
                 self.appState.meetingRetranscriptions[meeting.id]?.fraction = 0
                 self.appState.meetingRetranscriptions[meeting.id]?.message = "Loading speaker identification…"
                 let coordinator = self.transcriptionCoordinator
+                let capturedDiarizationResult = OSAllocatedUnfairLock<TranscriptionCoordinator.RecordedAudioDiarizationResult?>(initialState: nil)
                 let diarization = try await RecordedTranscriptDiarization.apply(to: transcription) { [weak self] in
                     await coordinator.preloadDiarizer(trigger: .retranscription)
-                    return try await coordinator.diarizeRecordedAudio(
+                    let result = try await coordinator.diarizeRecordedAudioWithCentroids(
                         at: recordingURL,
                         progress: { [weak self] fraction in
                             await MainActor.run {
@@ -7384,6 +7418,8 @@ public final class MuesliController: NSObject {
                             }
                         }
                     )
+                    capturedDiarizationResult.withLock { $0 = result }
+                    return result.segments
                 }
                 try Task.checkCancellation()
                 rawTranscript = diarization.transcript
@@ -7437,6 +7473,16 @@ public final class MuesliController: NSObject {
                 } catch {
                     if error is CancellationError { throw error }
                     throw MeetingRetranscriptionError.failedToSave(underlying: error)
+                }
+
+                if let diarizationResult = capturedDiarizationResult.withLock({ $0 }),
+                   !diarizationResult.segments.isEmpty {
+                    await self.recordAndApplyPostDiarizationSpeakers(
+                        meetingID: meeting.id,
+                        segments: diarizationResult.segments,
+                        speakerCentroids: diarizationResult.speakerCentroids,
+                        existingTranscript: rawTranscript
+                    )
                 }
 
                 if let summaryFailureWarning {
@@ -7543,7 +7589,12 @@ public final class MuesliController: NSObject {
         try await Task.detached(priority: .userInitiated) {
             try DictationStore(databaseURL: databaseURL).resolveParticipantSuggestion(meetingID: meetingID, fingerprint: fingerprint, name: name, add: add, existingPerson: existingPerson)
         }.value
-        if add { NotificationCenter.default.post(name: .meetingParticipantsDidChange, object: meetingID) }
+        if add {
+            NotificationCenter.default.post(name: .meetingParticipantsDidChange, object: meetingID)
+            if meetingID == activeMeetingID || meetingID == appState.liveMeetingTranscriptOwnerID {
+                refreshLiveSpeakerDirectory(meetingID: meetingID)
+            }
+        }
     }
 
     private func summaryParticipantNames(meetingID: Int64) async -> [String] {
@@ -7567,6 +7618,9 @@ public final class MuesliController: NSObject {
             )
         }.value
         NotificationCenter.default.post(name: .meetingParticipantsDidChange, object: meetingID)
+        if meetingID == activeMeetingID || meetingID == appState.liveMeetingTranscriptOwnerID {
+            refreshLiveSpeakerDirectory(meetingID: meetingID)
+        }
     }
 
     func removeMeetingParticipant(
@@ -7581,6 +7635,9 @@ public final class MuesliController: NSObject {
             )
         }.value
         NotificationCenter.default.post(name: .meetingParticipantsDidChange, object: meetingID)
+        if meetingID == activeMeetingID || meetingID == appState.liveMeetingTranscriptOwnerID {
+            refreshLiveSpeakerDirectory(meetingID: meetingID)
+        }
     }
 
     private func persistCalendarAttendees(
@@ -7665,6 +7722,9 @@ public final class MuesliController: NSObject {
                     name: .meetingParticipantsDidChange,
                     object: meetingID
                 )
+                if meetingID == self.activeMeetingID || meetingID == self.appState.liveMeetingTranscriptOwnerID {
+                    self.refreshLiveSpeakerDirectory(meetingID: meetingID)
+                }
             }
         }
     }
@@ -9408,7 +9468,95 @@ public final class MuesliController: NSObject {
                     self?.isMeetingPrivateFailingClosed(id: meetingID) ?? true
                 }
                 meetingSession.speakerNamesProvider = { [weak self] observations in
-                    await self?.resolveMeetingSpeakers(meetingID: meetingID, observations: observations) ?? [:]
+                    guard let self else { return [:] }
+                    let preservingExisting = await MainActor.run {
+                        self.pendingResumePriorTranscript[meetingID] != nil
+                    }
+                    return await self.resolveMeetingSpeakers(
+                        meetingID: meetingID,
+                        observations: observations,
+                        preservingExisting: preservingExisting
+                    )
+                }
+                meetingSession.liveSpeakerReconciliationProvider = { [weak self] in
+                    await MainActor.run {
+                        guard let self,
+                              self.isCurrentLiveMeetingTranscriptSession(
+                                  ownerID: meetingID,
+                                  generation: transcriptGeneration
+                              ) else { return nil }
+                        return self.appState.liveMeetingSpeakerStore.reconciliationSnapshot()
+                    }
+                }
+                meetingSession.onLiveSpeakerStatusChanged = { [weak self, weak meetingSession] status in
+                    Task { @MainActor [weak self, weak meetingSession] in
+                        guard let self,
+                              self.isCurrentLiveMeetingTranscriptSession(
+                                  ownerID: meetingID,
+                                  generation: transcriptGeneration
+                              ) else { return }
+                        if let meetingSession {
+                            self.appState.liveDiarizationStatus = meetingSession.currentLiveDiarizationStatus()
+                        } else {
+                            switch status {
+                            case .loading:
+                                self.appState.liveDiarizationStatus = .loadingModel
+                            case .running:
+                                self.appState.liveDiarizationStatus = .active(
+                                    speakerCount: self.appState.liveMeetingSpeakerStore.activeClusterLabels.count
+                                )
+                            case .stopping, .stopped:
+                                self.appState.liveDiarizationStatus = .off
+                            case .failed:
+                                self.appState.liveDiarizationStatus = LiveSpeakerModelStore.isDownloaded()
+                                    ? .failed(reason: "Live speaker model could not be loaded.")
+                                    : .modelNotDownloaded
+                            }
+                        }
+                    }
+                }
+                meetingSession.onLiveSpeakerCoverageAdvanced = { [weak self, weak meetingSession] coveredThrough in
+                    Task { @MainActor [weak self, weak meetingSession] in
+                        guard let self, let meetingSession,
+                              self.isCurrentLiveMeetingTranscriptSession(
+                                  ownerID: meetingID,
+                                  generation: transcriptGeneration
+                              ) else { return }
+                        let isInPerson = meetingSession.isInPersonMeeting
+                        let unresolved = self.appState.liveMeetingSpeakerStore.turns.filter {
+                            $0.endSeconds <= coveredThrough
+                                && $0.explicitSpeakerID == nil
+                                && ($0.liveClusterID == nil || $0.liveClusterID == LiveSpeakerLabeler.fallbackLabel)
+                                && ($0.source != "You" || isInPerson)
+                        }
+                        guard !unresolved.isEmpty else { return }
+                        var resolvedLabels: [(UUID, String)] = []
+                        for turn in unresolved {
+                            if let label = await meetingSession.liveSpeakerLabelIfCovered(
+                                start: turn.startSeconds,
+                                end: turn.endSeconds
+                            ) {
+                                resolvedLabels.append((turn.id, label))
+                            }
+                        }
+                        guard self.isCurrentLiveMeetingTranscriptSession(
+                            ownerID: meetingID,
+                            generation: transcriptGeneration
+                        ) else { return }
+                        var changed = false
+                        for (turnID, label) in resolvedLabels {
+                            if self.appState.liveMeetingSpeakerStore.relabelRetroactiveCluster(
+                                turnID: turnID,
+                                clusterID: label
+                            ) {
+                                changed = true
+                            }
+                        }
+                        if changed {
+                            self.syncLiveMeetingSpeakerTranscript()
+                            self.appState.liveDiarizationStatus = meetingSession.currentLiveDiarizationStatus()
+                        }
+                    }
                 }
                 meetingSession.liveTitleProvider = { [weak self] in
                     await MainActor.run {
@@ -9423,17 +9571,29 @@ public final class MuesliController: NSObject {
                             ownerID: meetingID,
                             generation: transcriptGeneration
                         ) else { return }
+                        let isPrivate = self.isMeetingPrivateFailingClosed(id: meetingID)
+                        let entriesByID = Dictionary(
+                            uniqueKeysWithValues: self.appState.liveMeetingSpeakerStore.entries.map { ($0.id, $0) }
+                        )
+                        var resolvedNamedSpeakers: [String: String] = [:]
+                        for (clusterID, entryID) in self.appState.liveMeetingSpeakerStore.clusterToEntryID {
+                            if let entry = entriesByID[entryID], !entry.isGenericCluster, !entry.isSelf {
+                                resolvedNamedSpeakers[clusterID] = entry.displayName
+                            }
+                        }
                         let transcript = LiveMeetingTranscriptLines.make(
                             segments: segments,
                             speaker: speaker,
                             displaySpeakers: displaySpeakers,
-                            meetingStart: meetingSession?.startTime ?? Date()
+                            meetingStart: meetingSession?.startTime ?? Date(),
+                            resolvedNamedSpeakers: resolvedNamedSpeakers,
+                            isPrivate: isPrivate
                         )
                         guard !transcript.checkpointEntries.isEmpty else { return }
                         self.noteMeetingTranscriptActivity(from: speaker)
                         do {
-                            // Checkpoints keep the source label ("Others"): crash recovery has no
-                            // final diarization pass, so provisional Speaker N must not persist.
+                            // Checkpoints keep the source label ("Others") or user-resolved name (when non-private).
+                            // Provisional "Speaker N" never persists across crash recovery.
                             try self.dictationStore.appendLiveTranscriptCheckpoints(
                                 meetingID: meetingID,
                                 entries: transcript.checkpointEntries
@@ -9441,14 +9601,20 @@ public final class MuesliController: NSObject {
                         } catch {
                             fputs("[muesli-native] failed to checkpoint live transcript for meeting \(meetingID): \(ContentPrivacy.shared.logDescription(error))\n", stderr)
                         }
-                        // Live view is arrival-order closed captions. Recovery reads checkpoints sorted
-                        // by segment timestamps, so the durable fallback stays temporally ordered.
-                        self.appState.liveMeetingTranscript += transcript.displayLines.joined(separator: "\n") + "\n"
-                        self.indicator.updateMeetingTranscript(
-                            transcript: self.appState.liveMeetingTranscript,
-                            partialYou: self.appState.liveMeetingPartialYou,
-                            partialOthers: self.appState.liveMeetingPartialOthers
-                        )
+                        for draft in transcript.turnDrafts {
+                            self.appState.liveMeetingSpeakerStore.appendTurn(
+                                source: draft.source,
+                                startSeconds: draft.startSeconds,
+                                endSeconds: draft.endSeconds,
+                                timestampLabel: draft.timestampLabel,
+                                liveClusterID: draft.liveClusterID,
+                                text: draft.text
+                            )
+                        }
+                        self.syncLiveMeetingSpeakerTranscript()
+                        if let meetingSession {
+                            self.appState.liveDiarizationStatus = meetingSession.currentLiveDiarizationStatus()
+                        }
                     }
                 }
                 meetingSession.onPartialTranscript = { [weak self] speaker, tail in
@@ -9477,6 +9643,10 @@ public final class MuesliController: NSObject {
                 }
                 appState.liveMeetingTranscriptOwnerID = meetingID
                 liveMeetingTranscriptGeneration = transcriptGeneration
+                appState.liveMeetingSpeakerStore = LiveMeetingSpeakerStore(isInPerson: meetingSession.isInPersonMeeting)
+                appState.liveDiarizationStatus = meetingSession.currentLiveDiarizationStatus()
+                appState.liveSpeakerProfiles = []
+                appState.liveMeetingParticipants = []
                 appState.liveMeetingTranscript = ""
                 appState.liveMeetingPartialYou = ""
                 appState.liveMeetingPartialOthers = ""
@@ -9485,6 +9655,7 @@ public final class MuesliController: NSObject {
                     partialYou: "",
                     partialOthers: ""
                 )
+                refreshLiveSpeakerDirectory(meetingID: meetingID)
                 let micHealthWarningLock = NSLock()
                 var lastForwardedMicHealthWarning: String?
                 // Authorize this session's episode telemetry for its whole

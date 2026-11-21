@@ -14,21 +14,29 @@ struct LiveSpeakerFrames: Sendable, Equatable {
 /// Pure state, no I/O. Numbers are handed out the first time a slot is shown, so
 /// the first speaker on screen is always "Speaker 1" and a number never changes
 /// afterwards. A slot the model later folds into another one simply stops
-/// appearing; lines already shown keep their label. History is a rolling window,
-/// so memory stays flat however long the meeting runs.
+/// appearing; lines already shown keep their label. History is stored as
+/// compressed `(startFrame, endFrame, slot)` runs so full-meeting history stays
+/// tiny; finite `retainSeconds` optionally bounds history to a rolling window.
 struct LiveSpeakerLabeler: Sendable {
     static let fallbackLabel = "Others"
     private static let activityThreshold: Float = 0.5
     private static let minimumActiveFrames = 2
     private static let silence: Int8 = -1
 
+    private struct SlotRun: Sendable, Equatable {
+        var startFrame: Int
+        var endFrame: Int // exclusive
+        let slot: Int8
+    }
+
     private let slotCount: Int
     private let frameDuration: TimeInterval
     private let originSeconds: TimeInterval
-    private let retainFrames: Int
+    private let retainFrames: Int?
     private var baseFrame = 0
-    /// Loudest active slot per retained frame, or `silence`.
-    private var activeSlots: [Int8] = []
+    private var endFrame = 0
+    /// Compressed runs of loudest active slot (or `silence`) covering `[baseFrame, endFrame)`.
+    private var runs: [SlotRun] = []
     private var displayNumbers: [Int: Int] = [:]
 
     init(
@@ -40,15 +48,23 @@ struct LiveSpeakerLabeler: Sendable {
         self.slotCount = max(slotCount, 1)
         self.frameDuration = frameDuration
         self.originSeconds = originSeconds
-        self.retainFrames = max(Int(retainSeconds / frameDuration), 1)
+        if retainSeconds.isFinite, retainSeconds > 0 {
+            self.retainFrames = max(Int(retainSeconds / frameDuration), 1)
+        } else {
+            self.retainFrames = nil
+        }
     }
 
-    private var nextFrame: Int { baseFrame + activeSlots.count }
+    private var nextFrame: Int { endFrame }
 
     /// End of the audio the diarizer has reported on, on the caller's clock.
     var coveredThrough: TimeInterval { originSeconds + Double(nextFrame) * frameDuration }
 
-    var retainedFrameCount: Int { activeSlots.count }
+    var retainedFrameCount: Int { nextFrame - baseFrame }
+
+    var speakerCount: Int { displayNumbers.count }
+
+    var compressedRunCount: Int { runs.count }
 
     mutating func ingest(_ frames: LiveSpeakerFrames) {
         guard frames.slotCount == slotCount,
@@ -58,7 +74,9 @@ struct LiveSpeakerLabeler: Sendable {
         guard replayed < frameCount else { return }
         padGap(before: frames.startFrame)
         for row in replayed..<frameCount {
-            activeSlots.append(loudestActiveSlot(in: frames.probabilities, row: row))
+            let slot = loudestActiveSlot(in: frames.probabilities, row: row)
+            appendRun(slot: slot, startFrame: endFrame, endFrame: endFrame + 1)
+            endFrame += 1
         }
         trimHistory()
     }
@@ -71,11 +89,24 @@ struct LiveSpeakerLabeler: Sendable {
     private mutating func padGap(before startFrame: Int) {
         let gap = startFrame - nextFrame
         guard gap > 0 else { return }
-        if gap >= retainFrames {
-            activeSlots.removeAll()
+        if let retainFrames, gap >= retainFrames {
+            runs.removeAll()
             baseFrame = startFrame
+            endFrame = startFrame
         } else {
-            activeSlots.append(contentsOf: repeatElement(Self.silence, count: gap))
+            appendRun(slot: Self.silence, startFrame: nextFrame, endFrame: startFrame)
+            endFrame = startFrame
+        }
+    }
+
+    private mutating func appendRun(slot: Int8, startFrame: Int, endFrame: Int) {
+        guard endFrame > startFrame else { return }
+        if let lastIndex = runs.indices.last,
+           runs[lastIndex].slot == slot,
+           runs[lastIndex].endFrame == startFrame {
+            runs[lastIndex].endFrame = endFrame
+        } else {
+            runs.append(SlotRun(startFrame: startFrame, endFrame: endFrame, slot: slot))
         }
     }
 
@@ -93,10 +124,19 @@ struct LiveSpeakerLabeler: Sendable {
     }
 
     private mutating func trimHistory() {
-        guard activeSlots.count > retainFrames * 2 else { return }
-        let dropped = activeSlots.count - retainFrames
-        activeSlots.removeFirst(dropped)
-        baseFrame += dropped
+        guard let retainFrames, (nextFrame - baseFrame) > retainFrames * 2 else { return }
+        let newBase = nextFrame - retainFrames
+        baseFrame = newBase
+        var firstSurviving = 0
+        while firstSurviving < runs.count, runs[firstSurviving].endFrame <= newBase {
+            firstSurviving += 1
+        }
+        if firstSurviving > 0 {
+            runs.removeFirst(firstSurviving)
+        }
+        if !runs.isEmpty, runs[0].startFrame < newBase {
+            runs[0].startFrame = newBase
+        }
     }
 
     private func dominantSlot(start: TimeInterval, end: TimeInterval) -> Int? {
@@ -104,10 +144,30 @@ struct LiveSpeakerLabeler: Sendable {
         let last = min(Int(((end - originSeconds) / frameDuration).rounded(.up)), nextFrame)
         guard first < last else { return nil }
         var counts = [Int](repeating: 0, count: slotCount)
-        for frame in first..<last {
-            let slot = activeSlots[frame - baseFrame]
-            if slot >= 0 { counts[Int(slot)] += 1 }
+
+        var lo = 0
+        var hi = runs.count
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2
+            if runs[mid].endFrame <= first {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
         }
+        var index = lo
+        while index < runs.count, runs[index].startFrame < last {
+            let run = runs[index]
+            if run.slot >= 0 {
+                let overlapStart = max(first, run.startFrame)
+                let overlapEnd = min(last, run.endFrame)
+                if overlapEnd > overlapStart {
+                    counts[Int(run.slot)] += overlapEnd - overlapStart
+                }
+            }
+            index += 1
+        }
+
         let best = counts.indices.min { lhs, rhs in
             if counts[lhs] != counts[rhs] { return counts[lhs] > counts[rhs] }
             let (lhsNumber, rhsNumber) = (displayNumbers[lhs] ?? .max, displayNumbers[rhs] ?? .max)

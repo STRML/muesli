@@ -1,4 +1,5 @@
 import AppKit
+import MuesliCore
 import Testing
 import SwiftUI
 @testable import MuesliNativeApp
@@ -200,6 +201,116 @@ struct RecordingUXTests {
         #expect(abs(try #require(indicator.currentFrame).minX - original.minX - 19) < 0.1)
         pill.mouseUp(with: try event(.leftMouseUp))
         #expect(window.isMovable)
+    }
+
+    @MainActor
+    @Test("live transcript presentation keeps paragraph IDs stable across cluster renames and single-turn overrides")
+    func liveTranscriptParagraphIDStabilityAcrossEdits() throws {
+        var store = LiveMeetingSpeakerStore()
+        _ = store.appendTurn(source: "You", startSeconds: 0, endSeconds: 2, timestampLabel: "10:00:00", liveClusterID: "You", text: "Let's start.")
+        let appendedT1 = store.appendTurn(source: "Others", startSeconds: 3, endSeconds: 6, timestampLabel: "10:00:03", liveClusterID: "Speaker 1", text: "Sounds good to me.")
+        let t1 = try #require(appendedT1)
+        _ = store.appendTurn(source: "Others", startSeconds: 18, endSeconds: 21, timestampLabel: "10:00:18", liveClusterID: "Speaker 1", text: "One more point here.")
+
+        let presentation = LiveTranscriptPresentationModel()
+        presentation.update(
+            priorTranscript: "",
+            speakerStore: store,
+            transcript: store.renderedTranscript(),
+            partialYou: "",
+            partialOthers: ""
+        )
+        let initialIDs = presentation.paragraphs.map(\.id)
+        #expect(initialIDs.count == 3)
+        #expect(presentation.paragraphs[1].speaker == "Speaker 1")
+
+        _ = try store.assignCluster("Speaker 1", to: .newName("Blair Hosie"))
+        presentation.update(
+            priorTranscript: "",
+            speakerStore: store,
+            transcript: store.renderedTranscript(),
+            partialYou: "",
+            partialOthers: ""
+        )
+        #expect(presentation.paragraphs.map(\.id) == initialIDs)
+        #expect(presentation.paragraphs[1].speaker == "Blair Hosie")
+        #expect(presentation.paragraphs[2].speaker == "Blair Hosie")
+
+        _ = try store.reassignTurn(t1.id, to: .newName("Ken Thwaites"))
+        presentation.update(
+            priorTranscript: "",
+            speakerStore: store,
+            transcript: store.renderedTranscript(),
+            partialYou: "",
+            partialOthers: ""
+        )
+        #expect(presentation.paragraphs.map(\.id) == initialIDs)
+        #expect(presentation.paragraphs[1].speaker == "Ken Thwaites")
+        #expect(presentation.paragraphs[2].speaker == "Blair Hosie")
+    }
+
+    @Test("live speaker bar presentation builds active, fallback Others, unassigned participants, and readiness badges")
+    func liveSpeakerBarPresentation() throws {
+        var store = LiveMeetingSpeakerStore()
+        _ = store.appendTurn(source: "You", startSeconds: 0, endSeconds: 1, timestampLabel: "10:00:00", liveClusterID: "You", text: "Hi")
+        _ = store.appendTurn(source: "Others", startSeconds: 2, endSeconds: 4, timestampLabel: "10:00:02", liveClusterID: nil, text: "Hey")
+        let participants = [
+            MeetingParticipant(meetingID: 1, participantIdentifier: "call:blair", displayName: "Blair Hosie", insertionOrder: 0),
+        ]
+
+        let model = LiveSpeakerBarPresentation.build(
+            store: store,
+            participants: participants,
+            diarizationStatus: .off
+        )
+        #expect(model.chips.map(\.title) == ["You", "Others", "Blair Hosie"])
+        #expect(model.unnamedClusters == ["Others"])
+        #expect(model.readiness?.action == .enableLiveLabels)
+        #expect(model.readiness?.label == "Speaker labels off · Enable")
+
+        let active = LiveSpeakerBarPresentation.build(
+            store: store,
+            participants: participants,
+            diarizationStatus: .active(speakerCount: 2)
+        )
+        #expect(active.readiness == nil)
+
+        let downloading = LiveSpeakerBarPresentation.build(
+            store: store,
+            participants: participants,
+            diarizationStatus: .downloading(progress: 0.5)
+        )
+        #expect(downloading.readiness?.label == "Downloading speaker model 50%")
+        #expect(downloading.readiness?.isWorking == true)
+    }
+
+    @MainActor
+    @Test("live speaker bar wraps cleanly within narrow quick-notes widths", arguments: [CGFloat(360), 520])
+    func liveSpeakerBarFitsNarrowWidths(width: CGFloat) throws {
+        var store = LiveMeetingSpeakerStore()
+        _ = store.appendTurn(source: "You", startSeconds: 0, endSeconds: 1, timestampLabel: "10:00:00", liveClusterID: "You", text: "Hi")
+        _ = store.appendTurn(source: "Others", startSeconds: 2, endSeconds: 4, timestampLabel: "10:00:02", liveClusterID: "Speaker 1", text: "Hello")
+        _ = store.appendTurn(source: "Others", startSeconds: 5, endSeconds: 7, timestampLabel: "10:00:05", liveClusterID: "Speaker 2", text: "Hey")
+        let participants = [
+            MeetingParticipant(meetingID: 1, participantIdentifier: "call:blair", displayName: "Blair Hosie", insertionOrder: 0),
+            MeetingParticipant(meetingID: 1, participantIdentifier: "call:ken", displayName: "Ken Thwaites", insertionOrder: 1),
+        ]
+        let directory = LiveSpeakerDirectorySnapshot.make(store: store, profiles: [], participants: participants)
+        let bar = LiveSpeakerBar(
+            speakerStore: store,
+            diarizationStatus: .off,
+            directory: directory,
+            participants: participants,
+            copyText: "Transcript",
+            didCopy: false,
+            onCopy: {},
+            onEnableLiveLabels: {},
+            onSelectSpeaker: { _, _, _ in }
+        )
+        let host = NSHostingController(rootView: bar)
+        let size = host.sizeThatFits(in: CGSize(width: width, height: 400))
+        #expect(size.width <= width + 0.5)
+        #expect(size.height >= 28)
     }
 }
 

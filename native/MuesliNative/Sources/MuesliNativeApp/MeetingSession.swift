@@ -179,6 +179,7 @@ final class MeetingSession {
     private let systemAudioRecorder: SystemAudioCapturing
     /// Microphone-only meeting whose mic transcript is diarized into "Speaker N".
     private let inPerson: Bool
+    var isInPersonMeeting: Bool { inPerson }
     private let captureLifecycle: MeetingCaptureLifecycle
     private let discardCleanup = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
     /// One-shot: a repeated start must not reset timing, recorders or AEC of the
@@ -286,8 +287,21 @@ final class MeetingSession {
     }
     private let partialSessionsStorage = OSAllocatedUnfairLock(initialState: PartialSessionsStorage())
     /// Provisional speaker labels for system audio. Created from the config
-    /// snapshot at start, so toggling the setting mid-meeting waits for the next one.
+    /// snapshot at start, or hot-attached mid-meeting via `enableLiveSpeakerLabelsMidMeeting`.
     private let liveSpeakerSessionStorage = OSAllocatedUnfairLock<LiveSpeakerLabelSession?>(initialState: nil)
+    private let liveSpeakerClockOffsetStorage = OSAllocatedUnfairLock<TimeInterval>(initialState: 0)
+    private let totalLiveSpeakerSamplesStorage = OSAllocatedUnfairLock<Int64>(initialState: 0)
+    private let liveSpeakerStatusHandlerStorage = OSAllocatedUnfairLock<(@Sendable (LiveSpeakerLabelSession.Status) -> Void)?>(initialState: nil)
+    private let liveSpeakerCoverageHandlerStorage = OSAllocatedUnfairLock<(@Sendable (TimeInterval) -> Void)?>(initialState: nil)
+    var onLiveSpeakerStatusChanged: (@Sendable (LiveSpeakerLabelSession.Status) -> Void)? {
+        get { liveSpeakerStatusHandlerStorage.withLock { $0 } }
+        set { liveSpeakerStatusHandlerStorage.withLock { $0 = newValue } }
+    }
+    var onLiveSpeakerCoverageAdvanced: (@Sendable (TimeInterval) -> Void)? {
+        get { liveSpeakerCoverageHandlerStorage.withLock { $0 } }
+        set { liveSpeakerCoverageHandlerStorage.withLock { $0 = newValue } }
+    }
+    var liveSpeakerReconciliationProvider: (() async -> LiveSpeakerReconciliationInput?)?
     private let screenContextCollector = MeetingScreenContextCollector()
     private var diagnostics: MeetingSessionDiagnostics?
 
@@ -468,13 +482,19 @@ final class MeetingSession {
             try prepareRealtimeAudioPipeline(vadManager: vadManager)
             setupRetainedRecordingWriterIfNeeded()
             // Created before the first system sample so its clock matches the chunk timing.
+            liveSpeakerClockOffsetStorage.withLock { $0 = 0 }
+            totalLiveSpeakerSamplesStorage.withLock { $0 = 0 }
+            let initialLiveSpeakerSession = Self.makeLiveSpeakerSession(
+                config: config,
+                inPerson: inPerson,
+                modelAvailable: inPerson && LiveSpeakerModelStore.isDownloaded(),
+                factory: LiveSpeakerModelStore.loadEngine
+            )
+            if let initialLiveSpeakerSession {
+                wireLiveSpeakerCallbacks(initialLiveSpeakerSession)
+            }
             liveSpeakerSessionStorage.withLock {
-                $0 = Self.makeLiveSpeakerSession(
-                    config: config,
-                    inPerson: inPerson,
-                    modelAvailable: inPerson && LiveSpeakerModelStore.isDownloaded(),
-                    factory: LiveSpeakerModelStore.loadEngine
-                )
+                $0 = initialLiveSpeakerSession
             }
         }
         try await captureLifecycle.start()
@@ -589,12 +609,20 @@ final class MeetingSession {
     /// no live session exists; a failed session answers "Others".
     static func liveDisplaySpeakers(
         for segments: [SpeechSegment],
-        using session: LiveSpeakerLabelSession?
+        using session: LiveSpeakerLabelSession?,
+        clockOffset: TimeInterval = 0
     ) async -> [String]? {
         guard let session else { return nil }
         var labels: [String] = []
         for segment in segments {
-            labels.append(await session.label(start: segment.start, end: segment.end))
+            if segment.end <= clockOffset {
+                labels.append(LiveSpeakerLabeler.fallbackLabel)
+            } else {
+                labels.append(await session.label(
+                    start: max(0, segment.start - clockOffset),
+                    end: max(0, segment.end - clockOffset)
+                ))
+            }
         }
         return labels
     }
@@ -605,12 +633,83 @@ final class MeetingSession {
     /// detected voice reads as the undiarized speaker, like the final pass.
     static func liveMicDisplaySpeakers(
         for segments: [SpeechSegment],
-        using session: LiveSpeakerLabelSession?
+        using session: LiveSpeakerLabelSession?,
+        clockOffset: TimeInterval = 0
     ) async -> [String]? {
         guard let session, session.isLabeling else { return nil }
-        guard let labels = await liveDisplaySpeakers(for: segments, using: session),
+        guard let labels = await liveDisplaySpeakers(for: segments, using: session, clockOffset: clockOffset),
               session.isLabeling else { return nil }
         return labels.map { $0 == LiveSpeakerLabeler.fallbackLabel ? InPersonMeeting.undiarizedSpeaker : $0 }
+    }
+
+    func currentLiveDiarizationStatus() -> LiveDiarizationStatus {
+        if let session = liveSpeakerSession() {
+            switch session.status {
+            case .loading:
+                return .loadingModel
+            case .running:
+                return .active(speakerCount: session.activeSpeakerCount)
+            case .stopping, .stopped:
+                return .off
+            case .failed:
+                if !LiveSpeakerModelStore.isDownloaded() {
+                    return .modelNotDownloaded
+                }
+                return .failed(reason: "Live speaker model could not be loaded.")
+            }
+        }
+        if !LiveSpeakerModelStore.isDownloaded() {
+            return (inPerson || config.enableLiveSpeakerLabels) ? .modelNotDownloaded : .off
+        }
+        return .off
+    }
+
+    func enableLiveSpeakerLabelsMidMeeting(
+        factory: @escaping LiveSpeakerLabelSession.EngineFactory = LiveSpeakerModelStore.loadEngine
+    ) {
+        chunkRotationQueue.async { [weak self] in
+            guard let self, self.captureLifecycle.acceptsLiveSamples else { return }
+            if let existing = self.liveSpeakerSession() {
+                let status = existing.status
+                self.liveSpeakerStatusHandlerStorage.withLock { $0 }?(status)
+                return
+            }
+            let offsetSeconds = Double(self.totalLiveSpeakerSamplesStorage.withLock { $0 }) / 16_000.0
+            self.liveSpeakerClockOffsetStorage.withLock { $0 = offsetSeconds }
+            let session = LiveSpeakerLabelSession(factory: factory)
+            self.wireLiveSpeakerCallbacks(session)
+            self.liveSpeakerSessionStorage.withLock { $0 = session }
+            session.start()
+        }
+    }
+
+    func liveSpeakerLabelIfCovered(start: TimeInterval, end: TimeInterval) async -> String? {
+        guard let session = liveSpeakerSession() else { return nil }
+        let offset = liveSpeakerClockOffsetStorage.withLock { $0 }
+        guard end > offset else { return nil }
+        let adjustedStart = max(0, start - offset)
+        let adjustedEnd = max(0, end - offset)
+        guard let label = session.labelIfCovered(start: adjustedStart, end: adjustedEnd) else {
+            return nil
+        }
+        if inPerson {
+            guard session.isLabeling else { return nil }
+            return label == LiveSpeakerLabeler.fallbackLabel ? InPersonMeeting.undiarizedSpeaker : label
+        }
+        return label
+    }
+
+    private func wireLiveSpeakerCallbacks(_ session: LiveSpeakerLabelSession) {
+        let statusStorage = liveSpeakerStatusHandlerStorage
+        let coverageStorage = liveSpeakerCoverageHandlerStorage
+        let offsetStorage = liveSpeakerClockOffsetStorage
+        session.onStatusChanged = { status in
+            statusStorage.withLock { $0 }?(status)
+        }
+        session.onCoverageAdvanced = { coveredThrough in
+            let offset = offsetStorage.withLock { $0 }
+            coverageStorage.withLock { $0 }?(coveredThrough + offset)
+        }
     }
 
     private func liveSpeakerSession() -> LiveSpeakerLabelSession? {
@@ -1024,12 +1123,14 @@ final class MeetingSession {
         }
 
         var diarizationSegments: [TimedSpeakerSegment]?
+        var systemSpeakerCentroids: [String: [Float]] = [:]
         if inPerson {
             diarizationSegments = await InPersonMeeting.diarize(copy: inPersonDiarizationCopy, using: transcriptionCoordinator)
         } else if let systemAudioURL {
             // Run speaker diarization on system audio (batch post-processing)
-            if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudio(at: systemAudioURL) {
-                diarizationSegments = diarizationResult
+            if let diarizationResult = try? await transcriptionCoordinator.diarizeSystemAudioWithCentroids(at: systemAudioURL) {
+                diarizationSegments = diarizationResult.segments
+                systemSpeakerCentroids = diarizationResult.speakerCentroids
             }
         }
 
@@ -1122,16 +1223,27 @@ final class MeetingSession {
             : .catalog(provider: finalBackend.backend, model: finalBackend.model)
         let transcriptHadFailures = micChunkHealthTracker.snapshot().failedChunkCount > 0
             || systemChunkHealthTracker.snapshot().failedChunkCount > 0
-        let speakerObservations = SpeakerCentroidBuilder.observations(from: protectedTranscriptInputs.diarizationSegments ?? [])
+        let liveSpeakerInput = await liveSpeakerReconciliationProvider?()
+        let reconciledSpeakers = LiveSpeakerReconciler.reconcile(
+            diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            liveInput: liveSpeakerInput,
+            speakerEmbeddings: systemSpeakerCentroids
+        )
+        let speakerObservations = reconciledSpeakers.observations
         let speakerNames = speakerObservations.isEmpty ? [:] : await speakerNamesProvider?(speakerObservations) ?? [:]
+        let isPrivateForFormatting = await isPrivateMeetingProvider?() ?? false
+        let formattedSpeakerNames = reconciledSpeakers.formattingSpeakerNames(
+            resolvedFromStore: speakerNames,
+            renderNames: !isPrivateForFormatting
+        )
 
         let rawTranscript = TranscriptFormatter.merge(
             micSegments: protectedTranscriptInputs.micSegments,
             systemSegments: protectedTranscriptInputs.systemSegments,
-            diarizationSegments: protectedTranscriptInputs.diarizationSegments,
+            diarizationSegments: reconciledSpeakers.formattingDiarizationSegments,
             micDiarizationSegments: protectedTranscriptInputs.micDiarizationSegments,
             meetingStart: meetingStart,
-            speakerNames: speakerNames,
+            speakerNames: formattedSpeakerNames,
             undiarizedSystemSpeaker: inPerson ? InPersonMeeting.undiarizedSpeaker : "Others"
         )
 
@@ -1355,7 +1467,11 @@ final class MeetingSession {
                 self.commitMicPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
                 let displaySpeakers = self.inPerson
-                    ? await Self.liveMicDisplaySpeakers(for: resolvedSegments, using: self.liveSpeakerSession())
+                    ? await Self.liveMicDisplaySpeakers(
+                        for: resolvedSegments,
+                        using: self.liveSpeakerSession(),
+                        clockOffset: self.liveSpeakerClockOffsetStorage.withLock { $0 }
+                    )
                     : nil
                 self.onChunkTranscribed?(resolvedSegments, "You", displaySpeakers)
             }
@@ -1452,7 +1568,8 @@ final class MeetingSession {
                 guard !resolvedSegments.isEmpty else { return }
                 let displaySpeakers = await Self.liveDisplaySpeakers(
                     for: resolvedSegments,
-                    using: self.liveSpeakerSession()
+                    using: self.liveSpeakerSession(),
+                    clockOffset: self.liveSpeakerClockOffsetStorage.withLock { $0 }
                 )
                 self.onChunkTranscribed?(resolvedSegments, "Others", displaySpeakers)
             }
@@ -1575,7 +1692,10 @@ final class MeetingSession {
 
             let floatSamples = samples.map { Float($0) / 32767.0 }
             self.feedSystemPartialSession(floatSamples)
-            self.liveSpeakerSession()?.enqueue(floatSamples)
+            if !self.inPerson {
+                self.totalLiveSpeakerSamplesStorage.withLock { $0 += Int64(floatSamples.count) }
+                self.liveSpeakerSession()?.enqueue(floatSamples)
+            }
             self.neuralAec.feedSystemSamples(floatSamples)
             let cleanedFloat = self.neuralAec.processStreamingMic([])
             self.appendCleanedMicSamplesOnQueue(cleanedFloat)
@@ -1592,7 +1712,10 @@ final class MeetingSession {
         // must consume exactly the stream the mic chunks record.
         // In-person has no system track, so the mic stream is what live speaker
         // labels read; same samples, same clock as the chunk timing below.
-        if inPerson { liveSpeakerSession()?.enqueue(cleanedFloat) }
+        if inPerson {
+            totalLiveSpeakerSamplesStorage.withLock { $0 += Int64(cleanedFloat.count) }
+            liveSpeakerSession()?.enqueue(cleanedFloat)
+        }
         let cleanedInt16 = cleanedFloat.map { sample -> Int16 in
             Int16(max(-1.0, min(1.0, sample)) * 32767)
         }

@@ -16,9 +16,31 @@ struct LiveTranscriptParagraph: Identifiable, Equatable {
     let speaker: String?
     let timestamp: String?
     let isBoundary: Bool
+    let turnID: UUID?
+    let liveClusterID: String?
     fileprivate(set) var segments: [Segment]
     /// Still-changing streaming text for this turn; rendered lighter, never part of `committed`.
     fileprivate(set) var tail: String
+
+    init(
+        id: Int,
+        speaker: String?,
+        timestamp: String?,
+        isBoundary: Bool,
+        turnID: UUID? = nil,
+        liveClusterID: String? = nil,
+        segments: [Segment],
+        tail: String
+    ) {
+        self.id = id
+        self.speaker = speaker
+        self.timestamp = timestamp
+        self.isBoundary = isBoundary
+        self.turnID = turnID
+        self.liveClusterID = liveClusterID
+        self.segments = segments
+        self.tail = tail
+    }
 
     var committed: String { segments.map(\.text).joined(separator: " ") }
 
@@ -74,6 +96,56 @@ enum LiveTranscriptParagraphs {
         return paragraphs
     }
 
+    /// Structured live-turn builder that preserves stable `turnID` / `liveClusterID` metadata
+    /// across speaker renames/merges and avoids misattributing `partialOthers` across speaker switches.
+    static func build(
+        turns: [LiveTranscriptTurn],
+        store: LiveMeetingSpeakerStore,
+        partialYou: String,
+        partialOthers: String,
+        partialOthersSpeaker: String? = nil
+    ) -> [LiveTranscriptParagraph] {
+        var paragraphs: [LiveTranscriptParagraph] = []
+        for (index, turn) in turns.enumerated() {
+            let text = turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let speaker = store.resolvedSpeakerName(for: turn)
+            let isSelf = !store.isInPerson && turn.source == "You"
+            let clusterID = isSelf ? nil : (turn.liveClusterID ?? "Others")
+            let segment = LiveTranscriptParagraph.Segment(start: seconds(turn.timestampLabel), text: text)
+            if let last = paragraphs.last, accepts(last, speaker: speaker, segment: segment) {
+                paragraphs[paragraphs.count - 1].add(segment)
+            } else {
+                paragraphs.append(LiveTranscriptParagraph(
+                    id: index,
+                    speaker: speaker,
+                    timestamp: turn.timestampLabel,
+                    isBoundary: false,
+                    turnID: turn.id,
+                    liveClusterID: clusterID,
+                    segments: [segment],
+                    tail: ""
+                ))
+            }
+        }
+
+        let resolvedOthers = resolvedPartialOthersSpeaker(
+            turns: turns,
+            paragraphs: paragraphs,
+            store: store,
+            explicitSpeaker: partialOthersSpeaker
+        )
+        attachTail(
+            partialOthers,
+            speaker: resolvedOthers.displayName,
+            liveClusterID: resolvedOthers.clusterID,
+            tailID: systemTailID,
+            to: &paragraphs
+        )
+        attachTail(partialYou, speaker: "You", liveClusterID: nil, tailID: youTailID, to: &paragraphs)
+        return paragraphs
+    }
+
     // MARK: - Merge rules
 
     private static func accepts(
@@ -106,9 +178,52 @@ enum LiveTranscriptParagraphs {
         return "Others"
     }
 
+    private static func resolvedPartialOthersSpeaker(
+        turns: [LiveTranscriptTurn],
+        paragraphs: [LiveTranscriptParagraph],
+        store: LiveMeetingSpeakerStore,
+        explicitSpeaker: String?
+    ) -> (displayName: String, clusterID: String?) {
+        if let explicitSpeaker {
+            let trimmed = explicitSpeaker.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                if let entryID = store.clusterToEntryID[trimmed],
+                   let entry = store.entries.first(where: { $0.id == entryID }) {
+                    return (entry.displayName, trimmed)
+                }
+                return (trimmed, trimmed)
+            }
+        }
+
+        let distinctRemoteSpeakers = Set(
+            turns
+                .filter { store.isInPerson || $0.source != "You" }
+                .map { store.resolvedSpeakerName(for: $0).lowercased() }
+        )
+        // When multiple remote voices are active and no partial-speaker hint is available,
+        // keep the un-committed tail as "Others" instead of misattributing to the prior turn.
+        if distinctRemoteSpeakers.count > 1 {
+            if let entryID = store.clusterToEntryID["Others"],
+               let entry = store.entries.first(where: { $0.id == entryID }) {
+                return (entry.displayName, "Others")
+            }
+            return ("Others", "Others")
+        }
+
+        let fallback = systemSideSpeaker(in: paragraphs)
+        let cluster = paragraphs.reversed().first(where: { !$0.isBoundary && !$0.isUser && $0.speaker != nil })?.liveClusterID
+        if fallback == "Others",
+           let entryID = store.clusterToEntryID["Others"],
+           let entry = store.entries.first(where: { $0.id == entryID }) {
+            return (entry.displayName, "Others")
+        }
+        return (fallback, cluster ?? (fallback == "Others" ? "Others" : nil))
+    }
+
     private static func attachTail(
         _ rawTail: String,
         speaker: String,
+        liveClusterID: String? = nil,
         tailID: Int,
         to paragraphs: inout [LiveTranscriptParagraph]
     ) {
@@ -119,7 +234,14 @@ enum LiveTranscriptParagraphs {
             paragraphs[paragraphs.count - 1].tail = tail
         } else {
             paragraphs.append(LiveTranscriptParagraph(
-                id: tailID, speaker: speaker, timestamp: nil, isBoundary: false, segments: [], tail: tail
+                id: tailID,
+                speaker: speaker,
+                timestamp: nil,
+                isBoundary: false,
+                turnID: nil,
+                liveClusterID: liveClusterID,
+                segments: [],
+                tail: tail
             ))
         }
     }

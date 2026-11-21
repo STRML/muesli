@@ -18,16 +18,77 @@ enum SpeakerCentroidBuilder {
         from segments: [TimedSpeakerSegment],
         minimumSeconds: Double = minimumVoiceprintSeconds
     ) -> [MeetingSpeakerObservation] {
-        let labels = TranscriptFormatter.speakerLabels(for: segments)
+        observations(
+            from: segments,
+            speakerEmbeddings: [:],
+            minimumSeconds: minimumSeconds,
+            labelPrefix: "Speaker"
+        )
+    }
+
+    static func observations(
+        from segments: [TimedSpeakerSegment],
+        speakerEmbeddings: [String: [Float]],
+        minimumSeconds: Double = minimumVoiceprintSeconds,
+        labelPrefix: String = "Speaker"
+    ) -> [MeetingSpeakerObservation] {
+        let labels = speakerLabels(for: segments, prefix: labelPrefix)
         let bySpeaker = Dictionary(grouping: segments, by: \.speakerId)
         return labels
-            .sorted { speakerNumber($0.value) < speakerNumber($1.value) }
+            .sorted { speakerNumber($0.value, prefix: labelPrefix) < speakerNumber($1.value, prefix: labelPrefix) }
             .map { speakerID, label in
                 let speakerSegments = bySpeaker[speakerID] ?? []
                 let seconds = speakerSegments.reduce(0) { $0 + Double(max(0, $1.durationSeconds)) }
-                let centroid = seconds >= minimumSeconds ? weightedCentroid(of: speakerSegments) : nil
+                let centroid: [Float]?
+                if seconds >= minimumSeconds {
+                    centroid = weightedCentroid(of: speakerSegments) ?? validNormalized(speakerEmbeddings[speakerID])
+                } else {
+                    centroid = nil
+                }
                 return MeetingSpeakerObservation(label: label, centroid: centroid, speechSeconds: seconds)
             }
+    }
+
+    /// Observations for in-room microphone diarization when multiple significant
+    /// local voices are present; returns empty when the room has one voice ("You").
+    static func micObservations(
+        from micDiarizationSegments: [TimedSpeakerSegment]?,
+        speakerEmbeddings: [String: [Float]] = [:],
+        minimumSeconds: Double = minimumVoiceprintSeconds
+    ) -> [MeetingSpeakerObservation] {
+        guard let localDiarization = SpeakerAttribution.localDiarization(from: micDiarizationSegments) else {
+            return []
+        }
+        return observations(
+            from: localDiarization,
+            speakerEmbeddings: speakerEmbeddings,
+            minimumSeconds: minimumSeconds,
+            labelPrefix: "Local speaker"
+        )
+    }
+
+    private static func speakerLabels(
+        for diarizationSegments: [TimedSpeakerSegment],
+        prefix: String
+    ) -> [String: String] {
+        if prefix == "Speaker" {
+            return TranscriptFormatter.speakerLabels(for: diarizationSegments)
+        }
+        var labelMap: [String: String] = [:]
+        var nextSpeakerNumber = 1
+        for segment in diarizationSegments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
+            if labelMap[segment.speakerId] == nil {
+                labelMap[segment.speakerId] = "\(prefix) \(nextSpeakerNumber)"
+                nextSpeakerNumber += 1
+            }
+        }
+        return labelMap
+    }
+
+    private static func validNormalized(_ vector: [Float]?) -> [Float]? {
+        guard let vector, SpeakerVoiceprintMatcher.isUsable(vector) else { return nil }
+        let unit = normalized(vector)
+        return SpeakerVoiceprintMatcher.isUsable(unit) ? unit : nil
     }
 
     /// Duration-weighted mean of the L2-normalized usable embeddings, renormalized.
@@ -59,7 +120,9 @@ enum SpeakerCentroidBuilder {
         return norm > 0 ? vector.map { $0 / norm } : vector
     }
 
-    private static func speakerNumber(_ label: String) -> Int {
-        Int(label.dropFirst("Speaker ".count)) ?? .max
+    private static func speakerNumber(_ label: String, prefix: String) -> Int {
+        let marker = "\(prefix) "
+        guard label.hasPrefix(marker) else { return .max }
+        return Int(label.dropFirst(marker.count)) ?? .max
     }
 }

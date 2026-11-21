@@ -228,4 +228,68 @@ struct LiveSpeakerLabelSessionTests {
         #expect(engine.totalSamplesSeen == 0)
         #expect(await sut.label(start: 0, end: 1) == "Others")
     }
+
+    @Test("status callbacks fire across loading, running, stopping, and stopped and coverage supports retroactive labeling")
+    func statusCallbacksAndRetroactiveCoverage() async {
+        final class Recorder: @unchecked Sendable {
+            private let lock = NSLock()
+            var statuses: [Session.Status] = []
+            var maxCovered: TimeInterval = 0
+
+            func recordStatus(_ status: Session.Status) {
+                lock.withLock { statuses.append(status) }
+            }
+
+            func recordCoverage(_ covered: TimeInterval) {
+                lock.withLock { maxCovered = max(maxCovered, covered) }
+            }
+
+            func snapshot() -> ([Session.Status], TimeInterval) {
+                lock.withLock { (statuses, maxCovered) }
+            }
+        }
+
+        let release = AsyncStream<Void>.makeStream()
+        let recorder = Recorder()
+        let engine = twoSpeakerEngine()
+        let sut = Session(
+            factory: {
+                for await _ in release.stream { break }
+                return engine
+            },
+            onStatusChanged: { recorder.recordStatus($0) },
+            onCoverageAdvanced: { recorder.recordCoverage($0) }
+        )
+        sut.start()
+        feedLiveSpeakerAudio(sut, seconds: 5)
+        // While loading, retroactive lookup returns nil and live label falls back immediately.
+        #expect(sut.labelIfCovered(start: 0, end: 2) == nil)
+        #expect(await sut.label(start: 0, end: 2) == "Others")
+
+        release.continuation.yield()
+        #expect(await liveSpeakerWaitUntil { sut.coveredThrough >= 4.0 })
+        #expect(sut.labelIfCovered(start: 0, end: 2) == "Speaker 1")
+        #expect(sut.activeSpeakerCount == 1)
+
+        sut.stop()
+        #expect(await liveSpeakerWaitUntil { sut.status == .stopped })
+        #expect(sut.labelIfCovered(start: 0, end: 2) == "Speaker 1")
+        let (statuses, maxCovered) = recorder.snapshot()
+        #expect(statuses == [.loading, .running, .stopping, .stopped])
+        #expect(maxCovered >= 4.0)
+    }
+
+    @Test("compressed runs retain full-meeting history beyond 300 seconds when retainSeconds is infinite")
+    func compressedRunsRetainLongHistory() {
+        var labeler = LiveSpeakerLabeler(slotCount: 4, frameDuration: 0.1, originSeconds: 0, retainSeconds: .infinity)
+        let blockFrames = 6_000 // 10 minutes
+        for block in 0..<12 { // 2 hours
+            labeler.ingest(liveSpeakerFrames(slotRun(block % 2, frames: blockFrames), startFrame: block * blockFrames))
+        }
+        #expect(labeler.compressedRunCount == 12)
+        #expect(labeler.coveredThrough == 7_200)
+        #expect(labeler.label(start: 5, end: 15) == "Speaker 1")
+        #expect(labeler.label(start: 605, end: 615) == "Speaker 2")
+        #expect(labeler.label(start: 7_100, end: 7_110) == "Speaker 2")
+    }
 }
