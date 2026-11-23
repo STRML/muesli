@@ -5,13 +5,12 @@ recognizes the same voice in later meetings.
 
 ## Using it
 
-1. Open a meeting. The header strip shows "N speakers" next to People.
-2. Type a name for a speaker, or pick an existing person, and Save. The transcript lines change to
-   "Alex:".
-3. Record another meeting with the same person. If the voice matches, the transcript says "Alex".
+1. **During a live meeting:** Click any `Speaker N` chip in the Live transcript (or the header strip) to assign an existing person or create a new one mid-call. Known voices with saved voiceprints are also matched automatically mid-call once enough audio accumulates.
+2. **After a meeting:** Open a meeting. The header strip shows `"N speakers"` next to People. Type a name for a speaker, or pick an existing person, and Save. The transcript lines change to `"Alex:"`.
+3. **Next meeting:** Record another meeting with the same person. If the voice matches, the transcript says `"Alex"`.
+4. **Backfill existing meetings:** Open **Manage Speakers** (from **Settings → Meetings → Saved speakers → Manage Speakers…**, or the People popover footer) and click **Learn voices from saved recordings** to extract voiceprints non-destructively from already-saved recordings.
 
-Speakers, Manage People lists everyone with the number of voiceprints and meetings, with Forget
-Voiceprints (keeps the person, drops their voice data) and Delete.
+Manage Speakers lists everyone with their voiceprint and meeting counts, with **Forget Voiceprints** (keeps the person, drops their voice data) and **Delete**.
 
 ## How matching works
 
@@ -47,5 +46,4 @@ names from leaving for untrusted models, sync, exports, or CLI output.
 
 ## Limits
 
-Meetings that are retranscribed or imported have no voice data, so their speakers stay "Speaker N",
-and retranscribing clears the speaker rows for that meeting.
+Retranscribing or importing an audio file extracts speaker centroids from the saved audio when diarization runs; meetings without saved audio have no voice data so their speakers stay `"Speaker N"`. Retranscribing replaces the meeting's prior speaker rows with the fresh diarization pass.
