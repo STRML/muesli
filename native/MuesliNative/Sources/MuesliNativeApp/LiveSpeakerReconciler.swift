@@ -26,19 +26,22 @@ enum LiveSpeakerReconciler {
 
         private let baseSpeakerLabelByRawID: [String: String]
         private let overrideNamesByRawID: [String: String]
+        private let startingSpeakerNumber: Int
 
         init(
             observations: [MeetingSpeakerObservation],
             formattingDiarizationSegments: [TimedSpeakerSegment]?,
             liveClusterNames: [String: String],
             baseSpeakerLabelByRawID: [String: String],
-            overrideNamesByRawID: [String: String]
+            overrideNamesByRawID: [String: String],
+            startingSpeakerNumber: Int = 1
         ) {
             self.observations = observations
             self.formattingDiarizationSegments = formattingDiarizationSegments
             self.liveClusterNames = liveClusterNames
             self.baseSpeakerLabelByRawID = baseSpeakerLabelByRawID
             self.overrideNamesByRawID = overrideNamesByRawID
+            self.startingSpeakerNumber = max(1, startingSpeakerNumber)
         }
 
         /// Builds the `speakerNames` dictionary expected by `TranscriptFormatter.merge` using
@@ -51,7 +54,10 @@ enum LiveSpeakerReconciler {
             guard renderNames, let formattingDiarizationSegments, !formattingDiarizationSegments.isEmpty else {
                 return [:]
             }
-            let formattingLabels = TranscriptFormatter.speakerLabels(for: formattingDiarizationSegments)
+            let formattingLabels = TranscriptFormatter.speakerLabels(
+                for: formattingDiarizationSegments,
+                startingNumber: startingSpeakerNumber
+            )
             var result: [String: String] = [:]
             for (rawID, formattingLabel) in formattingLabels {
                 if let overrideName = overrideNamesByRawID[rawID] {
@@ -70,24 +76,30 @@ enum LiveSpeakerReconciler {
         diarizationSegments: [TimedSpeakerSegment]?,
         liveInput: LiveSpeakerReconciliationInput?,
         speakerEmbeddings: [String: [Float]] = [:],
-        minimumVoiceprintSeconds: Double = SpeakerCentroidBuilder.minimumVoiceprintSeconds
+        minimumVoiceprintSeconds: Double = SpeakerCentroidBuilder.minimumVoiceprintSeconds,
+        startingSpeakerNumber: Int = 1
     ) -> Result {
+        let normalizedStartingNumber = max(1, startingSpeakerNumber)
         guard let liveInput else {
             let segments = diarizationSegments
             let observations = segments.map {
                 SpeakerCentroidBuilder.observations(
                     from: $0,
                     speakerEmbeddings: speakerEmbeddings,
-                    minimumSeconds: minimumVoiceprintSeconds
+                    minimumSeconds: minimumVoiceprintSeconds,
+                    startingNumber: normalizedStartingNumber
                 )
             } ?? []
-            let baseLabels = segments.map { TranscriptFormatter.speakerLabels(for: $0) } ?? [:]
+            let baseLabels = segments.map {
+                TranscriptFormatter.speakerLabels(for: $0, startingNumber: normalizedStartingNumber)
+            } ?? [:]
             return Result(
                 observations: observations,
                 formattingDiarizationSegments: segments,
                 liveClusterNames: [:],
                 baseSpeakerLabelByRawID: baseLabels,
-                overrideNamesByRawID: [:]
+                overrideNamesByRawID: [:],
+                startingSpeakerNumber: normalizedStartingNumber
             )
         }
 
@@ -96,11 +108,15 @@ enum LiveSpeakerReconciler {
                 diarizationSegments: diarizationSegments,
                 liveInput: liveInput,
                 speakerEmbeddings: speakerEmbeddings,
-                minimumVoiceprintSeconds: minimumVoiceprintSeconds
+                minimumVoiceprintSeconds: minimumVoiceprintSeconds,
+                startingSpeakerNumber: normalizedStartingNumber
             )
         }
 
-        return reconcileFallbackWithoutPostCallDiarization(liveInput: liveInput)
+        return reconcileFallbackWithoutPostCallDiarization(
+            liveInput: liveInput,
+            startingSpeakerNumber: normalizedStartingNumber
+        )
     }
 
     // MARK: - Post-call diarization present
@@ -109,13 +125,18 @@ enum LiveSpeakerReconciler {
         diarizationSegments: [TimedSpeakerSegment],
         liveInput: LiveSpeakerReconciliationInput,
         speakerEmbeddings: [String: [Float]],
-        minimumVoiceprintSeconds: Double
+        minimumVoiceprintSeconds: Double,
+        startingSpeakerNumber: Int
     ) -> Result {
-        let baseLabels = TranscriptFormatter.speakerLabels(for: diarizationSegments)
+        let baseLabels = TranscriptFormatter.speakerLabels(
+            for: diarizationSegments,
+            startingNumber: startingSpeakerNumber
+        )
         let baseObservations = SpeakerCentroidBuilder.observations(
             from: diarizationSegments,
             speakerEmbeddings: speakerEmbeddings,
-            minimumSeconds: minimumVoiceprintSeconds
+            minimumSeconds: minimumVoiceprintSeconds,
+            startingNumber: startingSpeakerNumber
         )
 
         // Aggregate live-assigned intervals per target speaker entry (handles merged live clusters).
@@ -197,14 +218,16 @@ enum LiveSpeakerReconciler {
             formattingDiarizationSegments: formattingSegments,
             liveClusterNames: liveClusterNames,
             baseSpeakerLabelByRawID: baseLabels,
-            overrideNamesByRawID: overrideNamesByRawID
+            overrideNamesByRawID: overrideNamesByRawID,
+            startingSpeakerNumber: startingSpeakerNumber
         )
     }
 
     // MARK: - Fallback when post-call diarizer failed / unavailable
 
     private static func reconcileFallbackWithoutPostCallDiarization(
-        liveInput: LiveSpeakerReconciliationInput
+        liveInput: LiveSpeakerReconciliationInput,
+        startingSpeakerNumber: Int
     ) -> Result {
         // Only synthesize diarization when live diarization or user edits actually produced
         // speaker distinctions beyond plain unattributed "Others".
@@ -304,7 +327,10 @@ enum LiveSpeakerReconciler {
             )
         }
 
-        let baseLabels = TranscriptFormatter.speakerLabels(for: syntheticSegments)
+        let baseLabels = TranscriptFormatter.speakerLabels(
+            for: syntheticSegments,
+            startingNumber: startingSpeakerNumber
+        )
         var metadataByKey: [String: (name: String, profileID: Int64?, isExplicit: Bool, seconds: Double)] = [:]
         for turn in resolvedTurns {
             let duration = max(0, turn.end - turn.start)
@@ -346,7 +372,8 @@ enum LiveSpeakerReconciler {
             formattingDiarizationSegments: syntheticSegments,
             liveClusterNames: liveClusterNames,
             baseSpeakerLabelByRawID: baseLabels,
-            overrideNamesByRawID: [:]
+            overrideNamesByRawID: [:],
+            startingSpeakerNumber: startingSpeakerNumber
         )
     }
 

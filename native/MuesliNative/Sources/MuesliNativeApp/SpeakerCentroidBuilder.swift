@@ -16,13 +16,15 @@ enum SpeakerCentroidBuilder {
 
     static func observations(
         from segments: [TimedSpeakerSegment],
-        minimumSeconds: Double = minimumVoiceprintSeconds
+        minimumSeconds: Double = minimumVoiceprintSeconds,
+        startingNumber: Int = 1
     ) -> [MeetingSpeakerObservation] {
         observations(
             from: segments,
             speakerEmbeddings: [:],
             minimumSeconds: minimumSeconds,
-            labelPrefix: "Speaker"
+            labelPrefix: "Speaker",
+            startingNumber: startingNumber
         )
     }
 
@@ -30,9 +32,10 @@ enum SpeakerCentroidBuilder {
         from segments: [TimedSpeakerSegment],
         speakerEmbeddings: [String: [Float]],
         minimumSeconds: Double = minimumVoiceprintSeconds,
-        labelPrefix: String = "Speaker"
+        labelPrefix: String = "Speaker",
+        startingNumber: Int = 1
     ) -> [MeetingSpeakerObservation] {
-        let labels = speakerLabels(for: segments, prefix: labelPrefix)
+        let labels = speakerLabels(for: segments, prefix: labelPrefix, startingNumber: startingNumber)
         let bySpeaker = Dictionary(grouping: segments, by: \.speakerId)
         return labels
             .sorted { speakerNumber($0.value, prefix: labelPrefix) < speakerNumber($1.value, prefix: labelPrefix) }
@@ -69,13 +72,14 @@ enum SpeakerCentroidBuilder {
 
     private static func speakerLabels(
         for diarizationSegments: [TimedSpeakerSegment],
-        prefix: String
+        prefix: String,
+        startingNumber: Int = 1
     ) -> [String: String] {
         if prefix == "Speaker" {
-            return TranscriptFormatter.speakerLabels(for: diarizationSegments)
+            return TranscriptFormatter.speakerLabels(for: diarizationSegments, startingNumber: startingNumber)
         }
         var labelMap: [String: String] = [:]
-        var nextSpeakerNumber = 1
+        var nextSpeakerNumber = max(1, startingNumber)
         for segment in diarizationSegments.sorted(by: { $0.startTimeSeconds < $1.startTimeSeconds }) {
             if labelMap[segment.speakerId] == nil {
                 labelMap[segment.speakerId] = "\(prefix) \(nextSpeakerNumber)"

@@ -263,6 +263,9 @@ final class MeetingSession {
     /// Answers whether this meeting is private at the moment of the call. It is asked
     /// before every outbound request because the flag can change during processing.
     var isPrivateMeetingProvider: (() async -> Bool)?
+    /// First `"Speaker N"` index to assign when formatting and recording remote speakers.
+    /// Defaults to `1`; resumed meetings offset past existing speakers in the meeting.
+    var startingSpeakerNumberProvider: (() async -> Int)?
     /// Persists this meeting's diarized speakers and returns `Speaker N -> name` for
     /// recognized voices. An empty map keeps the transcript exactly as before.
     var speakerNamesProvider: (([MeetingSpeakerObservation]) async -> [String: String])?
@@ -270,6 +273,10 @@ final class MeetingSession {
     /// Formatted notes of the predecessor meeting when this session records a
     /// follow-up; injected into the summary prompt for action-item carry-forward.
     var previousMeetingNotes: String?
+    /// True if `previousMeetingNotes` originated from a private predecessor meeting.
+    var previousMeetingNotesArePrivate = false
+    /// Re-checks whether the follow-up's predecessor meeting is currently private.
+    var isPreviousMeetingPrivateProvider: (() async -> Bool)?
     /// Committed segments for a source ("You"/"Others"). `displaySpeakers`, when
     /// present, holds one provisional label per segment for the Live tab only; the
     /// durable checkpoint keeps `speaker`.
@@ -1235,11 +1242,13 @@ final class MeetingSession {
             : .catalog(provider: finalBackend.backend, model: finalBackend.model)
         let transcriptHadFailures = micChunkHealthTracker.snapshot().failedChunkCount > 0
             || systemChunkHealthTracker.snapshot().failedChunkCount > 0
+        let startingSpeakerNumber = max(1, await startingSpeakerNumberProvider?() ?? 1)
         let liveSpeakerInput = await liveSpeakerReconciliationProvider?()
         let reconciledSpeakers = LiveSpeakerReconciler.reconcile(
             diarizationSegments: protectedTranscriptInputs.diarizationSegments,
             liveInput: liveSpeakerInput,
-            speakerEmbeddings: systemSpeakerCentroids
+            speakerEmbeddings: systemSpeakerCentroids,
+            startingSpeakerNumber: startingSpeakerNumber
         )
         let speakerObservations = reconciledSpeakers.observations
         let speakerNames = speakerObservations.isEmpty ? [:] : await speakerNamesProvider?(speakerObservations) ?? [:]
@@ -1256,7 +1265,8 @@ final class MeetingSession {
             micDiarizationSegments: protectedTranscriptInputs.micDiarizationSegments,
             meetingStart: meetingStart,
             speakerNames: formattedSpeakerNames,
-            undiarizedSystemSpeaker: inPerson ? InPersonMeeting.undiarizedSpeaker : "Others"
+            undiarizedSystemSpeaker: inPerson ? InPersonMeeting.undiarizedSpeaker : "Others",
+            startingSpeakerNumber: startingSpeakerNumber
         )
 
         let titleManualNotes = await manualNotesProvider?()
@@ -1299,7 +1309,7 @@ final class MeetingSession {
             formattedNotes = MeetingSummaryClient.emptyRecordingNotes
         } else {
             do {
-                let isPrivate = await isPrivateMeetingProvider?() ?? false
+                let isPrivate = await currentOutboundPrivacyState()
                 let summaryConfig = config
                 let summaryTemplate = templateSnapshot
                 let summaryPreviousNotes = previousMeetingNotes
@@ -1374,7 +1384,7 @@ final class MeetingSession {
 
     /// Nil when the title stage was superseded by a Resume or the model produced none.
     private func generateTitleUnlessSuperseded(transcript: String, manualNotes: String?) async -> String? {
-        let isPrivate = await isPrivateMeetingProvider?() ?? false
+        let isPrivate = await currentOutboundPrivacyState()
         let titleConfig = config
         let generated = try? await summaryGate.run {
             await MeetingSummaryClient.generateTitle(
@@ -1385,6 +1395,14 @@ final class MeetingSession {
             )
         }
         return generated ?? nil
+    }
+
+    func currentOutboundPrivacyState() async -> Bool {
+        if previousMeetingNotesArePrivate { return true }
+        if let isPreviousMeetingPrivateProvider, await isPreviousMeetingPrivateProvider() { return true }
+        if let isPrivateMeetingProvider { return await isPrivateMeetingProvider() }
+        // Fail closed when carried predecessor notes exist without a privacy provider.
+        return previousMeetingNotes != nil
     }
 
     static func calendarTitleCandidate(originalTitle: String, calendarEventID: String?) -> String? {

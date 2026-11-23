@@ -282,6 +282,52 @@ enum SpeakerIdentitySQL {
 extension DictationStore {
     // MARK: Pipeline
 
+    /// Highest numeric suffix among `"Speaker N"` labels in `existingLabels` or line
+    /// prefixes in `transcript`. Used when resuming a meeting so new sessions do not
+    /// reuse earlier `"Speaker N"` labels.
+    public static func highestSpeakerNumber(inTranscript transcript: String, existingLabels: [String]) -> Int {
+        var highest = 0
+        if let labelRegex = try? NSRegularExpression(pattern: "^Speaker (\\d+)$") {
+            for label in existingLabels {
+                let range = NSRange(label.startIndex..., in: label)
+                if let match = labelRegex.firstMatch(in: label, range: range),
+                   let numberRange = Range(match.range(at: 1), in: label),
+                   let number = Int(label[numberRange]) {
+                    highest = max(highest, number)
+                }
+            }
+        }
+        if let transcriptRegex = try? NSRegularExpression(pattern: "(?m)^(?:\\[[0-9]{2}:[0-9]{2}(?::[0-9]{2})?\\]\\s+)?Speaker (\\d+):") {
+            let range = NSRange(transcript.startIndex..., in: transcript)
+            transcriptRegex.enumerateMatches(in: transcript, range: range) { match, _, _ in
+                guard let match,
+                      let numberRange = Range(match.range(at: 1), in: transcript),
+                      let number = Int(transcript[numberRange]) else { return }
+                highest = max(highest, number)
+            }
+        }
+        return highest
+    }
+
+    /// Next available `"Speaker N"` index for a meeting, strictly greater than any
+    /// existing `"Speaker N"` in `meeting_speakers` or its transcript.
+    public func nextSpeakerNumber(forMeetingID meetingID: Int64, priorTranscript: String? = nil) throws -> Int {
+        try withChatDatabase { db in
+            try nextSpeakerNumber(forMeetingID: meetingID, priorTranscript: priorTranscript, db: db)
+        }
+    }
+
+    private func nextSpeakerNumber(forMeetingID meetingID: Int64, priorTranscript: String?, db: OpaquePointer?) throws -> Int {
+        let existingLabels = try SpeakerIdentitySQL.rows(
+            "SELECT label FROM meeting_speakers WHERE meeting_id = ?", [.integer(meetingID)], db: db
+        ) { SpeakerIdentitySQL.text($0, 0) ?? "" }
+        let dbTranscript = try SpeakerIdentitySQL.rows(
+            "SELECT COALESCE(raw_transcript, '') FROM meetings WHERE id = ?", [.integer(meetingID)], db: db
+        ) { SpeakerIdentitySQL.text($0, 0) ?? "" }.first ?? ""
+        let combined = [dbTranscript, priorTranscript ?? ""].joined(separator: "\n")
+        return Self.highestSpeakerNumber(inTranscript: combined, existingLabels: existingLabels) + 1
+    }
+
     /// Replaces (or merges into, when `preservingExisting` is true for resumed meetings) this
     /// meeting's speaker rows with the new diarization, honors explicit live assignments first,
     /// and matches remaining centroids against saved voiceprints.
@@ -310,6 +356,7 @@ extension DictationStore {
                 let existingRows = preservingExisting ? try loadMeetingSpeakerRows(meetingID: meetingID, db: db) : []
                 var usedLabels = Set(existingRows.map(\.label))
                 var nextSpeakerNumber = Self.nextSpeakerNumber(existingLabels: usedLabels)
+                let minimumSpeakerNumber = preservingExisting ? nextSpeakerNumber : 1
 
                 // 1. Resolve explicit live assignments first so automatic voiceprint matching never
                 // steals a profile the user explicitly bound to another speaker.
@@ -397,7 +444,7 @@ extension DictationStore {
                         rowLabel = profileName
                     } else {
                         let preferred = group.labels.first ?? "Speaker \(nextSpeakerNumber)"
-                        rowLabel = Self.allocateLabel(preferred: preferred, used: &usedLabels, nextNumber: &nextSpeakerNumber)
+                        rowLabel = Self.allocateLabel(preferred: preferred, used: &usedLabels, nextNumber: &nextSpeakerNumber, minimumSpeakerNumber: minimumSpeakerNumber)
                     }
                     usedLabels.insert(rowLabel)
 
@@ -420,7 +467,7 @@ extension DictationStore {
                 for speaker in unnamedSpeakers {
                     let rowLabel: String
                     if preservingExisting {
-                        rowLabel = Self.allocateLabel(preferred: speaker.label, used: &usedLabels, nextNumber: &nextSpeakerNumber)
+                        rowLabel = Self.allocateLabel(preferred: speaker.label, used: &usedLabels, nextNumber: &nextSpeakerNumber, minimumSpeakerNumber: minimumSpeakerNumber)
                     } else {
                         rowLabel = speaker.label
                         usedLabels.insert(rowLabel)
@@ -792,8 +839,14 @@ extension DictationStore {
         return maxNumber + 1
     }
 
-    private static func allocateLabel(preferred: String, used: inout Set<String>, nextNumber: inout Int) -> String {
-        if !used.contains(preferred) {
+    private static func allocateLabel(
+        preferred: String,
+        used: inout Set<String>,
+        nextNumber: inout Int,
+        minimumSpeakerNumber: Int = 1
+    ) -> String {
+        let preferredNumber = speakerNumber(for: preferred)
+        if !used.contains(preferred), preferredNumber.map({ $0 >= minimumSpeakerNumber }) ?? true {
             used.insert(preferred)
             return preferred
         }
@@ -804,6 +857,11 @@ extension DictationStore {
         used.insert(allocated)
         nextNumber += 1
         return allocated
+    }
+
+    private static func speakerNumber(for label: String) -> Int? {
+        guard label.hasPrefix("Speaker ") else { return nil }
+        return Int(label.dropFirst("Speaker ".count))
     }
 
     private static func usableVector(_ vector: [Float]?) -> [Float]? {
