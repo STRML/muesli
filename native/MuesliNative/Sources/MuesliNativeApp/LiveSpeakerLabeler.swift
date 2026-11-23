@@ -9,6 +9,15 @@ struct LiveSpeakerFrames: Sendable, Equatable {
     let probabilities: [Float]
 }
 
+/// Outcome of resolving a time range against the diarizer's retained frames.
+enum LiveSpeakerResolution: Equatable, Sendable {
+    case speaker(String)
+    /// The diarizer covered the entire range and detected no active voice.
+    case silent
+    /// The diarizer has not covered (or no longer retains) the range.
+    case uncovered
+}
+
 /// Turns diarizer frames into provisional "Speaker N" labels for time ranges.
 ///
 /// Pure state, no I/O. Numbers are handed out the first time a slot is shown, so
@@ -81,9 +90,24 @@ struct LiveSpeakerLabeler: Sendable {
         trimHistory()
     }
 
+    mutating func labelResolution(start: TimeInterval, end: TimeInterval) -> LiveSpeakerResolution {
+        let tolerance = frameDuration * 1e-6
+        guard coveredThrough > start + tolerance else { return .uncovered }
+        if let slot = dominantSlot(start: start, end: end) {
+            return .speaker("Speaker \(displayNumber(for: slot))")
+        }
+        let retainedStart = originSeconds + Double(baseFrame) * frameDuration
+        let isFullyCovered = start + tolerance >= retainedStart && coveredThrough + tolerance >= end
+        return isFullyCovered ? .silent : .uncovered
+    }
+
     mutating func label(start: TimeInterval, end: TimeInterval) -> String {
-        guard let slot = dominantSlot(start: start, end: end) else { return Self.fallbackLabel }
-        return "Speaker \(displayNumber(for: slot))"
+        switch labelResolution(start: start, end: end) {
+        case .speaker(let label):
+            return label
+        case .silent, .uncovered:
+            return Self.fallbackLabel
+        }
     }
 
     private mutating func padGap(before startFrame: Int) {
@@ -140,8 +164,10 @@ struct LiveSpeakerLabeler: Sendable {
     }
 
     private func dominantSlot(start: TimeInterval, end: TimeInterval) -> Int? {
-        let first = max(Int(((start - originSeconds) / frameDuration).rounded(.down)), baseFrame)
-        let last = min(Int(((end - originSeconds) / frameDuration).rounded(.up)), nextFrame)
+        let rawFirst = Int(((start - originSeconds) / frameDuration).rounded(.down))
+        let rawLast = Int(((end - originSeconds) / frameDuration).rounded(.up))
+        let first = max(rawFirst, baseFrame)
+        let last = min(rawLast, nextFrame)
         guard first < last else { return nil }
         var counts = [Int](repeating: 0, count: slotCount)
 
@@ -173,7 +199,8 @@ struct LiveSpeakerLabeler: Sendable {
             let (lhsNumber, rhsNumber) = (displayNumbers[lhs] ?? .max, displayNumbers[rhs] ?? .max)
             return lhsNumber != rhsNumber ? lhsNumber < rhsNumber : lhs < rhs
         }
-        guard let best, counts[best] >= min(Self.minimumActiveFrames, last - first) else { return nil }
+        let requiredFrames = min(Self.minimumActiveFrames, max(rawLast - rawFirst, 1))
+        guard let best, counts[best] >= requiredFrames else { return nil }
         return best
     }
 

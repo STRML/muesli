@@ -128,4 +128,42 @@ struct LiveSpeakerLabelerTests {
         #expect(sut.label(start: 35_990, end: 35_995) != "Others")
         #expect(sut.label(start: 100, end: 105) == "Others")
     }
+
+    @Test("labelResolution distinguishes uncovered, covered silence, and active speakers")
+    func resolutionDistinguishesUncoveredFromSilent() {
+        var empty = labeler()
+        #expect(empty.labelResolution(start: 0, end: 2) == .uncovered)
+        #expect(empty.label(start: 0, end: 2) == LiveSpeakerLabeler.fallbackLabel)
+
+        var silent = labeler()
+        silent.ingest(liveSpeakerFrames(slotRun(nil, frames: 30)))
+        #expect(silent.labelResolution(start: 0, end: 3) == .silent)
+        #expect(silent.label(start: 0, end: 3) == LiveSpeakerLabeler.fallbackLabel)
+        // Partially covered range with only silence so far is still uncovered, not silent.
+        #expect(silent.labelResolution(start: 2, end: 4) == .uncovered)
+        // Wholly past coveredThrough is uncovered.
+        #expect(silent.labelResolution(start: 3, end: 5) == .uncovered)
+
+        var partial = labeler()
+        partial.ingest(liveSpeakerFrames(slotRun(2, frames: 6))) // coveredThrough == 0.6s
+        #expect(partial.labelResolution(start: 0.6, end: 2.0) == .uncovered)
+        #expect(partial.labelResolution(start: 0.0, end: 2.0) == .speaker("Speaker 1"))
+
+        var blipAtEdge = labeler()
+        blipAtEdge.ingest(liveSpeakerFrames(slotRun(nil, frames: 10) + [1])) // coveredThrough == 1.1s, 1 active frame in [1, 3)
+        #expect(blipAtEdge.labelResolution(start: 1.0, end: 3.0) == .uncovered)
+
+        var weakCovered = labeler()
+        weakCovered.ingest(LiveSpeakerFrames(startFrame: 0, slotCount: 4, probabilities: [Float](repeating: 0.3, count: 80)))
+        #expect(weakCovered.labelResolution(start: 0, end: 2) == .silent)
+
+        var offset = labeler(origin: 10)
+        offset.ingest(liveSpeakerFrames(slotRun(0, frames: 20)))
+        #expect(offset.labelResolution(start: 0, end: 5) == .uncovered)
+        #expect(offset.labelResolution(start: 10, end: 12) == .speaker("Speaker 1"))
+
+        var trimmed = labeler(retain: 1)
+        trimmed.ingest(liveSpeakerFrames(slotRun(0, frames: 50))) // retainedStart == 4.0, coveredThrough == 5.0
+        #expect(trimmed.labelResolution(start: 0, end: 1) == .uncovered)
+    }
 }

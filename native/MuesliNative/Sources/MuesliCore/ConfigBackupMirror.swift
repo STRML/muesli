@@ -11,7 +11,16 @@ public struct ConfigBackupMirror: Sendable {
         case written
         /// The new config has no user words and the mirror does. The mirror was left alone.
         case keptExistingWords
+        /// The existing mirror file could not be read, so it was left alone to avoid clobbering unknown contents.
+        case unreadableExistingMirror
         case failed(String)
+    }
+
+    public enum ReadStatus: Equatable, Sendable {
+        case missing
+        case readable(userWords: [CustomWord])
+        case corrupt
+        case unreadable(String)
     }
 
     public let directoryURL: URL
@@ -34,19 +43,44 @@ public struct ConfigBackupMirror: Sendable {
         ConfigBackupMirror(directoryURL: MuesliPaths.backupDirectoryURL(appName: appName, home: home))
     }
 
-    /// User-created words in the mirror. A missing, unreadable or corrupt mirror reads as empty.
-    public func storedUserWords() -> [CustomWord] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let words = try? CustomWordDictionaryCodec.decode(data) else { return [] }
-        return CustomWordDictionaryCodec.userWords(in: words)
+    /// Reads the current state of the mirror on disk, distinguishing a missing file
+    /// or corrupt JSON from an existing file that cannot be read.
+    public func readMirrorStatus() -> ReadStatus {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch {
+            if Self.isMissingFileError(error) {
+                return .missing
+            }
+            return .unreadable(error.localizedDescription)
+        }
+        guard let words = try? CustomWordDictionaryCodec.decode(data) else {
+            return .corrupt
+        }
+        return .readable(userWords: CustomWordDictionaryCodec.userWords(in: words))
     }
 
-    /// Replaces the mirror with `configData`, atomically, unless that would drop the dictionary.
+    /// User-created words in the mirror. A missing, unreadable or corrupt mirror reads as empty.
+    public func storedUserWords() -> [CustomWord] {
+        guard case .readable(let words) = readMirrorStatus() else { return [] }
+        return words
+    }
+
+    /// Replaces the mirror with `configData`, atomically, unless that would drop the dictionary
+    /// or overwrite an unreadable existing mirror.
     public func write(_ configData: Data) -> WriteOutcome {
         let incoming = (try? CustomWordDictionaryCodec.decode(configData))
             .map(CustomWordDictionaryCodec.userWords(in:)) ?? []
-        if incoming.isEmpty, !storedUserWords().isEmpty {
+        let clearedByUser = (try? JSONDecoder().decode(MirrorFlagsShape.self, from: configData))?
+            .customWordsClearedByUser ?? false
+        switch readMirrorStatus() {
+        case .unreadable:
+            return .unreadableExistingMirror
+        case .readable(let existingWords) where incoming.isEmpty && !clearedByUser && !existingWords.isEmpty:
             return .keptExistingWords
+        case .missing, .corrupt, .readable:
+            break
         }
         do {
             try FileManager.default.createDirectory(
@@ -60,6 +94,28 @@ public struct ConfigBackupMirror: Sendable {
         } catch {
             return .failed(error.localizedDescription)
         }
+    }
+
+    private struct MirrorFlagsShape: Decodable {
+        let customWordsClearedByUser: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case customWordsClearedByUser = "custom_words_cleared_by_user"
+        }
+    }
+
+    private static func isMissingFileError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain && nsError.code == NSFileReadNoSuchFileError {
+            return true
+        }
+        if nsError.domain == NSPOSIXErrorDomain && (nsError.code == ENOENT || nsError.code == ENOTDIR) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return isMissingFileError(underlying)
+        }
+        return false
     }
 
     /// Moves the mirrored config to the Trash. A missing mirror is not an error.

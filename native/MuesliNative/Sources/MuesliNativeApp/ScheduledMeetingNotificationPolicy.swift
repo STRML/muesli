@@ -41,11 +41,12 @@ enum ScheduledMeetingNotificationPolicy {
 
     /// "Auto-record detected calls" is hidden while detection notifications are off, so it only counts
     /// with them on. Calendar auto-record follows `joinedCallAction`: a live call on a matching event,
-    /// once per event.
+    /// once per event. A call whose toast was dismissed stays declined for the life of that call.
     static func recordsDetectedCall(
         showsDetection: Bool, autoRecordDetectedCalls: Bool, autoRecordMeetings: Bool, hasCalendarEvent: Bool,
-        hasLiveMedia: Bool, alreadyAttempted: Bool
+        hasLiveMedia: Bool, alreadyAttempted: Bool, callDeclined: Bool = false
     ) -> Bool {
+        guard !callDeclined else { return false }
         if showsDetection && autoRecordDetectedCalls { return true }
         return joinedCallAction(
             showsDetection: showsDetection, autoRecordMeetings: autoRecordMeetings, hasCalendarEvent: hasCalendarEvent,

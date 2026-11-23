@@ -295,7 +295,13 @@ final class MeetingSession {
     private let partialSessionsStorage = OSAllocatedUnfairLock(initialState: PartialSessionsStorage())
     /// Provisional speaker labels for system audio. Created from the config
     /// snapshot at start, or hot-attached mid-meeting via `enableLiveSpeakerLabelsMidMeeting`.
+    private struct LastInPersonLiveSpeaker: Sendable {
+        var endTime: TimeInterval
+        var speaker: String
+    }
+
     private let liveSpeakerSessionStorage = OSAllocatedUnfairLock<LiveSpeakerLabelSession?>(initialState: nil)
+    private let lastInPersonLiveSpeakerStorage = OSAllocatedUnfairLock<LastInPersonLiveSpeaker?>(initialState: nil)
     private let liveVoiceprintAudioBuffer = LiveVoiceprintAudioBuffer()
     private let liveSpeakerClockOffsetStorage = OSAllocatedUnfairLock<TimeInterval>(initialState: 0)
     private let totalLiveSpeakerSamplesStorage = OSAllocatedUnfairLock<Int64>(initialState: 0)
@@ -638,17 +644,62 @@ final class MeetingSession {
 
     /// Display labels for committed in-person mic segments. nil (today's "You")
     /// whenever the session cannot give real labels: none, still loading, or
-    /// failed, including a failure while this batch waited. A range with no
-    /// detected voice reads as the undiarized speaker, like the final pass.
+    /// failed, including a failure while this batch waited. A covered range with
+    /// no detected voice reads as the undiarized speaker, like the final pass;
+    /// an uncovered range (diarizer lagging behind) inherits the previous
+    /// speaker label or falls back to "You".
     static func liveMicDisplaySpeakers(
         for segments: [SpeechSegment],
         using session: LiveSpeakerLabelSession?,
-        clockOffset: TimeInterval = 0
+        clockOffset: TimeInterval = 0,
+        previousSpeaker: String? = nil
     ) async -> [String]? {
+        await resolveLiveMicDisplaySpeakers(
+            for: segments,
+            using: session,
+            clockOffset: clockOffset,
+            previousSpeaker: previousSpeaker
+        )?.labels
+    }
+
+    private static func resolveLiveMicDisplaySpeakers(
+        for segments: [SpeechSegment],
+        using session: LiveSpeakerLabelSession?,
+        clockOffset: TimeInterval = 0,
+        previousSpeaker: String? = nil
+    ) async -> (labels: [String], lastSpeaker: LastInPersonLiveSpeaker?)? {
         guard let session, session.isLabeling else { return nil }
-        guard let labels = await liveDisplaySpeakers(for: segments, using: session, clockOffset: clockOffset),
-              session.isLabeling else { return nil }
-        return labels.map { $0 == LiveSpeakerLabeler.fallbackLabel ? InPersonMeeting.undiarizedSpeaker : $0 }
+        var resolutions: [LiveSpeakerResolution] = []
+        resolutions.reserveCapacity(segments.count)
+        for segment in segments {
+            if segment.end <= clockOffset {
+                resolutions.append(.uncovered)
+            } else {
+                resolutions.append(await session.labelResolution(
+                    start: max(0, segment.start - clockOffset),
+                    end: max(0, segment.end - clockOffset)
+                ))
+            }
+        }
+        guard session.isLabeling else { return nil }
+
+        var lastSpeaker = previousSpeaker
+        var latestResolvedSpeaker: LastInPersonLiveSpeaker?
+        var labels: [String] = []
+        labels.reserveCapacity(resolutions.count)
+        for (segment, resolution) in zip(segments, resolutions) {
+            switch resolution {
+            case .speaker(let label):
+                labels.append(label)
+                lastSpeaker = label
+                latestResolvedSpeaker = LastInPersonLiveSpeaker(endTime: segment.end, speaker: label)
+            case .silent:
+                labels.append(InPersonMeeting.undiarizedSpeaker)
+            case .uncovered:
+                labels.append(lastSpeaker ?? "You")
+            }
+        }
+        return (labels, latestResolvedSpeaker)
     }
 
     func currentLiveDiarizationStatus() -> LiveDiarizationStatus {
@@ -1496,13 +1547,29 @@ final class MeetingSession {
                 guard self.micChunkCollector.retire(id: retireID, segments: resolvedSegments) else { return }
                 self.commitMicPartialSegment(id: retireID)
                 guard !resolvedSegments.isEmpty else { return }
-                let displaySpeakers = self.inPerson
-                    ? await Self.liveMicDisplaySpeakers(
+                let displaySpeakers: [String]?
+                if self.inPerson {
+                    let previousSpeaker = self.lastInPersonLiveSpeakerStorage.withLock { $0?.speaker }
+                    if let resolved = await Self.resolveLiveMicDisplaySpeakers(
                         for: resolvedSegments,
                         using: self.liveSpeakerSession(),
-                        clockOffset: self.liveSpeakerClockOffsetStorage.withLock { $0 }
-                    )
-                    : nil
+                        clockOffset: self.liveSpeakerClockOffsetStorage.withLock { $0 },
+                        previousSpeaker: previousSpeaker
+                    ) {
+                        if let latestSpeaker = resolved.lastSpeaker {
+                            self.lastInPersonLiveSpeakerStorage.withLock { current in
+                                if current == nil || latestSpeaker.endTime >= current!.endTime {
+                                    current = latestSpeaker
+                                }
+                            }
+                        }
+                        displaySpeakers = resolved.labels
+                    } else {
+                        displaySpeakers = nil
+                    }
+                } else {
+                    displaySpeakers = nil
+                }
                 self.onChunkTranscribed?(resolvedSegments, "You", displaySpeakers)
             }
         } else {

@@ -229,4 +229,77 @@ struct InPersonLiveSpeakerTests {
         #expect(await liveSpeakerWaitUntil { engine.totalSamplesSeen == 6_400 })
         #expect(try retainedSampleCount(await session.testingFinishCapture()) == 6_400)
     }
+
+    // MARK: Lagging diarizer coverage (#32)
+
+    @Test("lagging diarizer coverage falls back to You when no prior speaker exists, not Speaker 1")
+    func laggingCoverageWithoutPriorSpeakerFallsBackToYou() async {
+        var limits = LiveSpeakerLabelSession.Limits()
+        limits.coverageWait = .milliseconds(100)
+        let engine = ScriptedLiveSpeakerEngine(lagFrames: 3) { _ in nil }
+        let session = LiveSpeakerLabelSession(factory: { engine }, limits: limits)
+        session.start()
+        _ = await liveSpeakerWaitUntil { session.status == .running }
+        feedLiveSpeakerAudio(session, seconds: 2) // coveredThrough == 1.7s
+        #expect(await liveSpeakerWaitUntil { session.coveredThrough >= 1.7 })
+
+        let batch = [
+            SpeechSegment(start: 0, end: 1.5, text: "covered silence"),
+            SpeechSegment(start: 3, end: 5, text: "lagging uncovered"),
+            SpeechSegment(start: 5, end: 7, text: "still uncovered"),
+        ]
+        let labels = await MeetingSession.liveMicDisplaySpeakers(for: batch, using: session)
+        #expect(labels == [InPersonMeeting.undiarizedSpeaker, "You", "You"])
+    }
+
+    @Test("lagging diarizer coverage inherits the previous speaker label in the batch and across commits")
+    func laggingCoverageInheritsPreviousSpeaker() async {
+        var limits = LiveSpeakerLabelSession.Limits()
+        limits.coverageWait = .milliseconds(100)
+        let engine = ScriptedLiveSpeakerEngine(lagFrames: 3) { frame in
+            if frame < 20 { return 0 }
+            if frame < 40 { return 2 }
+            return nil
+        }
+        let session = LiveSpeakerLabelSession(factory: { engine }, limits: limits)
+        session.start()
+        _ = await liveSpeakerWaitUntil { session.status == .running }
+        feedLiveSpeakerAudio(session, seconds: 6) // coveredThrough == 5.7s
+        #expect(await liveSpeakerWaitUntil { session.coveredThrough >= 5.7 })
+
+        let firstBatch = [
+            SpeechSegment(start: 0, end: 2, text: "first"),
+            SpeechSegment(start: 2, end: 4, text: "second"),
+            SpeechSegment(start: 4, end: 5.5, text: "covered silent"),
+            SpeechSegment(start: 7, end: 9, text: "lagging in same batch"),
+        ]
+        let firstLabels = await MeetingSession.liveMicDisplaySpeakers(for: firstBatch, using: session)
+        #expect(firstLabels == ["Speaker 1", "Speaker 2", InPersonMeeting.undiarizedSpeaker, "Speaker 2"])
+
+        let nextBatch = [
+            SpeechSegment(start: 9, end: 11, text: "lagging in next chunk"),
+        ]
+        let nextLabels = await MeetingSession.liveMicDisplaySpeakers(
+            for: nextBatch,
+            using: session,
+            previousSpeaker: "Speaker 2"
+        )
+        #expect(nextLabels == ["Speaker 2"])
+
+        // Remote-audio caller contract remains "Others" for both covered silence and uncovered lag.
+        let remoteLabels = await MeetingSession.liveDisplaySpeakers(for: firstBatch, using: session)
+        #expect(remoteLabels == ["Speaker 1", "Speaker 2", LiveSpeakerLabeler.fallbackLabel, LiveSpeakerLabeler.fallbackLabel])
+    }
+
+    @Test("segments before mid-meeting clockOffset are treated as uncovered")
+    func clockOffsetPreSessionSegmentsUseUncoveredFallback() async {
+        let session = await runningSession(seconds: 6) { _ in 1 }
+        #expect(await liveSpeakerWaitUntil { session.coveredThrough >= 5.7 })
+        let batch = [
+            SpeechSegment(start: 0, end: 2, text: "before offset"),
+            SpeechSegment(start: 5, end: 7, text: "after offset"),
+        ]
+        let labels = await MeetingSession.liveMicDisplaySpeakers(for: batch, using: session, clockOffset: 4)
+        #expect(labels == ["You", "Speaker 1"])
+    }
 }

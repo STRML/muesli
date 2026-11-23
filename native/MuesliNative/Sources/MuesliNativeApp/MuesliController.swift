@@ -984,6 +984,7 @@ public final class MuesliController: NSObject {
     private var detectedCallCandidate: MeetingCandidate?
     private var detectedCallEvent: UnifiedCalendarEvent?
     private var detectedCallTask: Task<Void, Never>?
+    private var declinedDetectedCallCandidateIDs = Set<String>()
     private var sidebarEntryTimer: Timer?
     /// Events the user switched auto-join on for, from the sidebar. Not saved: it is a choice for one meeting.
     private var autoJoinEventKeys = Set<String>()
@@ -2335,6 +2336,10 @@ public final class MuesliController: NSObject {
         let previousEnableLiveStreamingPartials = config.enableLiveStreamingPartials
         let previousConfig = config
         mutate(&config)
+        if CustomWordDictionaryCodec.userWords(in: previousConfig.customWords).isEmpty,
+           !CustomWordDictionaryCodec.userWords(in: config.customWords).isEmpty {
+            config.customWordsClearedByUser = false
+        }
         if !previousConfig.hasSameAmbientCaptureSettings(as: config)
             || previousConfig.timeTurnerRetentionPolicy != config.timeTurnerRetentionPolicy
             || previousConfig.useCoreAudioTap != config.useCoreAudioTap {
@@ -5363,7 +5368,10 @@ public final class MuesliController: NSObject {
     }
 
     func addCustomWord(_ word: CustomWord) {
-        updateConfig { $0.customWords.append(word) }
+        updateConfig {
+            $0.customWords.append(word)
+            $0.customWordsClearedByUser = false
+        }
         // Verify the persisted value; updateConfig reports save failures internally.
         let path = configStore.configPath()
         let token = ProductAnalytics.emitter.token()
@@ -5454,6 +5462,7 @@ public final class MuesliController: NSObject {
             }) {
                 config.customWords.append(suggestion.customWord)
             }
+            config.customWordsClearedByUser = false
             config.dictionarySuggestions.removeAll { $0.key == key }
             config.dismissedDictionarySuggestionKeys.removeAll { $0 == key }
         }
@@ -5569,12 +5578,26 @@ public final class MuesliController: NSObject {
     func updateCustomWord(_ word: CustomWord) {
         updateConfig { config in
             guard let index = config.customWords.firstIndex(where: { $0.id == word.id }) else { return }
+            let hadUserWords = !CustomWordDictionaryCodec.userWords(in: config.customWords).isEmpty
             config.customWords[index] = word
+            let hasUserWords = !CustomWordDictionaryCodec.userWords(in: config.customWords).isEmpty
+            if hasUserWords {
+                config.customWordsClearedByUser = false
+            } else if hadUserWords {
+                config.customWordsClearedByUser = true
+            }
         }
     }
 
     func removeCustomWord(id: UUID) {
-        updateConfig { $0.customWords.removeAll { $0.id == id } }
+        updateConfig { config in
+            let previousCount = config.customWords.count
+            config.customWords.removeAll { $0.id == id }
+            if config.customWords.count < previousCount,
+               CustomWordDictionaryCodec.userWords(in: config.customWords).isEmpty {
+                config.customWordsClearedByUser = true
+            }
+        }
     }
 
     @discardableResult
@@ -11358,7 +11381,8 @@ public final class MuesliController: NSObject {
     func offerConfigBackupRestoreIfNeeded() {
         guard let offer = configBackup.pendingOffer(
             configWords: config.customWords,
-            hasCompletedOnboarding: config.hasCompletedOnboarding
+            hasCompletedOnboarding: config.hasCompletedOnboarding,
+            customWordsClearedByUser: config.customWordsClearedByUser
         ) else {
             configStore.writeBackup(of: config)
             return
@@ -11376,7 +11400,10 @@ public final class MuesliController: NSObject {
             guard let self else { return }
             if response == .alertFirstButtonReturn {
                 let restored = self.configBackup.restoredWords(for: offer, into: self.config.customWords)
-                self.updateConfig { $0.customWords = restored }
+                self.updateConfig {
+                    $0.customWords = restored
+                    $0.customWordsClearedByUser = false
+                }
             } else {
                 self.configBackup.deleteBackup()
             }
@@ -12303,6 +12330,17 @@ public final class MuesliController: NSObject {
             return (title, event)
         }
 
+        if let previous = detectedCallCandidate,
+           previous.id != candidate.id,
+           previous.suppressionID != candidate.suppressionID {
+            declinedDetectedCallCandidateIDs.remove(previous.id)
+            declinedDetectedCallCandidateIDs.remove(previous.suppressionID)
+        } else if let previousID = detectedCallState?.candidateID,
+                  previousID != candidate.id,
+                  previousID != candidate.suppressionID {
+            declinedDetectedCallCandidateIDs.remove(previousID)
+        }
+
         detectedCallTask?.cancel()
         detectedCallCandidate = candidate
         detectedCallEvent = event
@@ -12322,11 +12360,13 @@ public final class MuesliController: NSObject {
         return (title, event)
     }
 
-    /// Dismissing the toast declines calendar auto-record for the event. It is keyed to the event, not
-    /// the candidate, because a call's candidate id changes when it gains live audio.
+    /// Dismissing the toast declines calendar auto-record for the event and keeps this detected call
+    /// declined even if auto-record detected calls is enabled later while the call is still active.
     /// A countdown already running for this call stops too.
     private func declineDetectedCallAutoRecord(_ candidate: MeetingCandidate) {
         guard let state = detectedCallState, state.candidateID == candidate.id else { return }
+        declinedDetectedCallCandidateIDs.insert(candidate.id)
+        declinedDetectedCallCandidateIDs.insert(candidate.suppressionID)
         if let event = detectedCallEvent { autoRecordAttempt.claim(event.resolvedCalendarOccurrence.identityKey) }
         guard state.recordsAt != nil else { return }
         detectedCallTask?.cancel()
@@ -12420,6 +12460,13 @@ public final class MuesliController: NSObject {
     }
 
     private func clearDetectedCall() {
+        if let previous = detectedCallCandidate {
+            declinedDetectedCallCandidateIDs.remove(previous.id)
+            declinedDetectedCallCandidateIDs.remove(previous.suppressionID)
+        }
+        if let stateID = detectedCallState?.candidateID {
+            declinedDetectedCallCandidateIDs.remove(stateID)
+        }
         guard detectedCallState != nil || detectedCallCandidate != nil else { return }
         detectedCallTask?.cancel()
         detectedCallTask = nil
@@ -12453,6 +12500,11 @@ public final class MuesliController: NSObject {
         }
     }
 
+    private func isDetectedCallDeclined(_ candidate: MeetingCandidate) -> Bool {
+        declinedDetectedCallCandidateIDs.contains(candidate.id)
+            || declinedDetectedCallCandidateIDs.contains(candidate.suppressionID)
+    }
+
     private func recordsDetectedCall(_ candidate: MeetingCandidate, matching event: UnifiedCalendarEvent?) -> Bool {
         ScheduledMeetingNotificationPolicy.recordsDetectedCall(
             showsDetection: config.showMeetingDetectionNotification,
@@ -12460,7 +12512,8 @@ public final class MuesliController: NSObject {
             autoRecordMeetings: config.autoRecordMeetings,
             hasCalendarEvent: event != nil,
             hasLiveMedia: candidate.hasLiveMediaEvidence,
-            alreadyAttempted: event.map { autoRecordAttempt.hasClaimed($0.resolvedCalendarOccurrence.identityKey) } ?? false
+            alreadyAttempted: event.map { autoRecordAttempt.hasClaimed($0.resolvedCalendarOccurrence.identityKey) } ?? false,
+            callDeclined: isDetectedCallDeclined(candidate)
         )
     }
 
@@ -14874,6 +14927,21 @@ public final class MuesliController: NSObject {
         latestMeetingActivityCandidateObservedAt = Date()
     }
     func testingRecentMeetingCandidate() -> MeetingCandidate? { recentMeetingActivityCandidate() }
+    var testingDetectedCallState: DetectedCallState? { detectedCallState }
+    func testingPresentMeetingDetection(_ candidate: MeetingCandidate) { presentMeetingDetection(candidate) }
+    func testingDeclineDetectedCallAutoRecord(_ candidate: MeetingCandidate) {
+        presentedMeetingCandidate = nil
+        declineDetectedCallAutoRecord(candidate)
+        if meetingNotification.currentPromptID == candidate.id { meetingNotification.close() }
+    }
+    func testingHandleMeetingActivityCandidate(_ candidate: MeetingCandidate?) {
+        handleMeetingActivityCandidate(candidate)
+    }
+    func testingClearDetectedCall() {
+        presentedMeetingCandidate = nil
+        if meetingNotification.isVisible { meetingNotification.close() }
+        clearDetectedCall()
+    }
     func testingWaitForModels() async { await nativeRecordingGate.waitForPreparation() }
     var testingBeforeNemotronStart: (() async throws -> Void)?
     func testingInstallDictationCapture(_ manager: DictationAudioSessionManager, meeting: MeetingSession?,

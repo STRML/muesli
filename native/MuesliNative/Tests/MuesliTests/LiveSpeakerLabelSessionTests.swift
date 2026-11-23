@@ -292,4 +292,48 @@ struct LiveSpeakerLabelSessionTests {
         #expect(labeler.label(start: 605, end: 615) == "Speaker 2")
         #expect(labeler.label(start: 7_100, end: 7_110) == "Speaker 2")
     }
+
+    @Test("labelResolution distinguishes covered silence from lagging or failed coverage while label stays Others")
+    func resolutionDistinguishesSilentFromUncovered() async {
+        var limits = Session.Limits()
+        limits.coverageWait = .milliseconds(100)
+        let engine = ScriptedLiveSpeakerEngine(lagFrames: 3) { frame in
+            frame < 20 ? 1 : nil
+        }
+        let sut = session(limits: limits) { engine }
+        #expect(await liveSpeakerWaitUntil { sut.status == .running })
+        feedLiveSpeakerAudio(sut, seconds: 5) // coveredThrough == 4.7s
+        #expect(await liveSpeakerWaitUntil { sut.coveredThrough >= 4.7 })
+
+        #expect(await sut.labelResolution(start: 0, end: 2) == .speaker("Speaker 1"))
+        #expect(await sut.labelResolution(start: 2, end: 4.5) == .silent)
+        #expect(await sut.label(start: 2, end: 4.5) == LiveSpeakerLabeler.fallbackLabel)
+
+        #expect(await sut.labelResolution(start: 6, end: 8) == .uncovered)
+        #expect(await sut.label(start: 6, end: 8) == LiveSpeakerLabeler.fallbackLabel)
+
+        sut.stop()
+        #expect(await liveSpeakerWaitUntil { sut.status == .stopped })
+        #expect(sut.labelIfCovered(start: 2, end: 4.5) == LiveSpeakerLabeler.fallbackLabel)
+        #expect(sut.labelIfCovered(start: 6, end: 8) == nil)
+    }
+
+    @Test("labelResolution returns uncovered immediately while loading and after load failure")
+    func resolutionWhileLoadingOrFailed() async {
+        var limits = Session.Limits()
+        limits.coverageWait = .seconds(5)
+        let release = AsyncStream<Void>.makeStream()
+        let loadingSession = session(limits: limits) {
+            for await _ in release.stream { break }
+            return twoSpeakerEngine()
+        }
+        let started = ContinuousClock.now
+        #expect(await loadingSession.labelResolution(start: 0, end: 2) == .uncovered)
+        #expect(ContinuousClock.now - started < .seconds(1))
+        release.continuation.yield()
+
+        let failedSession = session(limits: limits) { throw LiveSpeakerModelStore.StoreError.notDownloaded }
+        #expect(await liveSpeakerWaitUntil { failedSession.status == .failed(.loadFailed) })
+        #expect(await failedSession.labelResolution(start: 0, end: 2) == .uncovered)
+    }
 }

@@ -2523,6 +2523,7 @@ struct AppConfig: Codable, Equatable {
     var userName: String = ""
     var customMeetingTemplates: [CustomMeetingTemplate] = []
     var customWords: [CustomWord] = CustomWord.defaultWords
+    var customWordsClearedByUser: Bool = false
     var dictionarySuggestions: [DictionarySuggestion] = []
     var dismissedDictionarySuggestionKeys: [String] = []
     var retainLongDictationAudio = false
@@ -2757,6 +2758,7 @@ struct AppConfig: Codable, Equatable {
         case userName = "user_name"
         case customMeetingTemplates = "custom_meeting_templates"
         case customWords = "custom_words"
+        case customWordsClearedByUser = "custom_words_cleared_by_user"
         case dictionarySuggestions = "dictionary_suggestions"
         case dismissedDictionarySuggestionKeys = "dismissed_dictionary_suggestion_keys"
         case retainLongDictationAudio = "retain_long_dictation_audio"
@@ -3059,6 +3061,7 @@ struct AppConfig: Codable, Equatable {
         userName = (try? c.decode(String.self, forKey: .userName)) ?? defaults.userName
         customMeetingTemplates = (try? c.decode([CustomMeetingTemplate].self, forKey: .customMeetingTemplates)) ?? defaults.customMeetingTemplates
         customWords = (try? c.decode([CustomWord].self, forKey: .customWords)) ?? defaults.customWords
+        customWordsClearedByUser = (try? c.decode(Bool.self, forKey: .customWordsClearedByUser)) ?? defaults.customWordsClearedByUser
         dictionarySuggestions = (try? c.decode([DictionarySuggestion].self, forKey: .dictionarySuggestions)) ?? defaults.dictionarySuggestions
         dismissedDictionarySuggestionKeys = (try? c.decode([String].self, forKey: .dismissedDictionarySuggestionKeys)) ?? defaults.dismissedDictionarySuggestionKeys
         retainLongDictationAudio = (try? c.decode(Bool.self, forKey: .retainLongDictationAudio)) ?? false
