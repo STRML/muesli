@@ -195,6 +195,61 @@ struct MeetingNotificationControllerTests {
         ))
     }
 
+    @Test("a declined detected call stays declined even when auto-record detected calls is turned on")
+    func declinedCallNeverAutoRecordsWhenSettingTurnsOn() {
+        #expect(!ScheduledMeetingNotificationPolicy.recordsDetectedCall(
+            showsDetection: true, autoRecordDetectedCalls: true, autoRecordMeetings: true,
+            hasCalendarEvent: true, hasLiveMedia: true, alreadyAttempted: false, callDeclined: true
+        ))
+    }
+
+    @Test("dismissing a detected call toast blocks auto-record if the setting is enabled mid-call")
+    @MainActor
+    func dismissedDetectedCallDoesNotArmCountdownWhenAutoRecordEnabledMidCall() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = makeTestConfigStore(supportDirectory: directory)
+        let controller = MuesliController(
+            runtime: RuntimePaths(repoRoot: directory, menuIcon: nil, appIcon: nil, bundlePath: nil),
+            dictationStore: DictationStore(databaseURL: directory.appendingPathComponent("test.db")),
+            configStore: store
+        )
+        controller.updateConfig {
+            $0.showMeetingDetectionNotification = true
+            $0.autoRecordDetectedCalls = false
+            $0.autoRecordMeetings = false
+        }
+
+        let candidate = MeetingCandidate(
+            id: "meet:abc-defg-hij",
+            platform: .googleMeet,
+            appName: "Google Chrome",
+            url: "meet.google.com/abc-defg-hij",
+            evidence: [.audioInputProcess, .browserURL],
+            startedAt: Date(),
+            meetingTitle: "Standup",
+            sourceBundleID: "com.google.Chrome"
+        )
+
+        controller.testingPresentMeetingDetection(candidate)
+        #expect(controller.testingDetectedCallState?.candidateID == candidate.id)
+        #expect(controller.testingDetectedCallState?.recordsAt == nil)
+
+        controller.testingDeclineDetectedCallAutoRecord(candidate)
+
+        controller.updateConfig { $0.autoRecordDetectedCalls = true }
+        controller.testingPresentMeetingDetection(candidate)
+        #expect(controller.testingDetectedCallState?.recordsAt == nil)
+        controller.testingHandleMeetingActivityCandidate(candidate)
+        #expect(controller.testingDetectedCallState?.recordsAt == nil)
+
+        // Once the call clears, a subsequent call with the same candidate ID is fresh again.
+        controller.testingClearDetectedCall()
+        controller.testingPresentMeetingDetection(candidate)
+        #expect(controller.testingDetectedCallState?.recordsAt != nil)
+        controller.testingClearDetectedCall()
+    }
+
     @Test("A close callback can install the next notification callback")
     @MainActor
     func closePreservesNextCallback() {

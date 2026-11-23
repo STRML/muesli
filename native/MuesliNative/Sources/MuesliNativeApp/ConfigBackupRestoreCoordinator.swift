@@ -19,11 +19,22 @@ final class ConfigBackupRestoreCoordinator {
         self.mirror = mirror
     }
 
-    func pendingOffer(configWords: [CustomWord], hasCompletedOnboarding: Bool) -> Offer? {
-        guard let mirror, hasCompletedOnboarding, !handledThisLaunch,
+    func pendingOffer(
+        configWords: [CustomWord],
+        hasCompletedOnboarding: Bool,
+        customWordsClearedByUser: Bool = false
+    ) -> Offer? {
+        guard let mirror, hasCompletedOnboarding, !handledThisLaunch, !customWordsClearedByUser,
               CustomWordDictionaryCodec.userWords(in: configWords).isEmpty else { return nil }
-        let stored = mirror.storedUserWords()
-        return stored.isEmpty ? nil : Offer(words: stored)
+        switch mirror.readMirrorStatus() {
+        case .readable(let stored):
+            return stored.isEmpty ? nil : Offer(words: stored)
+        case .unreadable(let reason):
+            fputs("[config-backup] could not read the backup: \(reason)\n", stderr)
+            return nil
+        case .missing, .corrupt:
+            return nil
+        }
     }
 
     /// Call when the offer is put in front of the user, so a second trigger cannot stack another.

@@ -304,4 +304,88 @@ extension ConfigStoreTests {
         #expect(store.backupMirror == nil)
         #expect(store.lastBackupOutcome == nil)
     }
+
+    // MARK: - Matrix: unreadable mirror (#51)
+
+    @Test("backup: an unreadable mode-000 mirror is not overwritten by a seed-only save and offers nothing")
+    func backupUnreadableMirrorSurvivesSeedOnlySave() throws {
+        let h = Harness()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: h.mirrorFile.path)
+            h.cleanUp()
+        }
+        #expect(h.store.save(h.userConfig()))
+        let before = try Data(contentsOf: h.mirrorFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: h.mirrorFile.path)
+
+        guard case .unreadable = h.mirror.readMirrorStatus() else {
+            Issue.record("expected unreadable mirror status, got \(h.mirror.readMirrorStatus())")
+            return
+        }
+        #expect(h.coordinator().pendingOffer(configWords: [], hasCompletedOnboarding: true) == nil)
+
+        #expect(h.store.save(AppConfig()))
+        #expect(h.store.lastBackupOutcome == .unreadableExistingMirror)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: h.mirrorFile.path)
+        #expect(try Data(contentsOf: h.mirrorFile) == before)
+        #expect(h.mirror.storedUserWords().map(\.word) == ["Kubernetes", "Tailscale"])
+    }
+
+    // MARK: - Matrix: user intentionally empties dictionary (#52)
+
+    @Test("backup: emptying the dictionary through the controller clears the mirror and keeps it writable")
+    @MainActor
+    func backupUpdatesAfterUserEmptiesDictionary() throws {
+        let h = Harness()
+        defer { h.cleanUp() }
+        try FileManager.default.createDirectory(at: h.supportDirectory, withIntermediateDirectories: true)
+        let db = DictationStore(databaseURL: h.supportDirectory.appendingPathComponent("test.db"))
+        try db.migrateIfNeeded()
+        #expect(h.store.save(h.userConfig()))
+
+        let controller = MuesliController(
+            runtime: RuntimePaths(repoRoot: h.supportDirectory, menuIcon: nil, appIcon: nil, bundlePath: nil),
+            dictationStore: db,
+            configStore: h.store
+        )
+        let wordIDs = controller.config.customWords.map(\.id)
+        for id in wordIDs {
+            controller.removeCustomWord(id: id)
+        }
+
+        #expect(controller.config.customWordsClearedByUser)
+        #expect(h.store.lastBackupOutcome == .written)
+        #expect(h.mirror.storedUserWords().isEmpty)
+
+        // Newer settings continue to mirror instead of freezing.
+        controller.updateConfig { $0.soundEnabled = false }
+        #expect(h.store.lastBackupOutcome == .written)
+        let mirroredConfig = try JSONDecoder().decode(AppConfig.self, from: Data(contentsOf: h.mirrorFile))
+        #expect(!mirroredConfig.soundEnabled)
+        #expect(mirroredConfig.customWordsClearedByUser)
+        #expect(CustomWordDictionaryCodec.userWords(in: mirroredConfig.customWords).isEmpty)
+
+        // Pending offer must not try to restore when customWordsClearedByUser is true.
+        #expect(h.coordinator().pendingOffer(
+            configWords: [],
+            hasCompletedOnboarding: true,
+            customWordsClearedByUser: true
+        ) == nil)
+
+        // Adding a word clears the marker, and a fresh config without it still protects the mirror.
+        controller.addCustomWord(CustomWord(word: "Anthropic", replacement: nil))
+        #expect(!controller.config.customWordsClearedByUser)
+        #expect(h.mirror.storedUserWords().map(\.word) == ["Anthropic"])
+
+        #expect(h.store.save(AppConfig()))
+        #expect(h.store.lastBackupOutcome == .keptExistingWords)
+        #expect(h.mirror.storedUserWords().map(\.word) == ["Anthropic"])
+    }
+
+    @Test("backup: customWordsClearedByUser defaults to false for legacy configs without the key")
+    func customWordsClearedByUserDecodesBackwardCompatibly() throws {
+        let legacy = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        #expect(!legacy.customWordsClearedByUser)
+    }
 }

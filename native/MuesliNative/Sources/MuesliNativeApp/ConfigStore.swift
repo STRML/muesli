@@ -166,6 +166,14 @@ final class ConfigStore {
             break
         case .keptExistingWords:
             fputs("[config-store] backup kept: new config has no custom words but the backup does\n", stderr)
+        case .unreadableExistingMirror:
+            let detail: String
+            if case .unreadable(let reason) = backupMirror.readMirrorStatus() {
+                detail = ": \(reason)"
+            } else {
+                detail = ""
+            }
+            fputs("[config-store] backup kept: existing backup could not be read\(detail)\n", stderr)
         case .failed(let reason):
             fputs("[config-store] backup write failed: \(reason)\n", stderr)
         }

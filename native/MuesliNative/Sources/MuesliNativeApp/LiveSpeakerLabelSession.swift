@@ -189,14 +189,25 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
         if isRunning { processingQueue.async { self.drainPending() } }
     }
 
-    /// Provisional label for a time range on the system-sample clock. Waits a
+    /// Provisional resolution for a time range on the system-sample clock. Waits a
     /// bounded time for the diarizer to reach `end`, then answers with what it has.
-    func label(start: TimeInterval, end: TimeInterval) async -> String {
+    func labelResolution(start: TimeInterval, end: TimeInterval) async -> LiveSpeakerResolution {
         let deadline = ContinuousClock.now + limits.coverageWait
         while !state.withLock({ $0.isSettled(through: end) }), ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(50))
         }
-        return state.withLock { $0.labeler?.label(start: start, end: end) } ?? LiveSpeakerLabeler.fallbackLabel
+        return state.withLock { $0.labeler?.labelResolution(start: start, end: end) } ?? .uncovered
+    }
+
+    /// Provisional label for a time range on the system-sample clock. Waits a
+    /// bounded time for the diarizer to reach `end`, then answers with what it has.
+    func label(start: TimeInterval, end: TimeInterval) async -> String {
+        switch await labelResolution(start: start, end: end) {
+        case .speaker(let label):
+            return label
+        case .silent, .uncovered:
+            return LiveSpeakerLabeler.fallbackLabel
+        }
     }
 
     /// Non-blocking retroactive label lookup once the diarizer has covered `[start, end]`.
@@ -206,9 +217,16 @@ final class LiveSpeakerLabelSession: @unchecked Sendable {
             if case .failed = s.status { return nil }
             guard var labeler = s.labeler else { return nil }
             guard s.status == .stopped || labeler.coveredThrough >= end else { return nil }
-            let resolved = labeler.label(start: start, end: end)
+            let resolution = labeler.labelResolution(start: start, end: end)
             s.labeler = labeler
-            return resolved
+            switch resolution {
+            case .speaker(let label):
+                return label
+            case .silent:
+                return LiveSpeakerLabeler.fallbackLabel
+            case .uncovered:
+                return nil
+            }
         }
     }
 
