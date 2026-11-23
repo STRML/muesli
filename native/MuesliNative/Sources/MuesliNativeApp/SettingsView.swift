@@ -416,7 +416,10 @@ struct SettingsView: View {
     }
 
     private var searchResults: [SettingsSearchEntry] {
-        SettingsSearchIndex.search(trimmedSearchQuery)
+        SettingsSearchIndex.search(
+            trimmedSearchQuery,
+            includeCotypist: appState.settingsModelAvailability.cotypistAvailable
+        )
     }
 
     private var activeFeatureTourTarget: FeatureTourTarget? {
@@ -501,17 +504,13 @@ struct SettingsView: View {
             .padding(.bottom, MuesliTheme.spacing32)
             }
             .background(MuesliTheme.backgroundBase)
-            .background {
-                Button("") {
-                    isSearchFocused = true
-                }
-                .keyboardShortcut("f", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
             .onAppear {
+                if appState.focusSettingsSearchField {
+                    appState.focusSettingsSearchField = false
+                    Task { @MainActor in
+                        isSearchFocused = true
+                    }
+                }
                 refreshDownloadedModelOptions(force: true)
                 refreshAudioInputDevices()
                 startPermissionMonitoring()
@@ -536,6 +535,11 @@ struct SettingsView: View {
             }
             .onChange(of: searchQuery) { _, _ in
                 highlightedSearchResultIndex = 0
+            }
+            .onChange(of: appState.focusSettingsSearchField) { _, shouldFocus in
+                guard shouldFocus else { return }
+                appState.focusSettingsSearchField = false
+                isSearchFocused = true
             }
             .onChange(of: appState.selectedTab) { _, tab in
                 if tab != .settings { appState.requestsPermissionsSettings = false }

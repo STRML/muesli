@@ -175,4 +175,41 @@ struct LiveSpeakerReconcilerTests {
         #expect(reconciled.observations[0].assignedName == "Alice")
         #expect(reconciled.observations[1].assignedName == nil)
     }
+
+    @Test("resumed meeting startingSpeakerNumber offsets reconciled observations and formatting names")
+    func resumedMeetingStartingSpeakerNumber() throws {
+        var store = LiveMeetingSpeakerStore()
+        _ = store.appendTurn(source: "Others", startSeconds: 0, endSeconds: 10, timestampLabel: "10:05:00", liveClusterID: "Speaker 1", text: "Resumed Alice")
+        _ = try store.assignCluster("Speaker 1", to: .savedProfile(id: 10, name: "Alice"))
+
+        let postCall = [
+            diarSeg("rawA", 0, 10, embedding: [1, 0]),
+            diarSeg("rawB", 11, 20, embedding: [0, 1]),
+        ]
+        let reconciled = LiveSpeakerReconciler.reconcile(
+            diarizationSegments: postCall,
+            liveInput: store.reconciliationSnapshot(),
+            minimumVoiceprintSeconds: 1,
+            startingSpeakerNumber: 3
+        )
+        #expect(reconciled.observations.map(\.label) == ["Speaker 3", "Speaker 4"])
+        #expect(reconciled.liveClusterNames == ["Speaker 3": "Alice"])
+
+        let names = reconciled.formattingSpeakerNames(resolvedFromStore: ["Speaker 3": "Alice"])
+        let transcript = TranscriptFormatter.merge(
+            micSegments: [],
+            systemSegments: [
+                SpeechSegment(start: 0, end: 5, text: "Resumed Alice"),
+                SpeechSegment(start: 11, end: 15, text: "New unnamed"),
+            ],
+            diarizationSegments: reconciled.formattingDiarizationSegments,
+            meetingStart: meetingStart,
+            speakerNames: names,
+            startingSpeakerNumber: 3
+        )
+        #expect(transcript == """
+        [10:00:00] Alice: Resumed Alice
+        [10:00:11] Speaker 4: New unnamed
+        """)
+    }
 }

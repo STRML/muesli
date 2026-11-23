@@ -1044,7 +1044,7 @@ public final class MuesliController: NSObject {
     /// Prior transcript captured when resuming a finished meeting, keyed by meeting id.
     /// Present only while a resume is in flight; consumed at stop to merge old + new
     /// transcript, and cleared on success or restored-on-failure.
-    private var pendingResumePriorTranscript: [Int64: String] = [:]
+    private(set) var pendingResumePriorTranscript: [Int64: String] = [:]
     private var iCloudSyncTask: Task<Void, Never>?
     private var ckSyncEngine: MuesliCKSyncEngine?
     private var ckSyncEngineLifecycleID = UUID()
@@ -6954,7 +6954,7 @@ public final class MuesliController: NSObject {
         guard ensureOnboardingBeforeDashboard() else { return }
         presentHistoryWindow()
         DispatchQueue.main.async { [weak self] in
-            self?.appState.globalSearchPresented = true
+            self?.appState.routeFindAction()
         }
     }
 
@@ -7123,6 +7123,17 @@ public final class MuesliController: NSObject {
         }
     }
 
+    /// Whether the folder (or any ancestor) is private. A failed lookup counts as private.
+    func isFolderPrivateFailingClosed(id folderID: Int64?) -> Bool {
+        guard let folderID else { return false }
+        do {
+            return try dictationStore.isFolderPrivate(id: folderID)
+        } catch {
+            fputs("[muesli-native] private-folder lookup failed, treating folder \(folderID) as private: \(error.localizedDescription)\n", stderr)
+            return true
+        }
+    }
+
     func resummarize(meeting: MeetingRecord, summaryConfig: AppConfig? = nil, completion: @escaping (Result<Void, Error>) -> Void) {
         let templateSnapshot = meetingTemplateSnapshot(for: meeting)
         resummarize(meeting: meeting, using: templateSnapshot, summaryConfig: summaryConfig, completion: completion)
@@ -7207,7 +7218,8 @@ public final class MuesliController: NSObject {
                     transcript: meeting.rawTranscript,
                     manualNotes: summaryManualNotes,
                     config: summaryConfig,
-                    openRouterAPIKeyOverride: openRouterKey
+                    openRouterAPIKeyOverride: openRouterKey,
+                    isPrivateMeeting: isMeetingPrivateFailingClosed(id: meeting.id)
                 )
             } else {
                 generatedTitle = nil
@@ -8707,7 +8719,9 @@ public final class MuesliController: NSObject {
         followUpToID: Int64? = nil,
         inheritedFolderID: Int64? = nil,
         previousMeetingNotes: String? = nil,
-        inPerson: Bool = false
+        inPerson: Bool = false,
+        isPrivate: Bool = false,
+        previousMeetingNotesArePrivate: Bool = false
     ) -> Bool {
         guard ensureNoMeetingRetranscription() else { return false }
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return false }
@@ -8733,7 +8747,8 @@ public final class MuesliController: NSObject {
                 selectedTemplatePrompt: templateSnapshot.prompt,
                 folderID: folderIDForNewMeeting(inheritedFolderID: inheritedFolderID, calendarOccurrence: calendarOccurrence),
                 followUpToID: followUpToID,
-                calendarOccurrence: calendarOccurrence
+                calendarOccurrence: calendarOccurrence,
+                isPrivate: isPrivate
             )
             persistCalendarAttendees(for: calendarOccurrence, meetingID: meetingID)
             installMeetingCapture(id: meetingID, title: title, calendarEventID: resolvedCalendarEventID,
@@ -8784,7 +8799,9 @@ public final class MuesliController: NSObject {
                     owner: attemptOwner,
                     backend: meetingBackend,
                     endDate: endDate,
-                    previousMeetingNotes: previousMeetingNotes
+                    followUpToID: followUpToID,
+                    previousMeetingNotes: previousMeetingNotes,
+                    previousMeetingNotesArePrivate: previousMeetingNotesArePrivate
                 )
                 if let calendarOccurrence { self.autoRecordAttempt.claim(calendarOccurrence.identityKey) }
             } catch is CancellationError {
@@ -8898,12 +8915,21 @@ public final class MuesliController: NSObject {
         guard !isMeetingRecording(), !isStartingMeetingRecording else { return }
         guard let predecessor = meeting(id: meetingID),
               canStartFollowUpMeeting(predecessor) else { return }
+        let predecessorIsPrivate = isMeetingPrivateFailingClosed(id: predecessor.id)
+        let predecessorDirectlyPrivate: Bool
+        do {
+            predecessorDirectlyPrivate = try dictationStore.isMeetingDirectlyPrivate(id: predecessor.id)
+        } catch {
+            predecessorDirectlyPrivate = true
+        }
         startMeetingRecording(
             title: MeetingFollowUpPolicy.followUpTitle(from: predecessor.title),
             openDocument: true,
             followUpToID: predecessor.id,
             inheritedFolderID: predecessor.folderID,
-            previousMeetingNotes: MeetingFollowUpPolicy.carriedContext(from: predecessor)
+            previousMeetingNotes: MeetingFollowUpPolicy.carriedContext(from: predecessor),
+            isPrivate: predecessorDirectlyPrivate,
+            previousMeetingNotesArePrivate: predecessorIsPrivate
         )
     }
 
@@ -8961,6 +8987,8 @@ public final class MuesliController: NSObject {
         let previousMeetingNotes = meeting.followUpToID
             .flatMap { self.meeting(id: $0) }
             .flatMap { MeetingFollowUpPolicy.carriedContext(from: $0) }
+        let previousMeetingNotesArePrivate = meeting.followUpToID
+            .map { isMeetingPrivateFailingClosed(id: $0) } ?? false
 
         // REUSE the existing row — do NOT call createLiveMeeting.
         installMeetingCapture(id: meetingID, title: meeting.title, calendarEventID: meeting.calendarEventID,
@@ -8997,7 +9025,9 @@ public final class MuesliController: NSObject {
                     owner: attemptOwner,
                     backend: meetingBackend,
                     endDate: nil,
-                    previousMeetingNotes: previousMeetingNotes
+                    followUpToID: meeting.followUpToID,
+                    previousMeetingNotes: previousMeetingNotes,
+                    previousMeetingNotesArePrivate: previousMeetingNotesArePrivate
                 )
             } catch is CancellationError {
                 if self.meetingStartAttempt?.owner == attemptOwner {
@@ -9427,7 +9457,9 @@ public final class MuesliController: NSObject {
         owner: ObjectIdentifier,
         backend: BackendOption,
         endDate: Date?,
-        previousMeetingNotes: String? = nil
+        followUpToID: Int64? = nil,
+        previousMeetingNotes: String? = nil,
+        previousMeetingNotesArePrivate: Bool = false
     ) async throws {
         if let capture = storedFeedbackCapture {
             let released = await capture.finishAndReleaseMicrophone()
@@ -9457,6 +9489,10 @@ public final class MuesliController: NSObject {
             let meetingSession = capture.session
             let transcriptGeneration = UUID()
             meetingSession.previousMeetingNotes = previousMeetingNotes
+            meetingSession.previousMeetingNotesArePrivate = previousMeetingNotesArePrivate
+            meetingSession.isPreviousMeetingPrivateProvider = followUpToID.map { predecessorID in
+                { [weak self] in self?.isMeetingPrivateFailingClosed(id: predecessorID) ?? true }
+            }
 
             do {
                 meetingSession.manualNotesProvider = { [weak self] in
@@ -9471,6 +9507,9 @@ public final class MuesliController: NSObject {
                 }
                 meetingSession.isPrivateMeetingProvider = { [weak self] in
                     self?.isMeetingPrivateFailingClosed(id: meetingID) ?? true
+                }
+                meetingSession.startingSpeakerNumberProvider = { [weak self] in
+                    await self?.startingSpeakerNumberForMeeting(meetingID: meetingID) ?? 1
                 }
                 meetingSession.speakerNamesProvider = { [weak self] observations in
                     guard let self else { return [:] }
