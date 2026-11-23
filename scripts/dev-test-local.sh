@@ -29,10 +29,10 @@ if pgrep -f "$APP/Contents/MacOS" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Xcode 27+ delivers the Metal toolchain as a downloadable mounted component; SwiftPM's
-# `muesli-cli` sub-build fails with "missing Metal Toolchain" unless EXTERNAL_TOOLCHAINS_DIR
-# and TOOLCHAINS include the mounted Metal toolchain when `xcrun -f metal` isn't already wired.
-if [[ -z "${EXTERNAL_TOOLCHAINS_DIR:-}" ]] && ! xcrun -f metal >/dev/null 2>&1; then
+# Xcode 27+ ships a `metal` stub in XcodeDefault.xctoolchain that exits 0 for `xcrun -f metal`
+# but fails on invocation unless EXTERNAL_TOOLCHAINS_DIR and TOOLCHAINS include the mounted
+# downloadable MetalToolchain component.
+if [[ -z "${EXTERNAL_TOOLCHAINS_DIR:-}" ]] && ! xcrun metal --version >/dev/null 2>&1; then
   METAL_INFO="$(xcodebuild -showComponent MetalToolchain 2>/dev/null || true)"
   METAL_SEARCH_PATH="$(printf '%s\n' "$METAL_INFO" | sed -n 's/^Toolchain Search Path: //p' | head -n 1)"
   METAL_ID="$(printf '%s\n' "$METAL_INFO" | sed -n 's/^Toolchain Identifier: //p' | head -n 1)"
